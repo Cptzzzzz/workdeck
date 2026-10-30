@@ -90,3 +90,7 @@ Session metadata records its original account and service scope. During an accou
 Select a node in the sidebar and use the rename button in its details. Renaming updates only the display name, works while the node is offline, and persists through restarts without changing identity or terminal ownership.
 
 New initial passwords and password changes require at least six Unicode characters and must contain an ASCII letter and an ASCII digit. Letter case is unrestricted; there is no password-specific upper length limit. Login remains compatible with existing passwords, including older values that predate this policy. New passwords use salted PBKDF2-HMAC-SHA256 (600,000 iterations); old bcrypt hashes remain readable. Existing account passwords are not changed by deployment. The normal HTTP request-body size limit applies to all JSON requests.
+
+When promoting an Agent from an ordinary account to root, rotate its node signing key into root-only storage while preserving the node ID. The former ordinary account's key must no longer authenticate the root Agent identity. Keep private backups of identity, records, and the database before migration.
+
+Versions predating the versioned PBKDF2 reader cannot authenticate passwords saved in the new hash format. Keep a matching database backup when rolling back across that change.

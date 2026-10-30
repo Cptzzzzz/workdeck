@@ -21,7 +21,7 @@ test("password form requires six characters with letters and digits", async ({
 }) => {
   await login(page);
   await page.getByRole("button", { name: "修改密码", exact: true }).click();
-  const field = page.getByLabel("新密码", { exact: true });
+  const field = page.getByLabel(/^新密码/);
   await expect(field).toHaveAttribute("minlength", "6");
   await expect(field).not.toHaveAttribute("maxlength");
   for (const value of ["abc123", "ABC123", "Ab1!@#", "A1" + "长".repeat(100)]) {

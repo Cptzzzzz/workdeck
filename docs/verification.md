@@ -47,3 +47,13 @@ Additional acceptance completed for a Hub-host compute Agent and a separate Linu
 No host OS was rebooted during acceptance, so other applications were not interrupted. Boot-time Docker/Agent configuration was checked separately. A full OS reboot preserves records and credentials, but ends the processes on that host; the UI retains lost records and offers explicit recreation in the prior directory.
 
 The final deployed suite passed all five cases on the separate compute node. A second run passed directory selection and desktop/mobile terminal lifecycle on the Hub-host Agent with tmux 3.0a. Explicit controller-driven window sizing was checked alongside the other node’s tmux 3.2a. Total: seven public browser acceptance cases passed.
+
+## Password policy, node rename, and root service migration
+
+The final password policy is at least six characters containing both an English letter and a digit; either letter case is accepted. No password-specific maximum is imposed. Initialization and password changes enforce this rule, while existing bcrypt and versioned hashes remain readable. Regression tests accept lowercase/uppercase combinations and long Unicode inputs, reject short/letters-only/digits-only values, and verify older noncompliant credentials can still log in to set a compliant password.
+
+Node rename is authenticated and CSRF protected, works offline, changes only the display name, and survives reopening the Hub database. Public browser acceptance enrolls an isolated temporary node, renames it in the UI, reloads, verifies its ID is unchanged, and then revokes the test identity.
+
+The Hub-host Agent was migrated to a root-owned system service. Its node ID and session records were retained, its node signing key was rotated into root-only storage, and the earlier ordinary-user Agent was disabled. Retained sessions keep their original OS account and service scope. New terminals use the actual service account; the UI reports that account on each node.
+
+Acceptance passed seven standard public browser cases plus four root-host cases. The root terminal printed `whoami=root` and UID `0`, retained its shell environment across a system Agent restart, and supported directory selection and desktop/mobile takeover. A surviving pre-migration ordinary-user terminal remained reachable without sending input to or terminating it. All eleven relevant browser cases passed; no production administrator password was changed by these tests.

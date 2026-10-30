@@ -30,12 +30,22 @@ test("choose a real node child directory and create a terminal there", async ({
   const original = await path.inputValue();
   const select = page.getByRole("combobox", { name: "进入子目录" });
   await expect(select).toBeEnabled();
-  const child = await select.locator("option").nth(1).getAttribute("value");
+  const options = await select
+    .locator("option")
+    .evaluateAll((options) =>
+      options
+        .map((option) => (option as HTMLOptionElement).value)
+        .filter(Boolean),
+    );
+  const child =
+    options.find((value) => value.endsWith("/projects")) || options[0];
   expect(child).toBeTruthy();
   await select.selectOption(child!);
   await expect(path).toHaveValue(child!);
   await expect(page.getByRole("button", { name: "上一级" })).toBeEnabled();
   await page.getByRole("button", { name: "上一级" }).click();
+  await expect(page.locator(".directory-hint")).toBeVisible();
+  await page.getByRole("button", { name: "主目录", exact: true }).click();
   await expect(path).toHaveValue(original);
   await expect(select).toBeEnabled();
   await select.selectOption(child!);
