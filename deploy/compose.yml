@@ -1,0 +1,29 @@
+name: workdeck
+services:
+  hub:
+    image: workdeck:${WORKDECK_VERSION:-local}
+    container_name: workdeck-hub
+    pull_policy: never
+    restart: unless-stopped
+    init: false
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 100
+    volumes:
+      - ./data:/data
+      - ./secrets/admin_password:/run/secrets/admin_password:ro
+    networks:
+      public:
+        aliases: [workdeck-hub]
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+networks:
+  public:
+    external: true
+    name: public-apps_default

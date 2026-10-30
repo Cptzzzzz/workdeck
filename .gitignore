@@ -1,0 +1,17 @@
+/bin/
+/dist/
+/node_modules/
+/web/node_modules/
+/web/dist/
+/.env
+/.secrets/
+*.db
+*.db-shm
+*.db-wal
+*.log
+/playwright-report/
+/test-results/
+/web/public/downloads/
+/web/public/install-agent.sh
+/deploy/ca-certificates.crt
+/web/*.tsbuildinfo

@@ -1,0 +1,16 @@
+[Unit]
+Description=Workdeck reverse-connection terminal Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/workdeck agent run
+Restart=always
+RestartSec=5
+Environment=SHELL=/bin/bash
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0077
+
+[Install]
+WantedBy=default.target

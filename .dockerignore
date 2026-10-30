@@ -1,0 +1,9 @@
+*
+!bin/
+!bin/workdeck-linux-amd64
+!web/
+!web/dist/
+!web/dist/**
+!deploy/
+!deploy/Dockerfile
+!deploy/ca-certificates.crt
