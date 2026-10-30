@@ -30,17 +30,24 @@ func sessionCommand(ctx context.Context, session protocol.Session, program strin
 	if owner == "" {
 		owner = current.Username
 	}
+	foreignHome := ""
 	if owner != current.Username {
 		if os.Geteuid() != 0 {
 			return nil, errors.New("此会话属于其他系统用户")
 		}
-		if _, err = user.Lookup(owner); err != nil {
+		account, e := user.Lookup(owner)
+		if e != nil {
 			return nil, errors.New("会话原系统用户已不存在")
 		}
+		foreignHome = account.HomeDir
 		args = append([]string{"-u", owner, "--", program}, args...)
 		program = "runuser"
 	}
-	return exec.CommandContext(ctx, program, args...), nil
+	command := exec.CommandContext(ctx, program, args...)
+	if foreignHome != "" {
+		command.Dir = foreignHome
+	}
+	return command, nil
 }
 func managerCommand(ctx context.Context, session protocol.Session, program string, args ...string) (*exec.Cmd, error) {
 	scope := session.Scope
