@@ -2,6 +2,8 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -95,6 +97,14 @@ func TestWorkspaceAPIAndLostCommitAcknowledgement(t *testing.T) {
 				}
 			case "workspace.status":
 				change, e := engine.RootChangeStatus(context.Background(), msg.WorkspaceID, msg.OperationID)
+				if e != nil {
+					reply.Error = e.Error()
+					reply.ErrorCode = files.ErrorCode(e)
+				} else {
+					reply.RootChange = &change
+				}
+			case "workspace.abort":
+				change, e := engine.AbortRootChange(context.Background(), msg.WorkspaceID, msg.OperationID)
 				if e != nil {
 					reply.Error = e.Error()
 					reply.ErrorCode = files.ErrorCode(e)
@@ -204,5 +214,32 @@ func TestWorkspaceAPIAndLostCommitAcknowledgement(t *testing.T) {
 			t.Fatalf("background recovery failed: %+v %v", restored, err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	// A pending upload must not strand the old revision after connections are
+	// revoked for a requested switch. The confirmed abort restores access so
+	// the user can resume or cancel that upload.
+	body := []byte("pending")
+	sum := sha256.Sum256(body)
+	upload := files.NewID(time.Now())
+	if _, err = engine.BeginWrite(context.Background(), record.ID, 3, upload, files.WriteSpec{Path: "pending.txt", Create: true, Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}); err != nil {
+		t.Fatal(err)
+	}
+	thirdOp := files.NewID(time.Now())
+	if err = x.h.store.beginWorkspaceChange(context.Background(), record.ID, 3, thirdOp, next); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = x.h.store.workspaceByTerminal(context.Background(), terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = x.h.recoverWorkspaceChange(context.Background(), pending); err == nil {
+		t.Fatal("pending upload did not prevent root switch")
+	}
+	restored, err = x.h.store.workspaceByTerminal(context.Background(), terminal)
+	if err != nil || restored.State != "ready" || restored.Revision != 3 {
+		t.Fatalf("old workspace remained blocked: %+v %v", restored, err)
+	}
+	if _, err = engine.Abort(context.Background(), record.ID, 3, upload); err != nil {
+		t.Fatal(err)
 	}
 }

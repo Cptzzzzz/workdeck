@@ -49,12 +49,16 @@ func (h *Hub) getWorkspace(w http.ResponseWriter, r *http.Request, _ login) {
 }
 
 func (h *Hub) workspaceNodeAvailable(node string) bool {
+	return h.workspaceNodeCapability(node, "workspace-control-v1")
+}
+
+func (h *Hub) workspaceNodeCapability(node, capability string) bool {
 	var encoded string
 	if h.store.db.QueryRow(`SELECT capabilities FROM nodes WHERE id=? AND revoked=0`, node).Scan(&encoded) != nil || !h.nodeOnline(node) {
 		return false
 	}
 	var capabilities []string
-	return json.Unmarshal([]byte(encoded), &capabilities) == nil && slices.Contains(capabilities, "workspace-control-v1")
+	return json.Unmarshal([]byte(encoded), &capabilities) == nil && slices.Contains(capabilities, capability)
 }
 
 func (h *Hub) createWorkspace(w http.ResponseWriter, r *http.Request, _ login) {
@@ -164,6 +168,7 @@ func (h *Hub) changeWorkspace(w http.ResponseWriter, r *http.Request, _ login) {
 			return
 		}
 		current.State, current.PendingID, current.PendingTarget = "changing", op, input.Root
+		h.revokeWorkspaceFiles(current.ID)
 	}
 	if err = h.recoverWorkspaceChange(r.Context(), current); err != nil {
 		failure(w, 409, err.Error())
@@ -214,6 +219,18 @@ func (h *Hub) recoverWorkspaceChange(ctx context.Context, current workspaceRecor
 		}
 		msg.Type = "workspace.commit"
 		result, err = h.command(ctx, current.NodeID, msg)
+		if err == nil && result.ErrorCode == "WORKSPACE_BUSY" {
+			// Pending saves need the old revision to remain usable. Abort only
+			// after the node explicitly confirms it did not commit the switch.
+			msg.Type = "workspace.abort"
+			aborted, abortErr := h.command(ctx, current.NodeID, msg)
+			if abortErr == nil && aborted.Error == "" && aborted.RootChange != nil && aborted.RootChange.ID == current.PendingID && aborted.RootChange.WorkspaceID == current.ID && aborted.RootChange.OldRevision == current.Revision && aborted.RootChange.State == "aborted" {
+				if h.store.cancelWorkspaceChange(ctx, current.ID, current.Revision, current.PendingID) == nil {
+					return errors.New("仍有未完成的文件保存，请先恢复或取消保存再切换目录")
+				}
+			}
+			return errors.New("目录切换状态尚未确认，请稍后重试")
+		}
 		if err != nil || result.Error != "" {
 			return errors.New("节点尚未确认目录切换，状态已保存，请稍后重试")
 		}

@@ -307,8 +307,15 @@ func (w *fileWorkerClient) Call(ctx context.Context, method, workspace string, r
 	w.mu.Unlock()
 	defer func() { w.mu.Lock(); delete(w.pending, id); w.mu.Unlock() }()
 	written := make(chan error, 1)
+	enqueued := false
+	defer func() {
+		if enqueued && ctx.Err() != nil {
+			w.cancelRequest(id)
+		}
+	}()
 	select {
 	case w.writes <- workerWrite{ctx: ctx, data: data, done: written}:
+		enqueued = true
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-w.stopping:
@@ -345,6 +352,60 @@ func (w *fileWorkerClient) Call(ctx context.Context, method, workspace string, r
 		return context.Canceled
 	case <-w.done:
 		return errors.New("file worker disconnected")
+	}
+}
+
+// Cancel queued or running worker requests when an authorization lease ends.
+// If the pipe is blocked, stop the worker process group so stale work cannot
+// remain authorized indefinitely; this never affects terminal processes.
+func (w *fileWorkerClient) cancelRequest(target string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cancelID := files.NewID(time.Now())
+	data, err := json.Marshal(map[string]any{"id": cancelID, "method": "request.cancel", "params": map[string]string{"target": target}})
+	if err != nil {
+		return
+	}
+	response := make(chan workerResponse, 1)
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.pending[cancelID] = response
+	w.mu.Unlock()
+	defer func() { w.mu.Lock(); delete(w.pending, cancelID); w.mu.Unlock() }()
+	written := make(chan error, 1)
+	select {
+	case w.writes <- workerWrite{ctx: ctx, data: append(data, '\n'), done: written}:
+	case <-w.stopping:
+		return
+	case <-w.done:
+		return
+	case <-ctx.Done():
+		go w.Close()
+		return
+	}
+	select {
+	case err = <-written:
+		if err != nil {
+			go w.Close()
+			return
+		}
+	case <-w.stopping:
+		return
+	case <-w.done:
+		return
+	case <-ctx.Done():
+		go w.Close()
+		return
+	}
+	select {
+	case <-response:
+	case <-w.stopping:
+	case <-w.done:
+	case <-ctx.Done():
+		go w.Close()
 	}
 }
 

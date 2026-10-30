@@ -52,6 +52,8 @@ type Hub struct {
 	cfg                 Config
 	store               *Store
 	mu                  sync.Mutex
+	authMu              sync.Mutex
+	nodeMu              sync.Mutex
 	agents              map[string]*agentConn
 	requests            map[string]waiter
 	pending             map[string]*pending
@@ -62,6 +64,9 @@ type Hub struct {
 	dummyHash           []byte
 	workspaceLocks      [64]sync.Mutex
 	workspaceRecovering map[string]bool
+	fileTickets         map[string]*fileBrowserTicket
+	filePending         map[string]*fileAgentTicket
+	fileConnections     map[string]*fileConnection
 }
 
 func (h *Hub) workspaceLock(terminal string) *sync.Mutex {
@@ -111,6 +116,8 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/terminals/{id}/workspace", h.protected(h.getWorkspace))
 	m.HandleFunc("POST /api/terminals/{id}/workspace", h.protected(h.createWorkspace))
 	m.HandleFunc("PUT /api/terminals/{id}/workspace", h.protected(h.changeWorkspace))
+	m.HandleFunc("POST /api/workspaces/{id}/connections", h.protected(h.newFileConnection))
+	m.HandleFunc("GET /api/workspaces/{id}/ws", h.protected(h.browserFileSocket))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
@@ -118,6 +125,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("POST /api/agent/enroll", h.enroll)
 	m.HandleFunc("GET /api/agent/control", h.controlSocket)
 	m.HandleFunc("GET /api/agent/data", h.dataSocket)
+	m.HandleFunc("GET /api/agent/files", h.agentFileSocket)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { failure(w, 404, "接口不存在") })
 	m.HandleFunc("/", h.assets)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +152,9 @@ func (h *Hub) Run(ctx context.Context) error {
 			a.socket.Close()
 		}
 		for _, a := range h.attachments {
+			a.cancel()
+		}
+		for _, a := range h.fileConnections {
 			a.cancel()
 		}
 		h.mu.Unlock()
@@ -359,14 +370,19 @@ func (h *Hub) renameNode(w http.ResponseWriter, r *http.Request, l login) {
 }
 func (h *Hub) revokeNode(w http.ResponseWriter, r *http.Request, l login) {
 	id := r.PathValue("id")
+	h.nodeMu.Lock()
+	defer h.nodeMu.Unlock()
 	_, err := h.store.db.Exec("UPDATE nodes SET revoked=1 WHERE id=?", id)
 	if err != nil {
 		failure(w, 500, "保存失败")
 		return
 	}
 	h.mu.Lock()
+	h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.nodeID == id })
+	h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return t.nodeID == id })
 	if a := h.agents[id]; a != nil {
 		a.socket.Close()
+		delete(h.agents, id)
 	}
 	for _, a := range h.attachments {
 		if a.nodeID == id {
@@ -532,18 +548,30 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 	defer close(done)
 	go s.Heartbeat(done)
 	a := &agentConn{s, node}
+	// Recheck revocation after the upgrade under the same lock used by node
+	// removal. A handshake authenticated just before revocation cannot
+	// reinstall the node's control connection afterwards.
+	h.nodeMu.Lock()
+	var revoked int
+	if h.store.db.QueryRow("SELECT revoked FROM nodes WHERE id=?", node).Scan(&revoked) != nil || revoked != 0 {
+		h.nodeMu.Unlock()
+		return
+	}
 	h.mu.Lock()
 	old := h.agents[node]
 	h.agents[node] = a
 	if old != nil {
+		h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.agent == old })
 		old.socket.Close()
 	}
 	h.mu.Unlock()
+	h.nodeMu.Unlock()
 	log.Printf("node connected: %s", node)
 	defer func() {
 		h.mu.Lock()
 		if h.agents[node] == a {
 			delete(h.agents, node)
+			h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.agent == a })
 			for _, at := range h.attachments {
 				if at.nodeID == node {
 					at.cancel()
@@ -577,6 +605,8 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) closeLogin(hash string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.loginHash == hash })
+	h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return t.loginHash == hash })
 	for _, a := range h.attachments {
 		if a.loginHash == hash {
 			a.cancel()
@@ -586,6 +616,8 @@ func (h *Hub) closeLogin(hash string) {
 func (h *Hub) closeOtherLogins(hash string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.loginHash != hash })
+	h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return t.loginHash != hash })
 	for _, a := range h.attachments {
 		if a.loginHash != hash {
 			a.cancel()

@@ -162,6 +162,8 @@ func (h *Hub) renewLogin(w http.ResponseWriter, l *login) {
 	}
 }
 func (h *Hub) signOut(w http.ResponseWriter, r *http.Request, l login) {
+	h.authMu.Lock()
+	defer h.authMu.Unlock()
 	_, _ = h.store.db.Exec("DELETE FROM logins WHERE hash=?", l.Hash)
 	h.closeLogin(l.Hash)
 	http.SetCookie(w, &http.Cookie{Name: h.cookieName(), Value: "", Path: "/", HttpOnly: true, Secure: strings.HasPrefix(h.cfg.PublicURL, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: -1})
@@ -190,6 +192,8 @@ func (h *Hub) changePassword(w http.ResponseWriter, r *http.Request, l login) {
 		failure(w, 400, "密码格式无效")
 		return
 	}
+	h.authMu.Lock()
+	defer h.authMu.Unlock()
 	tx, err := h.store.db.Begin()
 	if err != nil {
 		failure(w, 500, "保存失败")

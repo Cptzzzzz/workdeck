@@ -39,7 +39,7 @@ type Server struct {
 	snapshots     map[string]directorySnapshot
 	snapshotBytes int
 	closing       bool
-	active        map[string]bool
+	active        map[string]*activeRequest
 	writeMu       sync.Mutex
 	workers       sync.WaitGroup
 	slots         chan struct{}
@@ -51,8 +51,13 @@ type readHandle struct {
 	reader    *files.Reader
 }
 
+type activeRequest struct {
+	stop context.CancelFunc
+	done chan struct{}
+}
+
 func New(engine *files.Engine) *Server {
-	return &Server{engine: engine, readers: make(map[string]readHandle), snapshots: make(map[string]directorySnapshot), active: make(map[string]bool), slots: make(chan struct{}, 16)}
+	return &Server{engine: engine, readers: make(map[string]readHandle), snapshots: make(map[string]directorySnapshot), active: make(map[string]*activeRequest), slots: make(chan struct{}, 16)}
 }
 
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
@@ -83,21 +88,53 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil || req.ID == "" || len(req.ID) > 128 || len(req.Method) > 64 {
 			return errors.New("invalid file worker request")
 		}
-		s.mu.Lock()
-		if s.active[req.ID] {
+		if req.Method == "request.cancel" {
+			var p struct {
+				Target string `json:"target"`
+			}
+			if decode(req.Params, &p) != nil || p.Target == "" || len(p.Target) > 128 {
+				return errors.New("invalid cancellation")
+			}
+			s.mu.Lock()
+			target := s.active[p.Target]
 			s.mu.Unlock()
+			if target != nil {
+				target.stop()
+			}
+			s.workers.Add(1)
+			go func() {
+				defer s.workers.Done()
+				if target != nil {
+					select {
+					case <-target.done:
+					case <-ctx.Done():
+						return
+					}
+				}
+				_ = s.write(output, response{ID: req.ID})
+			}()
+			continue
+		}
+		callCtx, stop := context.WithTimeout(ctx, 30*time.Second)
+		s.mu.Lock()
+		if s.active[req.ID] != nil {
+			s.mu.Unlock()
+			stop()
 			return errors.New("duplicate active request ID")
 		}
-		s.active[req.ID] = true
+		active := &activeRequest{stop: stop, done: make(chan struct{})}
+		s.active[req.ID] = active
 		s.mu.Unlock()
 		// Closing a reader cannot be starved by blocked root-change requests.
 		if req.Method != "read.close" {
 			select {
 			case s.slots <- struct{}{}:
 			default:
+				stop()
 				s.mu.Lock()
 				delete(s.active, req.ID)
 				s.mu.Unlock()
+				close(active.done)
 				if err := s.write(output, response{ID: req.ID, Error: &files.Error{Code: "BUSY", Message: "文件服务繁忙，请稍后重试"}}); err != nil {
 					return err
 				}
@@ -111,11 +148,11 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				s.mu.Lock()
 				delete(s.active, req.ID)
 				s.mu.Unlock()
+				close(active.done)
 				if req.Method != "read.close" {
 					<-s.slots
 				}
 			}()
-			callCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 			defer stop()
 			result, err := s.dispatch(callCtx, req)
 			res := response{ID: req.ID, Result: result}

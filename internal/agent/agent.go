@@ -100,7 +100,7 @@ func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1"}})
+	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1"}})
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")
@@ -135,6 +135,7 @@ func (a *Agent) connected(parent context.Context) error {
 	defer fileWorkers.Close()
 	var jobs sync.WaitGroup
 	workspaceSlots := make(chan struct{}, 8)
+	fileSlots := make(chan struct{}, 16)
 	defer func() { cancel(); jobs.Wait() }()
 	for {
 		var msg protocol.Message
@@ -142,6 +143,18 @@ func (a *Agent) connected(parent context.Context) error {
 			return err
 		}
 		switch msg.Type {
+		case "file.attach":
+			select {
+			case fileSlots <- struct{}{}:
+			default:
+				continue
+			}
+			jobs.Add(1)
+			go func() {
+				defer jobs.Done()
+				defer func() { <-fileSlots }()
+				_ = a.attachFiles(ctx, fileWorkers, msg)
+			}()
 		case "workspace.register", "workspace.prepare", "workspace.commit", "workspace.abort", "workspace.status":
 			select {
 			case workspaceSlots <- struct{}{}:

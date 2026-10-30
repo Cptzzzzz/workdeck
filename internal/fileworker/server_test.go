@@ -191,3 +191,74 @@ func TestDirectoryPagesAreBoundedAndScoped(t *testing.T) {
 		t.Fatalf("old snapshot remained usable after root change: %v", err)
 	}
 }
+
+func TestCancellationInterruptsBlockedRootChange(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	next := filepath.Join(base, "next")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(next, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- Run(context.Background(), filepath.Join(base, "state"), inR, outW) }()
+	c := &client{in: inW, out: bufio.NewReader(outR)}
+	workspace := files.Workspace{ID: files.NewID(time.Now()), TerminalID: files.NewID(time.Now()), Root: root, Revision: 1}
+	if _, e := c.call(t, "workspace.register", "", 0, workspace); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := c.call(t, "read.open", workspace.ID, 1, map[string]any{"handle": "open", "path": "file", "version": ""}); e != nil {
+		t.Fatal(e)
+	}
+	op := files.NewID(time.Now())
+	if _, e := c.call(t, "workspace.prepare", workspace.ID, 1, map[string]any{"op_id": op, "root_path": next}); e != nil {
+		t.Fatal(e)
+	}
+	commit := map[string]any{"id": "blocked", "method": "workspace.commit", "workspace_id": workspace.ID, "root_revision": 1, "params": map[string]any{"op_id": op}}
+	cancel := map[string]any{"id": "cancel", "method": "request.cancel", "params": map[string]any{"target": "blocked"}}
+	for _, v := range []any{commit, cancel} {
+		b, _ := json.Marshal(v)
+		if _, err := inW.Write(append(b, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	responses := make(chan []byte, 1)
+	go func() { b, _ := c.out.ReadBytes('\n'); responses <- b }()
+	select {
+	case raw := <-responses:
+		var r response
+		if err := json.Unmarshal(raw, &r); err != nil || r.ID != "blocked" || r.Error == nil || r.Error.Code != "CANCELED" {
+			t.Fatalf("cancel: %s %v", raw, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled operation remained blocked")
+	}
+	ack, err := c.out.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var canceled response
+	if err = json.Unmarshal(ack, &canceled); err != nil || canceled.ID != "cancel" {
+		t.Fatalf("cancellation barrier: %s %v", ack, err)
+	}
+	if _, e := c.call(t, "read.close", workspace.ID, 1, map[string]any{"handle": "open"}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := c.call(t, "file.stat", workspace.ID, 1, map[string]any{"path": "file"}); e != nil {
+		t.Fatal(e)
+	}
+	inW.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker did not stop")
+	}
+	outR.Close()
+}

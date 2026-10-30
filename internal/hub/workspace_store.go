@@ -51,6 +51,10 @@ func (s *Store) workspaceByTerminal(ctx context.Context, terminal string) (works
 	return scanWorkspace(s.db.QueryRowContext(ctx, `SELECT `+workspaceFields+` FROM workspaces WHERE terminal_id=?`, terminal))
 }
 
+func (s *Store) workspaceByID(ctx context.Context, id string) (workspaceRecord, error) {
+	return scanWorkspace(s.db.QueryRowContext(ctx, `SELECT `+workspaceFields+` FROM workspaces WHERE id=?`, id))
+}
+
 // reserveWorkspace is idempotent even when two browsers open the same terminal.
 // The original cwd comes from the stored terminal, never from the browser.
 func (s *Store) reserveWorkspace(ctx context.Context, terminal string) (workspaceRecord, error) {

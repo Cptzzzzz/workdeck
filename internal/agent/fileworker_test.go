@@ -199,3 +199,55 @@ func TestFileWorkerForeignAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWorkerCancellationBarrierPreventsDelayedCommit(t *testing.T) {
+	account, err := serviceUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, terminal := testAgent(t, account.Username)
+	pool := newFileWorkerPool(a)
+	pool.selfBinary = testWorkerBinary(t)
+	pool.statePath = func(_ *user.User, _ string) string { return filepath.Join(t.TempDir(), "state") }
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	worker, err := pool.forTerminal(ctx, terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, next := t.TempDir(), t.TempDir()
+	if err = os.WriteFile(filepath.Join(root, "file"), []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	spec := files.Workspace{ID: files.NewID(time.Now()), TerminalID: terminal, Root: root, Revision: 1}
+	var registered files.Workspace
+	if err = worker.Call(ctx, "workspace.register", "", 0, spec, &registered); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.Call(ctx, "read.open", spec.ID, 1, map[string]any{"handle": "held", "path": "file", "version": ""}, nil); err != nil {
+		t.Fatal(err)
+	}
+	op := files.NewID(time.Now())
+	var prepared files.RootChange
+	if err = worker.Call(ctx, "workspace.prepare", spec.ID, 1, map[string]any{"op_id": op, "root_path": next}, &prepared); err != nil {
+		t.Fatal(err)
+	}
+	short, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+	err = worker.Call(short, "workspace.commit", spec.ID, 1, map[string]any{"op_id": op}, nil)
+	stop()
+	if err == nil {
+		t.Fatal("blocked commit ignored cancellation")
+	}
+	if err = worker.Call(ctx, "read.close", spec.ID, 1, map[string]any{"handle": "held"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var result files.RootChange
+	if err = worker.Call(ctx, "workspace.status", spec.ID, 1, map[string]any{"op_id": op}, &result); err != nil || result.State != "prepared" {
+		t.Fatal("canceled commit ran after read closed", result, err)
+	}
+	var identity files.Workspace
+	if err = worker.Call(ctx, "workspace.identity", spec.ID, 0, map[string]any{"terminal_id": terminal}, &identity); err != nil || identity.Revision != 1 {
+		t.Fatal(identity, err)
+	}
+}
