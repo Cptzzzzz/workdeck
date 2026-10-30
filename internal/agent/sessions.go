@@ -50,7 +50,7 @@ set -g remain-on-exit on
 set -g escape-time 10
 set -g set-clipboard off
 set -g allow-rename off
-set -g window-size latest
+set -g window-size manual
 `
 	if err = os.WriteFile(filepath.Join(dir, "tmux.conf"), []byte(config), 0600); err != nil {
 		return nil, err

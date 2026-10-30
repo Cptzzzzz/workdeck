@@ -713,6 +713,12 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 				}
 				switch f.Type {
 				case "resize":
+					h.mu.Lock()
+					controlling := h.controllers[t.ID] == a.id
+					h.mu.Unlock()
+					if !a.readonly && !controlling {
+						continue
+					}
 					f.Cols = clampSize(f.Cols, 10, 500)
 					f.Rows = clampSize(f.Rows, 3, 250)
 					e = data.JSON(f)

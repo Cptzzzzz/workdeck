@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -243,6 +244,11 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 							rows = 250
 						}
 						e = pty.Setsize(f, &pty.Winsize{Cols: cols, Rows: rows})
+						if e == nil && !msg.ReadOnly {
+							// Set the pane's canonical size explicitly: old tmux versions do not
+							// support latest/ignore-size, and viewers must never resize a TUI.
+							_, e = a.sessions.tmuxRun(msg.TerminalID, "resize-window", "-t", "main", "-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows)))
+						}
 					}
 				case "ack":
 					if frame.Bytes > 0 && frame.Bytes <= 32768 {

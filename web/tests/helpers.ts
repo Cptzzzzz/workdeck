@@ -9,5 +9,7 @@ export async function selectTestNode(page: Page) {
       candidate.name === name && candidate.online,
   );
   if (!node) throw new Error("Configured test node is not online");
-  await page.getByLabel("计算节点", { exact: true }).selectOption(node.id);
+  await page
+    .getByRole("combobox", { name: "计算节点", exact: true })
+    .selectOption(node.id);
 }

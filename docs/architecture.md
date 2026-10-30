@@ -10,7 +10,7 @@ Each attachment launches `tmux attach-session` inside its own PTY. The actual sh
 
 ## Ownership and size
 
-The Hub tracks one controller per terminal. Other attachments use tmux readonly/ignore-size clients. Input is checked by the Hub and Agent. A readonly viewer can resize its own viewport without changing the running program's canonical dimensions. Takeover reserves ownership for the new attachment before disconnecting the old controller; the old browser reconnects readonly.
+The Hub tracks one controller per terminal. Other attachments use tmux readonly clients. The Agent explicitly applies canonical window dimensions only for the current controller; viewer PTY dimensions affect only their viewport. This also supports older tmux releases without latest/ignore-size behavior. Input is checked by the Hub and Agent. A readonly viewer can resize its own viewport without changing the running program's canonical dimensions. Takeover reserves ownership for the new attachment before disconnecting the old controller; the old browser reconnects readonly.
 
 The browser sends cols/rows on layout changes; the Agent applies those to the attachment PTY. tmux relays appropriate size changes to its pane. The browser never queues/replays input across reconnections.
 
