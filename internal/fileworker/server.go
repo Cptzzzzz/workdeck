@@ -181,6 +181,14 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			return nil, err
 		}
 		return s.engine.RegisterWorkspace(ctx, p)
+	case "workspace.identity":
+		var p struct {
+			TerminalID string `json:"terminal_id"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.WorkspaceIdentity(ctx, r.WorkspaceID, p.TerminalID)
 	case "workspace.prepare":
 		var p struct {
 			OpID string `json:"op_id"`

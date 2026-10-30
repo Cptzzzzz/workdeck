@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"log"
 	"net/http"
@@ -48,17 +49,25 @@ type waiter struct {
 	ch     chan protocol.Message
 }
 type Hub struct {
-	cfg         Config
-	store       *Store
-	mu          sync.Mutex
-	agents      map[string]*agentConn
-	requests    map[string]waiter
-	pending     map[string]*pending
-	attachments map[string]*attachment
-	controllers map[string]string
-	attempts    map[string]attempt
-	nonces      map[string]time.Time
-	dummyHash   []byte
+	cfg                 Config
+	store               *Store
+	mu                  sync.Mutex
+	agents              map[string]*agentConn
+	requests            map[string]waiter
+	pending             map[string]*pending
+	attachments         map[string]*attachment
+	controllers         map[string]string
+	attempts            map[string]attempt
+	nonces              map[string]time.Time
+	dummyHash           []byte
+	workspaceLocks      [64]sync.Mutex
+	workspaceRecovering map[string]bool
+}
+
+func (h *Hub) workspaceLock(terminal string) *sync.Mutex {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(terminal))
+	return &h.workspaceLocks[hash.Sum32()%uint32(len(h.workspaceLocks))]
 }
 
 func New(cfg Config) (*Hub, error) {
@@ -99,6 +108,9 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("POST /api/terminals", h.protected(h.createTerminal))
 	m.HandleFunc("PATCH /api/terminals/{id}", h.protected(h.renameTerminal))
 	m.HandleFunc("DELETE /api/terminals/{id}", h.protected(h.closeTerminal))
+	m.HandleFunc("GET /api/terminals/{id}/workspace", h.protected(h.getWorkspace))
+	m.HandleFunc("POST /api/terminals/{id}/workspace", h.protected(h.createWorkspace))
+	m.HandleFunc("PUT /api/terminals/{id}/workspace", h.protected(h.changeWorkspace))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
@@ -483,6 +495,12 @@ func (h *Hub) applyInventory(node string, msg protocol.Message) {
 	if err = tx.Commit(); err != nil {
 		log.Printf("inventory commit: %v", err)
 		return
+	}
+	for _, capability := range msg.Capabilities {
+		if capability == "workspace-control-v1" {
+			h.scheduleWorkspaceRecovery(node)
+			break
+		}
 	}
 	for _, id := range detach {
 		h.closeTerminalAttachments(id)

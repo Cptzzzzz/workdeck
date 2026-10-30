@@ -1,5 +1,7 @@
 package protocol
 
+import "workdeck/internal/files"
+
 // Session is metadata only. The live process and terminal screen remain on the node.
 type Session struct {
 	ID        string `json:"id"`
@@ -49,6 +51,12 @@ type Message struct {
 	Path          string            `json:"path,omitempty"`
 	IncludeHidden bool              `json:"include_hidden,omitempty"`
 	Directory     *DirectoryListing `json:"directory,omitempty"`
+	Workspace     *files.Workspace  `json:"workspace,omitempty"`
+	RootChange    *files.RootChange `json:"root_change,omitempty"`
+	WorkspaceID   string            `json:"workspace_id,omitempty"`
+	RootRevision  int64             `json:"root_revision,omitempty"`
+	OperationID   string            `json:"operation_id,omitempty"`
+	ErrorCode     string            `json:"error_code,omitempty"`
 }
 
 type Frame struct {

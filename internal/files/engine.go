@@ -157,6 +157,20 @@ func (e *Engine) workspaceRecord(ctx context.Context, id string) (Workspace, err
 	return w, err
 }
 
+// WorkspaceIdentity reads the durable identity without opening the root. It
+// lets the Agent bind private worker requests to its own terminal record even
+// when the directory has temporarily disappeared.
+func (e *Engine) WorkspaceIdentity(ctx context.Context, id, terminalID string) (Workspace, error) {
+	w, err := e.workspaceRecord(ctx, id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.TerminalID != terminalID {
+		return Workspace{}, fail("OPERATION_SCOPE", "工作区不属于此终端")
+	}
+	return w, nil
+}
+
 func (e *Engine) acquire(ctx context.Context, id string, revision int64) (*workspaceHandle, func(), error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
