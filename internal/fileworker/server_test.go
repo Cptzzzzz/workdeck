@@ -85,6 +85,29 @@ func TestWorkerRPCFileLifecycleAndScope(t *testing.T) {
 	if err := json.Unmarshal(result, &directoryOperation); err != nil || directoryOperation.State != "committed" {
 		t.Fatal(directoryOperation, err)
 	}
+	result, errResp = c.call(t, "file.stat", workspace.ID, 1, map[string]any{"path": "new-directory"})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	var directory files.Entry
+	if err := json.Unmarshal(result, &directory); err != nil || directory.Version == "" {
+		t.Fatal(directory, err)
+	}
+	renameID := files.NewID(time.Now())
+	result, errResp = c.call(t, "entry.rename", workspace.ID, 1, map[string]any{"op_id": renameID, "source": "new-directory", "target": "renamed-directory", "version": directory.Version})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	if err := json.Unmarshal(result, &directoryOperation); err != nil || directoryOperation.Kind != "entry.rename" || directoryOperation.State != "committed" {
+		t.Fatal(directoryOperation, err)
+	}
+	result, errResp = c.call(t, "operation.status", workspace.ID, 1, map[string]any{"op_id": renameID})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	if err := json.Unmarshal(result, &directoryOperation); err != nil || directoryOperation.State != "committed" {
+		t.Fatal(directoryOperation, err)
+	}
 	body := []byte("hello workspace\n")
 	sum := sha256.Sum256(body)
 	id := files.NewID(time.Now())

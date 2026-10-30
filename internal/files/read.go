@@ -200,7 +200,11 @@ func (e *Engine) Stat(ctx context.Context, id string, revision int64, name strin
 		return Entry{}, fail("NOT_FOUND", "文件不存在或无法访问")
 	}
 	if !info.Mode().IsRegular() {
-		return entry(path.Base(name), info), nil
+		result := entry(path.Base(name), info)
+		if info.IsDir() {
+			result.Version = versionFor(identity(info), "")
+		}
+		return result, nil
 	}
 	reader, err := e.OpenRead(ctx, id, revision, name, "")
 	if err != nil {

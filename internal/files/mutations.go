@@ -13,10 +13,12 @@ import (
 )
 
 type directoryPlan struct {
-	Path      string `json:"path"`
-	Temporary string `json:"temporary"`
-	Device    uint64 `json:"device"`
-	Inode     uint64 `json:"inode"`
+	Path      string       `json:"path"`
+	Temporary string       `json:"temporary"`
+	Source    string       `json:"source,omitempty"`
+	Device    uint64       `json:"device"`
+	Inode     uint64       `json:"inode"`
+	Original  fileIdentity `json:"original,omitempty"`
 }
 type mutationRecord struct {
 	Operation
@@ -268,7 +270,14 @@ func (e *Engine) MutationStatus(ctx context.Context, workspace string, revision 
 		return Operation{}, fail("OPERATION_SCOPE", "操作不属于当前工作区修订")
 	}
 	if m.State == "prepared" {
-		return e.reconcileDirectory(ctx, &m, false)
+		switch m.Kind {
+		case "directory.create":
+			return e.reconcileDirectory(ctx, &m, false)
+		case "entry.rename":
+			return e.reconcileRename(ctx, &m, false)
+		default:
+			return m.Operation, fail("INVALID_STATE", "未知的文件操作类型")
+		}
 	}
 	return m.Operation, nil
 }

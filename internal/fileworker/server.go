@@ -271,6 +271,17 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			return nil, err
 		}
 		return s.engine.CreateDirectory(ctx, r.WorkspaceID, r.Revision, p.OpID, p.Path)
+	case "entry.rename":
+		var p struct {
+			OpID    string `json:"op_id"`
+			Source  string `json:"source"`
+			Target  string `json:"target"`
+			Version string `json:"version"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.Rename(ctx, r.WorkspaceID, r.Revision, p.OpID, p.Source, p.Target, p.Version)
 	case "operation.status":
 		var p struct {
 			OpID string `json:"op_id"`

@@ -545,7 +545,7 @@ export class FileClient {
   }
   async operationStatus(
     opID: string,
-    kind: "write" | "directory.create" = "write",
+    kind: "write" | "directory.create" | "entry.rename" = "write",
   ): Promise<FileOperation> {
     return this.checkOperation(
       (await this.request("operation.status", { op_id: opID })).value,
@@ -560,10 +560,29 @@ export class FileClient {
       "directory.create",
     );
   }
+  async rename(
+    opID: string,
+    source: string,
+    target: string,
+    version: string,
+  ): Promise<FileOperation> {
+    return this.checkOperation(
+      (
+        await this.request("entry.rename", {
+          op_id: opID,
+          source,
+          target,
+          version,
+        })
+      ).value,
+      opID,
+      "entry.rename",
+    );
+  }
   private checkOperation(
     value: unknown,
     opID: string,
-    kind: "write" | "directory.create" = "write",
+    kind: "write" | "directory.create" | "entry.rename" = "write",
   ): FileOperation {
     const op = value as FileOperation | undefined;
     if (

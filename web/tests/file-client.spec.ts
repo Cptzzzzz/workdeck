@@ -154,6 +154,34 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
           loaded.bytes.some((b: number, i: number) => b !== bytes[i])
         )
           throw new Error("roundtrip mismatch");
+        const renameData = new TextEncoder().encode("rename me");
+        const renameCreate = await client.prepareSave(
+          "rename-source.txt",
+          renameData,
+          "",
+          true,
+        );
+        await client.save(renameCreate);
+        const renameVersion = (await client.stat("rename-source.txt")).version;
+        const renameID = client.newOperationID();
+        const renamed = await client.rename(
+          renameID,
+          "rename-source.txt",
+          "renamed.txt",
+          renameVersion,
+        );
+        if (
+          renamed.state !== "committed" ||
+          (await client.operationStatus(renameID, "entry.rename")).state !==
+            "committed"
+        )
+          throw new Error("rename confirmation lost");
+        if (
+          new TextDecoder().decode(
+            (await client.readBytes("renamed.txt")).bytes,
+          ) !== "rename me"
+        )
+          throw new Error("renamed content mismatch");
         const fileBytes = new Uint8Array(1024 * 1024 + 123);
         for (let i = 0; i < fileBytes.length; i++) fileBytes[i] = i % 251;
         const file = new File([fileBytes], "upload.bin");
