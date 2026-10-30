@@ -454,6 +454,7 @@ export class FileClient {
       signal?: AbortSignal;
       onHash?: (done: number, total: number) => void;
       onProgress?: (done: number, total: number) => void;
+      onBegin?: () => void;
     } = {},
   ): Promise<FileOperation> {
     const { signal, onHash, onProgress } = options;
@@ -466,6 +467,7 @@ export class FileClient {
         "所选文件与原上传文件不一致",
       );
     checkTransferAbort(signal);
+    options.onBegin?.();
     let op = this.checkOperation(
       (
         await this.request("file.write.begin", {

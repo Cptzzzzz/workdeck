@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { build } from "esbuild";
 import path from "node:path";
+import os from "node:os";
 const root = process.env.WORKDECK_FILE_TEST_ROOT,
   nodeName = process.env.WORKDECK_TEST_NODE_NAME,
   testURL = process.env.WORKDECK_TEST_URL || "";
@@ -13,6 +15,9 @@ test("modes share the terminal and the workspace edits and saves files", async (
   page,
 }) => {
   const dir = mkdtempSync(path.join(root!, "workbench-ui-"));
+  const bundleDir = mkdtempSync(
+    path.join(os.tmpdir(), "workdeck-transfer-ui-"),
+  );
   writeFileSync(path.join(dir, "example.txt"), "original text\n");
   let id = "",
     csrf = "";
@@ -20,6 +25,17 @@ test("modes share the terminal and the workspace edits and saves files", async (
   page.on("pageerror", (error) => errors.push(error.message));
   const name = `workbench fixture ${Date.now()}`;
   try {
+    const bundle = path.join(bundleDir, "client.js");
+    await build({
+      entryPoints: [path.resolve("tests/fixtures/file-client-harness.ts")],
+      bundle: true,
+      format: "iife",
+      platform: "browser",
+      outfile: bundle,
+    });
+    await page.route("**/__transfer-ui-harness.js", (route) =>
+      route.fulfill({ path: bundle, contentType: "text/javascript" }),
+    );
     await page.addInitScript(() => {
       (window as any).__download = [];
       (window as any).showSaveFilePicker = async () => ({
@@ -89,6 +105,29 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await expect(
       page.getByRole("button", { name: "example.txt", exact: true }),
     ).toBeVisible();
+    await page.evaluate(() => {
+      const original = Blob.prototype.arrayBuffer;
+      (window as any).workbenchOriginalArrayBuffer = original;
+      Blob.prototype.arrayBuffer = async function () {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return original.call(this);
+      };
+    });
+    const cancelChooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "上传文件到所选目录" }).click();
+    await (
+      await cancelChooser
+    ).setFiles({
+      name: "cancel-in-ui.bin",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.alloc(2 * 1024 * 1024),
+    });
+    await page.getByRole("button", { name: "取消传输" }).click();
+    await expect(page.getByRole("button", { name: "取消传输" })).toBeHidden();
+    expect(() => readFileSync(path.join(dir, "cancel-in-ui.bin"))).toThrow();
+    await page.evaluate(() => {
+      Blob.prototype.arrayBuffer = (window as any).workbenchOriginalArrayBuffer;
+    });
     const chooserPromise = page.waitForEvent("filechooser");
     await page.getByRole("button", { name: "上传文件到所选目录" }).click();
     await (
@@ -118,6 +157,67 @@ test("modes share the terminal and the workspace edits and saves files", async (
         ),
       )
       .toBe("upload from browser\n");
+    await page.addScriptTag({ url: "/__transfer-ui-harness.js" });
+    await page.evaluate(
+      async ({ id, csrf, nodeID }) => {
+        const h = (window as any).workdeckFileTest;
+        h.setCSRF(csrf);
+        const view = await fetch(`/api/terminals/${id}/workspace`).then((r) =>
+          r.json(),
+        );
+        const w = view.workspace,
+          client = await h.FileClient.connect(w);
+        const completeFile = new File(["completed"], "complete.bin");
+        const completed = await client.prepareUpload(
+          "complete.bin",
+          completeFile,
+        );
+        await client.upload(completed, completeFile);
+        const pendingFile = new File([new Uint8Array(131072)], "pending.bin");
+        const pending = await client.prepareUpload("pending.bin", pendingFile);
+        const abort = new AbortController();
+        try {
+          await client.upload(pending, pendingFile, {
+            signal: abort.signal,
+            onProgress: (done: number) => {
+              if (done >= 32768) abort.abort();
+            },
+          });
+        } catch (e) {
+          if ((e as Error).name !== "AbortError") throw e;
+        }
+        for (const tx of [completed, pending])
+          await h.drafts.recordCreateIntent({
+            account: "admin",
+            nodeID,
+            workspaceID: w.id,
+            rootRevision: w.root_revision,
+            opID: tx.opID,
+            kind: "upload",
+            path: tx.spec.path,
+            createdAt: Date.now(),
+            size: tx.spec.size,
+            sha256: tx.spec.sha256,
+            sourceName: tx.sourceName,
+          });
+        client.close();
+      },
+      { id, csrf, nodeID: fixture.terminal.node_id },
+    );
+    await page.getByRole("button", { name: "终端模式" }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    const completedRow = page
+      .locator(".workbench-intents > div")
+      .filter({ hasText: "complete.bin" });
+    await expect(completedRow).toBeVisible();
+    await completedRow.getByRole("button", { name: "核对状态" }).click();
+    await expect(completedRow).toBeHidden();
+    const pendingRow = page
+      .locator(".workbench-intents > div")
+      .filter({ hasText: "pending.bin" });
+    await pendingRow.getByRole("button", { name: "取消上传" }).click();
+    await expect(pendingRow).toBeHidden();
+    expect(() => readFileSync(path.join(dir, "pending.bin"))).toThrow();
     writeFileSync(path.join(dir, "added-after-open.txt"), "new\n");
     await page.getByRole("button", { name: "刷新文件树" }).click();
     await expect(
@@ -275,5 +375,6 @@ test("modes share the terminal and the workspace edits and saves files", async (
         )
         .catch(() => {});
     rmSync(dir, { recursive: true, force: true });
+    rmSync(bundleDir, { recursive: true, force: true });
   }
 });

@@ -86,6 +86,7 @@ export function useWorkspace(
     timers = useRef(new Map<string, number>()),
     queues = useRef(new Map<string, Promise<void>>());
   const activeIntents = useRef(new Set<string>());
+  const transferAbort = useRef<AbortController | null>(null);
   const [, render] = useReducer((n: number) => n + 1, 0);
   const update = useCallback(() => render(), []);
 
@@ -576,12 +577,7 @@ export function useWorkspace(
       } catch (e) {
         if (
           e instanceof FileServiceError &&
-          [
-            "ALREADY_EXISTS",
-            "CONFLICT",
-            "ID_REUSED",
-            "OPERATION_EXPIRED",
-          ].includes(e.code)
+          ["ALREADY_EXISTS", "CONFLICT"].includes(e.code)
         ) {
           await removeCreateIntent(intent.opID);
           setIntents((old) => old.filter((item) => item.opID !== intent.opID));
@@ -593,13 +589,14 @@ export function useWorkspace(
     },
     [refresh],
   );
-  const uploadFile = useCallback(
+  const runUploadFile = useCallback(
     async (
       file: File,
       parent: string,
       expectedWorkspace: string,
       expectedRevision: number,
       existing?: CreateIntent,
+      signal?: AbortSignal,
     ) => {
       const client = clientRef.current,
         w = workspace,
@@ -646,7 +643,7 @@ export function useWorkspace(
         tx = await client.prepareUpload(
           childPath(parent, file.name),
           file,
-          undefined,
+          signal,
           (done, total) => setTransfer(`正在校验 ${done} / ${total} 字节`),
         );
         if (gen !== generation.current || clientRef.current !== client)
@@ -665,14 +662,23 @@ export function useWorkspace(
           sourceName: file.name,
         };
         await recordCreateIntent(intent);
+        if (signal?.aborted) {
+          await removeCreateIntent(intent.opID);
+          throw new DOMException("已取消上传", "AbortError");
+        }
         if (gen !== generation.current || clientRef.current !== client)
           throw new Error("工作区已切换，上传记录已保存，请返回原工作区核对");
         setIntents((old) => [...old, intent]);
       }
       if (activeIntents.current.has(tx.opID)) throw new Error("此上传正在进行");
       activeIntents.current.add(tx.opID);
+      let beginSent = false;
       try {
         const result = await client.upload(tx, file, {
+          signal,
+          onBegin: () => {
+            beginSent = true;
+          },
           onHash: (done, total) =>
             setTransfer(`正在校验 ${done} / ${total} 字节`),
           onProgress: (done, total) =>
@@ -683,14 +689,50 @@ export function useWorkspace(
         setIntents((old) => old.filter((item) => item.opID !== tx.opID));
         if (clientRef.current === client) await refresh();
       } catch (e) {
+        if ((e as Error).name === "AbortError") {
+          if (!existing && !beginSent) {
+            await removeCreateIntent(tx.opID);
+            setIntents((old) => old.filter((item) => item.opID !== tx.opID));
+            throw e;
+          }
+          try {
+            const state = await client.operationStatus(tx.opID);
+            const result =
+              state.state === "receiving" || state.state === "ready"
+                ? await client.abortUpload(tx)
+                : state;
+            if (result.state === "committed" && !result.version)
+              throw new Error("节点未返回文件版本，请稍后再次核对");
+            if (
+              result.state === "aborted" ||
+              result.state === "committed" ||
+              result.state === "failed" ||
+              result.state === "conflict"
+            ) {
+              await removeCreateIntent(tx.opID);
+              setIntents((old) => old.filter((item) => item.opID !== tx.opID));
+              if (
+                result.state === "committed" &&
+                clientRef.current === client
+              ) {
+                await refresh();
+                throw new Error("取消时上传已完成，目标文件已保存");
+              }
+              throw new DOMException("已取消上传", "AbortError");
+            }
+          } catch (cancelError) {
+            if (
+              (cancelError as Error).name === "AbortError" ||
+              (cancelError as Error).message ===
+                "取消时上传已完成，目标文件已保存"
+            )
+              throw cancelError;
+          }
+          throw new Error("取消结果尚未确认，请恢复连接后核对待处理操作");
+        }
         if (
           e instanceof FileServiceError &&
-          [
-            "ALREADY_EXISTS",
-            "CONFLICT",
-            "ID_REUSED",
-            "OPERATION_EXPIRED",
-          ].includes(e.code)
+          ["ALREADY_EXISTS", "CONFLICT"].includes(e.code)
         ) {
           await removeCreateIntent(tx.opID);
           setIntents((old) => old.filter((item) => item.opID !== tx.opID));
@@ -702,6 +744,95 @@ export function useWorkspace(
       }
     },
     [account, workspace, terminal?.id, terminal?.node_id, refresh],
+  );
+  const uploadFile = useCallback(
+    async (
+      file: File,
+      parent: string,
+      expectedWorkspace: string,
+      expectedRevision: number,
+      existing?: CreateIntent,
+    ) => {
+      if (transferAbort.current) throw new Error("已有文件传输正在进行");
+      const controller = new AbortController();
+      transferAbort.current = controller;
+      try {
+        await runUploadFile(
+          file,
+          parent,
+          expectedWorkspace,
+          expectedRevision,
+          existing,
+          controller.signal,
+        );
+      } finally {
+        if (transferAbort.current === controller) transferAbort.current = null;
+        setTransfer("");
+      }
+    },
+    [runUploadFile],
+  );
+  const checkUploadIntent = useCallback(
+    async (intent: CreateIntent, cancel = false) => {
+      const client = clientRef.current;
+      if (
+        !client ||
+        client.workspace.id !== intent.workspaceID ||
+        client.workspace.root_revision !== intent.rootRevision ||
+        intent.kind !== "upload"
+      )
+        throw new Error("工作区已断开或目录已改变");
+      if (activeIntents.current.has(intent.opID))
+        throw new Error("此上传正在进行，请先取消传输");
+      if (
+        !Number.isSafeInteger(intent.size) ||
+        intent.size! < 0 ||
+        !intent.sha256 ||
+        !/^[0-9a-f]{64}$/.test(intent.sha256)
+      )
+        throw new Error("上传记录无效，请检查目标文件");
+      activeIntents.current.add(intent.opID);
+      try {
+        const status = await client.operationStatus(intent.opID);
+        let result = status;
+        if (
+          cancel &&
+          (status.state === "receiving" || status.state === "ready")
+        ) {
+          result = await client.abortUpload({
+            opID: intent.opID,
+            spec: {
+              path: intent.path,
+              size: intent.size!,
+              sha256: intent.sha256,
+              create: true,
+            },
+            sourceName: intent.sourceName || "",
+          });
+        }
+        if (
+          ["committed", "aborted", "failed", "conflict"].includes(result.state)
+        ) {
+          if (result.state === "committed" && !result.version)
+            throw new Error("节点未返回文件版本，请稍后再次核对");
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((item) => item.opID !== intent.opID));
+          if (result.state === "committed" && clientRef.current === client)
+            await refresh();
+          return result.state === "committed" ? "上传已完成" : "上传已终止";
+        }
+        if (result.state === "receiving" || result.state === "ready")
+          return "请选择原文件继续上传，或取消此上传";
+        return "节点尚无法确认上传结果，请稍后再次核对";
+      } catch (e) {
+        if (e instanceof FileServiceError && e.code === "OPERATION_NOT_FOUND")
+          return "节点没有可查询的操作记录，请核对目标文件后重新选择原文件继续";
+        throw e;
+      } finally {
+        activeIntents.current.delete(intent.opID);
+      }
+    },
+    [refresh],
   );
   const createItem = useCallback(
     async (
@@ -763,12 +894,25 @@ export function useWorkspace(
     transfer,
     clearTransfer: () => setTransfer(""),
     uploadFile,
+    checkUploadIntent,
+    cancelTransfer: () => {
+      transferAbort.current?.abort();
+      setTransfer("正在取消，请等待当前数据块确认");
+    },
     download: (path: string) => {
       const client = clientRef.current;
       if (!client) return Promise.reject(new Error("文件连接未就绪"));
-      return downloadFile(client, path, undefined, (done, total) =>
+      if (transferAbort.current)
+        return Promise.reject(new Error("已有文件传输正在进行"));
+      const controller = new AbortController();
+      transferAbort.current = controller;
+      setTransfer("正在准备下载");
+      return downloadFile(client, path, controller.signal, (done, total) =>
         setTransfer(`正在下载 ${done} / ${total} 字节`),
-      ).finally(() => setTransfer(""));
+      ).finally(() => {
+        if (transferAbort.current === controller) transferAbort.current = null;
+        setTransfer("");
+      });
     },
     createItem,
     supportsCreate,

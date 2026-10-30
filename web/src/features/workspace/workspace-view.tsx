@@ -151,7 +151,8 @@ export function WorkspaceSidebar({
                   )
                   .catch((e) => {
                     controller.clearTransfer();
-                    controller.reportError((e as Error).message);
+                    if ((e as Error).name !== "AbortError")
+                      controller.reportError((e as Error).message);
                   });
             }}
           />
@@ -215,6 +216,7 @@ export function WorkspaceSidebar({
       {controller.transfer && (
         <div className="workbench-hint" role="status">
           {controller.transfer}
+          <button onClick={controller.cancelTransfer}>取消传输</button>
         </div>
       )}
       {controller.intents.length > 0 && (
@@ -226,7 +228,8 @@ export function WorkspaceSidebar({
               <button
                 disabled={
                   !controller.supportsCreate ||
-                  controller.connection !== "中转连接"
+                  controller.connection !== "中转连接" ||
+                  !!controller.transfer
                 }
                 onClick={() =>
                   intent.kind === "upload"
@@ -240,6 +243,42 @@ export function WorkspaceSidebar({
               >
                 {intent.kind === "upload" ? "选择原文件继续" : "核对并继续"}
               </button>
+              {intent.kind === "upload" && (
+                <>
+                  <button
+                    disabled={
+                      controller.connection !== "中转连接" ||
+                      !!controller.transfer
+                    }
+                    onClick={() =>
+                      void controller
+                        .checkUploadIntent(intent)
+                        .then(controller.reportError)
+                        .catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
+                    }
+                  >
+                    核对状态
+                  </button>
+                  <button
+                    disabled={
+                      controller.connection !== "中转连接" ||
+                      !!controller.transfer
+                    }
+                    onClick={() =>
+                      void controller
+                        .checkUploadIntent(intent, true)
+                        .then(controller.reportError)
+                        .catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
+                    }
+                  >
+                    取消上传
+                  </button>
+                </>
+              )}
             </div>
           ))}
         </div>

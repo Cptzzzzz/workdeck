@@ -190,6 +190,29 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
         }
         if (!mismatch) throw new Error("different source was accepted");
         const uploaded = await client.upload(upload, file);
+        const cancelled = await client.prepareUpload("cancelled.bin", file);
+        const abort = new AbortController();
+        let stopped = false;
+        try {
+          await client.upload(cancelled, file, {
+            signal: abort.signal,
+            onProgress: (done: number) => {
+              if (done >= 65536) abort.abort();
+            },
+          });
+        } catch (error) {
+          stopped = (error as Error).name === "AbortError";
+        }
+        if (!stopped) throw new Error("upload did not stop after cancellation");
+        const beforeAbort = await client.operationStatus(cancelled.opID);
+        if (beforeAbort.state !== "receiving" || beforeAbort.offset !== 65536)
+          throw new Error("unexpected cancelled offset");
+        const aborted = await client.abortUpload(cancelled);
+        if (
+          aborted.state !== "aborted" ||
+          (await client.operationStatus(cancelled.opID)).state !== "aborted"
+        )
+          throw new Error("cancel was not durable");
         const roundtrip = await client.readBytes(
           "upload.bin",
           uploaded.version,
@@ -301,6 +324,26 @@ test("downloads stream in bounded chunks and reject oversized browser fallback",
         }),
       });
       await downloadFile(client, "large.bin");
+      const controller = new AbortController();
+      let cancelledWrite = false,
+        closedWrite = false,
+        cancelled = false;
+      (window as any).showSaveFilePicker = async () => ({
+        createWritable: async () => ({
+          write: async () => controller.abort(),
+          close: async () => {
+            closedWrite = true;
+          },
+          abort: async () => {
+            cancelledWrite = true;
+          },
+        }),
+      });
+      try {
+        await downloadFile(client, "large.bin", controller.signal);
+      } catch (error) {
+        cancelled = (error as Error).name === "AbortError";
+      }
       delete (window as any).showSaveFilePicker;
       size = 21 * 1024 * 1024;
       const before = reads;
@@ -316,14 +359,20 @@ test("downloads stream in bounded chunks and reject oversized browser fallback",
         closed,
         rejected,
         fallbackReads: reads - before,
+        cancelled,
+        cancelledWrite,
+        closedWrite,
       };
     });
     expect(result).toEqual({
       total: 1024 * 1024 + 7,
       largest: 32768,
-      closed: 2,
+      closed: 3,
       rejected: true,
       fallbackReads: 0,
+      cancelled: true,
+      cancelledWrite: true,
+      closedWrite: false,
     });
   } finally {
     rmSync(bundleDir, { recursive: true, force: true });
