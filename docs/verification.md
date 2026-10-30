@@ -63,3 +63,11 @@ Acceptance passed seven standard public browser cases plus four root-host cases.
 Node and terminal rename now use the same modal styles as terminal creation and password changes. Terminal termination uses a site dialog showing the terminal and node, with explicit cancel/confirm buttons and an offline delivery notice when applicable. Opening confirmation from fullscreen exits fullscreen so the dialog is visible.
 
 Three browser acceptance cases passed against an isolated Hub and real local compute Agent: password form validation, offline node rename with a stable identity, and terminal rename/termination. The terminal case verifies that rename retains the running shell environment, cancelling confirmation sends no DELETE request, confirming sends exactly one, and no browser-native dialogs appear. Fullscreen visibility and both modal screenshots were also checked. The production frontend was deployed and its health endpoint returned OK; authenticated production acceptance was unavailable with the saved test credentials. The current production password was preserved.
+
+## Agent reconnect after an idle terminal detaches
+
+A production Agent stack dump identified control reconnection waiting indefinitely for an old cross-account `runuser` terminal attachment to exit. The attachment sent SIGHUP only to the wrapper and waited without a deadline. PTY setup and resize also invoked `File.Fd`, which put the master into blocking mode.
+
+Attachment cleanup now cancels transport first and terminates the viewer's separate process group, escalating after two seconds. The persistent tmux server and terminal are outside that group. PTY reads use nonblocking polling, and resize uses `SyscallConn` without changing descriptor mode.
+
+Regression tests disconnect the control connection three times with an attached idle, resized terminal, verify automatic reconnection, and verify the original pane PID survives. They also cover a wrapper that ignores termination. Both cases passed locally with the race detector and on the deployment host with a root Agent attaching to a different account. The complete Go test suite and `go vet` passed.

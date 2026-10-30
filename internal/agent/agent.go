@@ -12,10 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
-	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"workdeck/internal/protocol"
 )
@@ -203,13 +201,16 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 		_ = socket.JSON(protocol.Frame{Type: "error", Message: err.Error()})
 		return err
 	}
-	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 100, Rows: 30})
+	f, err := startAttachment(cmd)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	defer func() { _ = f.Close(); _ = cmd.Process.Signal(syscall.SIGHUP); _ = cmd.Wait() }()
+	defer func() {
+		cancel()
+		socket.Close()
+		stopAttachment(cmd, f)
+	}()
 	go func() { <-ctx.Done(); socket.Close(); _ = f.Close() }()
 	go socket.Heartbeat(ctx.Done())
 	ack := make(chan int, 128)
@@ -247,7 +248,7 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 						if rows > 250 {
 							rows = 250
 						}
-						e = pty.Setsize(f, &pty.Winsize{Cols: cols, Rows: rows})
+						e = resizeAttachment(f, cols, rows)
 						if e == nil && !msg.ReadOnly {
 							// Set the pane's canonical size explicitly: old tmux versions do not
 							// support latest/ignore-size, and viewers must never resize a TUI.
