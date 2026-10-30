@@ -148,6 +148,85 @@ func errorsIsCanceled(err error) bool {
 	return err != nil && strings.Contains(err.Error(), context.Canceled.Error())
 }
 
+func TestIndependentWorkersSerializeConflictingSaves(t *testing.T) {
+	binary := testWorkerBinary(t)
+	account, err := serviceUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, terminal := testAgent(t, account.Username)
+	base := t.TempDir()
+	root := filepath.Join(base, "project")
+	if err = os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "shared.txt"), []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pools := []*fileWorkerPool{newFileWorkerPool(a), newFileWorkerPool(a)}
+	defer pools[0].Close()
+	defer pools[1].Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	workers := make([]*fileWorkerClient, 2)
+	workspaces := make([]files.Workspace, 2)
+	operations := make([]string, 2)
+	for i, pool := range pools {
+		pool.selfBinary = binary
+		state := filepath.Join(base, fmt.Sprintf("state-%d", i))
+		pool.statePath = func(_ *user.User, _ string) string { return state }
+		workers[i], err = pool.forTerminal(ctx, terminal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		workspaces[i] = files.Workspace{ID: files.NewID(time.Now()), TerminalID: terminal, Root: root, Revision: 1}
+		if err = workers[i].Call(ctx, "workspace.register", "", 0, workspaces[i], nil); err != nil {
+			t.Fatal(err)
+		}
+		var meta files.Entry
+		if err = workers[i].Call(ctx, "file.stat", workspaces[i].ID, 1, map[string]any{"path": "shared.txt"}, &meta); err != nil {
+			t.Fatal(err)
+		}
+		content := []byte(fmt.Sprintf("writer-%d", i))
+		sum := sha256.Sum256(content)
+		operations[i] = files.NewID(time.Now())
+		spec := files.WriteSpec{Path: "shared.txt", BaseVersion: meta.Version, Size: int64(len(content)), SHA256: hex.EncodeToString(sum[:])}
+		if err = workers[i].Call(ctx, "write.begin", workspaces[i].ID, 1, map[string]any{"op_id": operations[i], "spec": spec}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err = workers[i].Call(ctx, "write.chunk", workspaces[i].ID, 1, map[string]any{"op_id": operations[i], "offset": 0, "data": content}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	outcomes := make(chan error, 2)
+	for i := range workers {
+		go func(i int) {
+			<-start
+			outcomes <- workers[i].Call(ctx, "write.commit", workspaces[i].ID, 1, map[string]any{"op_id": operations[i]}, nil)
+		}(i)
+	}
+	close(start)
+	committed, conflict := 0, 0
+	for range workers {
+		err := <-outcomes
+		if err == nil {
+			committed++
+		} else if files.ErrorCode(err) == "CONFLICT" {
+			conflict++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if committed != 1 || conflict != 1 {
+		t.Fatalf("committed=%d conflict=%d", committed, conflict)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "shared.txt"))
+	if err != nil || string(contents) != "writer-0" && string(contents) != "writer-1" {
+		t.Fatal(string(contents), err)
+	}
+}
+
 func TestFileWorkerForeignAccount(t *testing.T) {
 	owner := os.Getenv("WORKDECK_FOREIGN_TEST_USER")
 	if owner == "" || os.Geteuid() != 0 {

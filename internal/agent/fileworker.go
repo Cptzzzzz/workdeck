@@ -131,6 +131,7 @@ func (p *fileWorkerPool) forTerminal(ctx context.Context, terminalID string) (*f
 		return nil, err
 	}
 	worker := newFileWorkerClient(cmd, stdin, stdout)
+	worker.commitGate = p.agent.commitGate()
 	p.workers[accountKey] = worker
 	return worker, nil
 }
@@ -190,15 +191,16 @@ type workerWrite struct {
 }
 
 type fileWorkerClient struct {
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	mu       sync.Mutex
-	pending  map[string]chan workerResponse
-	closed   bool
-	writes   chan workerWrite
-	stopping chan struct{}
-	done     chan struct{}
-	once     sync.Once
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	mu         sync.Mutex
+	pending    map[string]chan workerResponse
+	closed     bool
+	writes     chan workerWrite
+	stopping   chan struct{}
+	done       chan struct{}
+	once       sync.Once
+	commitGate chan struct{}
 }
 
 func newFileWorkerClient(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser) *fileWorkerClient {
@@ -278,7 +280,53 @@ func (w *fileWorkerClient) failPending() {
 	}
 }
 
+// Final mutations and recovery are serialized across every account's worker.
+// Upload and download chunks never hold this gate. Keep it across reconnects:
+// the gate belongs to the Agent, not to its short-lived connection pool.
 func (w *fileWorkerClient) Call(ctx context.Context, method, workspace string, revision int64, params any, result any) error {
+	mutates := method == "write.commit" || method == "entry.rename" || method == "directory.create" || method == "operation.status" || method == "entry.delete"
+	if !mutates || w.commitGate == nil {
+		return w.call(ctx, method, workspace, revision, params, result)
+	}
+	select {
+	case w.commitGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.stopping:
+		return context.Canceled
+	case <-w.done:
+		return errors.New("file worker disconnected")
+	}
+	err := w.call(ctx, method, workspace, revision, params, result)
+	var detail *files.Error
+	if w.alive() && err != nil && ((errors.As(err, &detail) && detail.Code == "WORKER_DISCONNECTED") || (ctx.Err() == nil && !errors.As(err, &detail))) {
+		w.Close()
+	}
+	if !w.alive() || errors.As(err, &detail) && detail.Code == "WORKER_DISCONNECTED" {
+		// A forced shutdown may leave a runuser child briefly alive. Do not
+		// admit another account's commit until the entire group has exited.
+		go func() { w.waitForProcessGroup(); <-w.commitGate }()
+	} else {
+		<-w.commitGate
+	}
+	return err
+}
+
+func (w *fileWorkerClient) waitForProcessGroup() {
+	<-w.done
+	if w.cmd == nil || w.cmd.Process == nil {
+		return
+	}
+	for {
+		err := syscall.Kill(-w.cmd.Process.Pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (w *fileWorkerClient) call(ctx context.Context, method, workspace string, revision int64, params any, result any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -370,6 +418,7 @@ func (w *fileWorkerClient) cancelRequest(target string) {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
+		w.Close()
 		return
 	}
 	w.pending[cancelID] = response
@@ -383,13 +432,13 @@ func (w *fileWorkerClient) cancelRequest(target string) {
 	case <-w.done:
 		return
 	case <-ctx.Done():
-		go w.Close()
+		w.Close()
 		return
 	}
 	select {
 	case err = <-written:
 		if err != nil {
-			go w.Close()
+			w.Close()
 			return
 		}
 	case <-w.stopping:
@@ -397,15 +446,18 @@ func (w *fileWorkerClient) cancelRequest(target string) {
 	case <-w.done:
 		return
 	case <-ctx.Done():
-		go w.Close()
+		w.Close()
 		return
 	}
 	select {
-	case <-response:
+	case reply := <-response:
+		if reply.Error != nil {
+			w.Close()
+		}
 	case <-w.stopping:
 	case <-w.done:
 	case <-ctx.Done():
-		go w.Close()
+		w.Close()
 	}
 }
 

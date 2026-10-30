@@ -175,6 +175,116 @@ export async function loadDraft(
     db.close();
   }
 }
+
+export type DraftMove = {
+  previous: DraftIdentity;
+  identity: DraftIdentity;
+  previousToken: string;
+  token: string;
+};
+
+// The caller must flush and freeze its live editors before a rename, and keep
+// the rename intent until this transaction has committed. Other tabs retain
+// their old token and therefore cannot recreate the moved record silently.
+export async function moveDrafts(
+  scope: Omit<DraftIdentity, "path">,
+  source: string,
+  target: string,
+): Promise<DraftMove[]> {
+  const parent = (path: string) => {
+    const separator = path.lastIndexOf("/");
+    return separator < 0 ? "" : path.slice(0, separator);
+  };
+  const valid = (path: string) =>
+    !!path &&
+    path !== "." &&
+    !path.startsWith("/") &&
+    !path.split("/").some((part) => !part || part === "." || part === "..") &&
+    !path.includes("\0");
+  if (
+    !valid(source) ||
+    !valid(target) ||
+    source === target ||
+    parent(source) !== parent(target)
+  )
+    throw new Error("草稿迁移路径无效");
+  const db = await openDB();
+  try {
+    return await new Promise<DraftMove[]>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite"),
+        store = tx.objectStore(STORE);
+      const moves: DraftMove[] = [];
+      let problem = "";
+      const cursor = store.openCursor();
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const draft = item.value as StoredDraft;
+        const id = draft?.identity;
+        const inScope =
+          id &&
+          id.account === scope.account &&
+          id.nodeID === scope.nodeID &&
+          id.workspaceID === scope.workspaceID &&
+          id.rootRevision === scope.rootRevision;
+        if (
+          inScope &&
+          typeof id.path === "string" &&
+          (id.path === source || id.path.startsWith(source + "/"))
+        ) {
+          if (
+            draft.pendingSave ||
+            typeof draft.token !== "string" ||
+            item.primaryKey !== key(id)
+          ) {
+            problem = "草稿存在待确认保存或数据异常，请先核对";
+            tx.abort();
+            return;
+          }
+          if (moves.length >= 256) {
+            problem = "待迁移草稿过多，请先处理部分草稿";
+            tx.abort();
+            return;
+          }
+          const next = { ...id, path: target + id.path.slice(source.length) },
+            nextKey = key(next);
+          const token = crypto.randomUUID(),
+            previousKey = item.primaryKey;
+          moves.push({
+            previous: id,
+            identity: next,
+            previousToken: draft.token,
+            token,
+          });
+          const check = store.get(nextKey);
+          check.onsuccess = () => {
+            if (check.result !== undefined) {
+              problem = "目标路径已有草稿，请先处理后重试";
+              tx.abort();
+              return;
+            }
+            store.put(
+              { ...draft, identity: next, token, updatedAt: Date.now() },
+              nextKey,
+            );
+            store.delete(previousKey);
+          };
+        }
+        item.continue();
+      };
+      tx.oncomplete = () => resolve(moves);
+      tx.onabort = () =>
+        reject(
+          problem
+            ? new Error(problem)
+            : tx.error || new Error("草稿路径迁移失败"),
+        );
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
 // Compare-and-swap prevents a second tab or a delayed write from silently
 // overwriting a newer draft. The caller must retain the returned token.
 export async function saveDraft(

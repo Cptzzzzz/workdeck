@@ -19,13 +19,20 @@ import (
 )
 
 type Agent struct {
-	identity    Identity
-	key         ed25519.PrivateKey
-	sessions    *Sessions
-	version     string
-	stateMu     sync.Mutex
-	controlMu   sync.Mutex
-	controllers map[string]string
+	identity       Identity
+	key            ed25519.PrivateKey
+	sessions       *Sessions
+	version        string
+	stateMu        sync.Mutex
+	controlMu      sync.Mutex
+	controllers    map[string]string
+	fileCommitOnce sync.Once
+	fileCommitGate chan struct{}
+}
+
+func (a *Agent) commitGate() chan struct{} {
+	a.fileCommitOnce.Do(func() { a.fileCommitGate = make(chan struct{}, 1) })
+	return a.fileCommitGate
 }
 
 func New(dir, version string) (*Agent, error) {

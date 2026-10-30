@@ -475,6 +475,83 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       return { staleDelete, deleted: !(await drafts.loadDraft(identity)) };
     });
     expect(result).toEqual({ staleDelete: true, deleted: true });
+    const migration = await page.evaluate(async () => {
+      const drafts = (window as any).workdeckFileTest.drafts;
+      const scope = {
+        account: "fixture",
+        nodeID: crypto.randomUUID(),
+        workspaceID: "workspace",
+        rootRevision: 1,
+      };
+      const make = (path: string, extra: object = {}) => ({
+        identity: { ...scope, path },
+        baseVersion: "v",
+        baseText: "before",
+        text: path,
+        sequence: 1,
+        encoding: "utf8",
+        newline: "lf",
+        ...extra,
+      });
+      const a = await drafts.saveDraft(make("project/a.txt"), null);
+      await drafts.saveDraft(make("project/nested/b.txt"), null);
+      const other = make("project/a.txt");
+      other.identity.account = "other-account";
+      await drafts.saveDraft(other, null);
+      const collision = await drafts.saveDraft(
+        make("renamed/nested/b.txt"),
+        null,
+      );
+      let conflict = false;
+      try {
+        await drafts.moveDrafts(scope, "project", "renamed");
+      } catch {
+        conflict = true;
+      }
+      const retained =
+        !!(await drafts.loadDraft(make("project/a.txt").identity)) &&
+        !!(await drafts.loadDraft(make("project/nested/b.txt").identity));
+      await drafts.deleteDraft(collision.identity, collision.token);
+      const pending = await drafts.saveDraft(
+        make("project/pending.txt", { pendingSave: { opID: "pending" } }),
+        null,
+      );
+      let pendingBlocked = false;
+      try {
+        await drafts.moveDrafts(scope, "project", "renamed");
+      } catch {
+        pendingBlocked = true;
+      }
+      await drafts.deleteDraft(pending.identity, pending.token);
+      const moves = await drafts.moveDrafts(scope, "project", "renamed");
+      const moved = await drafts.loadDraft(make("renamed/a.txt").identity);
+      let stale = false;
+      try {
+        await drafts.saveDraft(make("project/a.txt"), a.token);
+      } catch (e) {
+        stale = (e as Error).name === "DraftConflictError";
+      }
+      return {
+        conflict,
+        retained,
+        pendingBlocked,
+        count: moves.length,
+        text: moved.text,
+        oldRemoved: !(await drafts.loadDraft(make("project/a.txt").identity)),
+        otherRetained: !!(await drafts.loadDraft(other.identity)),
+        stale,
+      };
+    });
+    expect(migration).toEqual({
+      conflict: true,
+      retained: true,
+      pendingBlocked: true,
+      count: 2,
+      text: "project/a.txt",
+      oldRemoved: true,
+      otherRetained: true,
+      stale: true,
+    });
   } finally {
     rmSync(bundleDir, { recursive: true, force: true });
   }
