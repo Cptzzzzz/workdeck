@@ -66,7 +66,11 @@ test("rename and terminate use site forms; cancellation keeps the task alive", a
         (terminal: { id: string }) => terminal.id === id,
       )?.name,
     ).toBe(renamed);
-    await page.getByRole("button", { name: renamed, exact: true }).click();
+    await page
+      .locator(".terminal-card")
+      .filter({ has: page.getByRole("heading", { name: renamed, exact: true }) })
+      .getByRole("button", { name: renamed, exact: true })
+      .click();
     await expect(page.locator(".terminal-state")).toContainText("控制中");
     await page.locator(".xterm-helper-textarea").focus();
     await page.keyboard.insertText("echo $WORKDECK_MODAL_TASK");
