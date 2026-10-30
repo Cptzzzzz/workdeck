@@ -39,6 +39,8 @@ bin/workdeck agent run
 
 An Agent identity is stored by default in `~/.local/share/workdeck/identity.json` with mode 0600. Enroll once; subsequent starts use the signed node identity. In production, use the UI-generated Linux installer to configure the user service.
 
+The frontend's normal `npm ci` runs [a pinned xterm DOM measurement patch](scripts/patch-xterm-dom.mjs) to preserve fractional glyph widths and prevent last-column clipping. Keep install scripts enabled when building; review this patch and the right-edge browser regression before upgrading the pinned xterm dependency.
+
 ## Build and deploy
 
 ```sh
