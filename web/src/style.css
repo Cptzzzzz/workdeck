@@ -2194,6 +2194,9 @@ main {
 .file-tree-entry .file-tree-row { min-width: 0; flex: 1; }
 .file-tree-download { flex: none; padding: 5px 8px; color: var(--muted); }
 .file-tree-download:hover { color: #eff3eb; }
+.delete-outcomes { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
+.delete-outcomes > div { padding: 7px 10px; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
+.delete-outcomes small { display: block; color: var(--muted); margin-top: 3px; }
 .file-tree-row:hover:not(:disabled) {
   background: #28352b;
   color: #eff3eb;

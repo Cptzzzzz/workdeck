@@ -30,13 +30,20 @@ import type {
 } from "./types";
 import { api, setCSRF } from "./services/api";
 import { TerminalView } from "./features/terminal/terminal-view";
-import { useWorkspace } from "./features/workspace/use-workspace";
+import {
+  useWorkspace,
+  type Document as WorkspaceDocument,
+} from "./features/workspace/use-workspace";
 import {
   WorkspaceEditor,
   WorkspaceSidebar,
   CreateItemForm,
   RenameItemForm,
+  DeleteItemForm,
+  SaveDeletedAsForm,
+  DiscardDeletedDraftForm,
 } from "./features/workspace/workspace-view";
+import type { CreateIntent } from "./services/files/drafts";
 import {
   RenameForm,
   TerminateForm,
@@ -59,6 +66,9 @@ type Modal =
   | "terminate"
   | "file-create"
   | "file-rename"
+  | "file-delete"
+  | "file-save-as"
+  | "file-discard-draft"
   | null;
 function layoutNumber(key: string, fallback: number, min: number, max: number) {
   try {
@@ -159,8 +169,20 @@ function App() {
         (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
       )
       ?.capabilities?.includes("workspace-rename-v1"),
+    !!data.nodes
+      .find(
+        (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
+      )
+      ?.capabilities?.includes("workspace-delete-v1"),
   );
   const [fileRenameTarget, setFileRenameTarget] = useState("");
+  const [deletedSaveTarget, setDeletedSaveTarget] =
+    useState<WorkspaceDocument | null>(null);
+  const [fileDeleteTarget, setFileDeleteTarget] = useState<{
+    path: string;
+    directory: boolean;
+    intent?: CreateIntent;
+  }>({ path: "", directory: false });
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [terminationTarget, setTerminationTarget] = useState<Term | null>(null);
   const [menu, setMenu] = useState(false),
@@ -421,6 +443,10 @@ function App() {
             onRename={(path) => {
               setFileRenameTarget(path);
               setModal("file-rename");
+            }}
+            onDelete={(path, directory, intent) => {
+              setFileDeleteTarget({ path, directory, intent });
+              setModal("file-delete");
             }}
             onCreate={() => setModal("create")}
             onJoin={() => setModal("join")}
@@ -765,7 +791,17 @@ function App() {
         </div>
         <div className={"sessions-host " + (!active ? "hidden" : "")}>
           {mode === "workspace" && active && (
-            <WorkspaceEditor controller={workspace} />
+            <WorkspaceEditor
+              controller={workspace}
+              onSaveDeletedAs={(doc) => {
+                setDeletedSaveTarget(doc);
+                setModal("file-save-as");
+              }}
+              onDiscardDeleted={(doc) => {
+                setDeletedSaveTarget(doc);
+                setModal("file-discard-draft");
+              }}
+            />
           )}
           {mode === "workspace" && active && (
             <div
@@ -837,19 +873,25 @@ function App() {
             aria-label={
               modal === "file-create"
                 ? "新建文件或文件夹"
-                : modal === "file-rename"
-                  ? "重命名文件或文件夹"
-                  : modal === "create"
-                    ? "新建终端"
-                    : modal === "join"
-                      ? "接入节点"
-                      : modal === "rename"
-                        ? renameTarget?.kind === "node"
-                          ? "重命名节点"
-                          : "重命名终端"
-                        : modal === "terminate"
-                          ? "终止终端"
-                          : "修改密码"
+                : modal === "file-discard-draft"
+                  ? "移除本地草稿"
+                  : modal === "file-save-as"
+                    ? "另存已删除的草稿"
+                    : modal === "file-delete"
+                      ? "删除文件或文件夹"
+                      : modal === "file-rename"
+                        ? "重命名文件或文件夹"
+                        : modal === "create"
+                          ? "新建终端"
+                          : modal === "join"
+                            ? "接入节点"
+                            : modal === "rename"
+                              ? renameTarget?.kind === "node"
+                                ? "重命名节点"
+                                : "重命名终端"
+                              : modal === "terminate"
+                                ? "终止终端"
+                                : "修改密码"
             }
           >
             <button
@@ -859,7 +901,27 @@ function App() {
             >
               <X size={20} />
             </button>
-            {modal === "file-rename" ? (
+            {modal === "file-discard-draft" && deletedSaveTarget ? (
+              <DiscardDeletedDraftForm
+                controller={workspace}
+                doc={deletedSaveTarget}
+                onClose={() => setModal(null)}
+              />
+            ) : modal === "file-save-as" && deletedSaveTarget ? (
+              <SaveDeletedAsForm
+                controller={workspace}
+                doc={deletedSaveTarget}
+                onClose={() => setModal(null)}
+              />
+            ) : modal === "file-delete" ? (
+              <DeleteItemForm
+                controller={workspace}
+                path={fileDeleteTarget.path}
+                directory={fileDeleteTarget.directory}
+                existing={fileDeleteTarget.intent}
+                onClose={() => setModal(null)}
+              />
+            ) : modal === "file-rename" ? (
               <RenameItemForm
                 controller={workspace}
                 source={fileRenameTarget}

@@ -664,6 +664,14 @@ export class FileClient {
     ) as DeleteStatus;
     if (
       typeof operation.path !== "string" ||
+      ![
+        "prepared",
+        "deleting",
+        "committed",
+        "partial",
+        "aborted",
+        "uncertain",
+      ].includes(operation.state) ||
       typeof operation.recursive !== "boolean" ||
       !Number.isSafeInteger(operation.count) ||
       operation.count < 1 ||

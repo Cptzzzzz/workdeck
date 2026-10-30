@@ -142,6 +142,9 @@ func (e *Engine) DeleteStatus(ctx context.Context, workspace string, revision in
 	return e.deleteStatus(ctx, m)
 }
 func (e *Engine) deleteStatus(ctx context.Context, m mutationRecord) (DeleteStatus, error) {
+	if m.Error != nil && m.Error.Code == "RESULT_EXPIRED" {
+		return DeleteStatus{}, fail("OPERATION_EXPIRED", "删除结果详情已过期，请检查当前文件")
+	}
 	status := DeleteStatus{DeletePreview: deletePreview(m)}
 	err := e.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(state='deleted'),0),COALESCE(SUM(state='skipped'),0),COALESCE(SUM(state IN ('pending','moving','removing')),0),COALESCE(SUM(state='uncertain'),0) FROM delete_items WHERE operation_id=?`, m.ID).Scan(&status.Deleted, &status.Skipped, &status.Pending, &status.Uncertain)
 	return status, err
@@ -161,6 +164,9 @@ func (e *Engine) DeleteOutcomes(ctx context.Context, workspace string, revision 
 	}
 	if m.WorkspaceID != workspace || m.Revision != revision || m.Kind != "entry.delete" {
 		return nil, 0, fail("OPERATION_SCOPE", "删除操作不属于当前工作区")
+	}
+	if m.Error != nil && m.Error.Code == "RESULT_EXPIRED" {
+		return nil, 0, fail("OPERATION_EXPIRED", "删除结果详情已过期，请检查当前文件")
 	}
 	rows, err := e.db.QueryContext(ctx, `SELECT path,kind,state,error_code,error_message FROM delete_items WHERE operation_id=? AND seq>=? ORDER BY seq LIMIT ?`, id, offset, limit)
 	if err != nil {

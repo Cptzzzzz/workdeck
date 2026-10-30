@@ -16,6 +16,7 @@ export type Draft = {
   encoding: "utf8" | "utf8-bom";
   newline: "lf" | "crlf";
   pendingSave?: SaveTransaction;
+  deleted?: boolean;
 };
 export type StoredDraft = Draft & { token: string; updatedAt: number };
 export class DraftConflictError extends Error {
@@ -34,7 +35,7 @@ export type CreateIntent = {
   workspaceID: string;
   rootRevision: number;
   opID: string;
-  kind: "file" | "directory" | "upload" | "rename";
+  kind: "file" | "directory" | "upload" | "rename" | "delete";
   path: string;
   createdAt: number;
   size?: number;
@@ -42,6 +43,8 @@ export type CreateIntent = {
   sourceName?: string;
   source?: string;
   version?: string;
+  recursive?: boolean;
+  confirmed?: boolean;
 };
 const intentScope = (
   v: Pick<CreateIntent, "account" | "nodeID" | "workspaceID" | "rootRevision">,
@@ -152,6 +155,170 @@ export async function removeCreateIntent(opID: string): Promise<void> {
       tx.objectStore(INTENTS).delete(opID);
       tx.oncomplete = () => resolve();
       tx.onabort = () => reject(tx.error || new Error("清理文件操作记录失败"));
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
+export async function confirmDeleteIntent(opID: string): Promise<CreateIntent> {
+  const db = await openDB();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(INTENTS, "readwrite"),
+        store = tx.objectStore(INTENTS),
+        get = store.get(opID);
+      let result: CreateIntent | undefined;
+      get.onsuccess = () => {
+        const intent = get.result as CreateIntent | undefined;
+        if (!intent || intent.kind !== "delete") {
+          tx.abort();
+          return;
+        }
+        result = { ...intent, confirmed: true };
+        store.put(result);
+      };
+      tx.oncomplete = () => resolve(result!);
+      tx.onabort = () => reject(tx.error || new Error("无法确认删除操作记录"));
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
+
+type DraftScope = Omit<DraftIdentity, "path">;
+const inDraftScope = (id: DraftIdentity, scope: DraftScope) =>
+  id.account === scope.account &&
+  id.nodeID === scope.nodeID &&
+  id.workspaceID === scope.workspaceID &&
+  id.rootRevision === scope.rootRevision;
+
+// The confirmation must not race an unconfirmed write on the same paths.
+export async function checkDeleteDrafts(
+  scope: DraftScope,
+  path: string,
+): Promise<void> {
+  const db = await openDB();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly"),
+        cursor = tx.objectStore(STORE).openCursor();
+      let blocked = false;
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const draft = item.value as StoredDraft;
+        const id = draft?.identity;
+        if (
+          id &&
+          inDraftScope(id, scope) &&
+          typeof id.path === "string" &&
+          (id.path === path || id.path.startsWith(path + "/")) &&
+          draft.pendingSave
+        ) {
+          blocked = true;
+          tx.abort();
+          return;
+        }
+        item.continue();
+      };
+      tx.oncomplete = () => resolve();
+      tx.onabort = () =>
+        reject(
+          blocked
+            ? new Error("受影响草稿存在待确认保存，请先核对")
+            : tx.error || new Error("无法核对草稿"),
+        );
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export type DeletedDraftChange = {
+  identity: DraftIdentity;
+  previousToken: string;
+  token: string;
+};
+export async function markDeletedDrafts(
+  scope: DraftScope,
+  paths: string[],
+): Promise<DeletedDraftChange[]> {
+  const wanted = new Set(paths);
+  if (wanted.size > 8192) throw new Error("删除结果过多");
+  const db = await openDB();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite"),
+        cursor = tx.objectStore(STORE).openCursor(),
+        changes: DeletedDraftChange[] = [];
+      let problem = "";
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const draft = item.value as StoredDraft,
+          id = draft?.identity;
+        if (id && inDraftScope(id, scope) && wanted.has(id.path)) {
+          if (
+            draft.pendingSave ||
+            typeof draft.token !== "string" ||
+            item.primaryKey !== key(id)
+          ) {
+            problem = "已删除文件的草稿存在待确认保存或数据异常";
+            tx.abort();
+            return;
+          }
+          const token = draft.deleted ? draft.token : crypto.randomUUID();
+          changes.push({ identity: id, previousToken: draft.token, token });
+          if (!draft.deleted)
+            item.update({
+              ...draft,
+              deleted: true,
+              token,
+              updatedAt: Date.now(),
+            });
+        }
+        item.continue();
+      };
+      tx.oncomplete = () => resolve(changes);
+      tx.onabort = () =>
+        reject(
+          problem
+            ? new Error(problem)
+            : tx.error || new Error("无法保存已删除草稿标记"),
+        );
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function listDeletedDrafts(
+  scope: DraftScope,
+): Promise<DraftIdentity[]> {
+  const db = await openDB();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly"),
+        cursor = tx.objectStore(STORE).openCursor(),
+        result: DraftIdentity[] = [];
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const draft = item.value as StoredDraft;
+        if (
+          draft?.identity &&
+          inDraftScope(draft.identity, scope) &&
+          draft.deleted
+        )
+          result.push(draft.identity);
+        item.continue();
+      };
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error || new Error("无法读取已删除草稿"));
       tx.onerror = () => {};
     });
   } finally {

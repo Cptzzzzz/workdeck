@@ -498,6 +498,72 @@ func TestDeleteRejectsPathThatCannotFitOutcomeFrame(t *testing.T) {
 	wantCode(t, err, "OPERATION_NOT_FOUND")
 }
 
+func TestDeleteJournalExpiresFinishedDetailsWithoutReplayingOrDroppingUncertain(t *testing.T) {
+	f := setupFiles(t)
+	ctx := context.Background()
+	now := time.Now()
+	f.e.now = func() time.Time { return now }
+	for _, name := range []string{"finished", "uncertain", "trigger"} {
+		if err := os.WriteFile(filepath.Join(f.root, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	meta, err := f.e.Stat(ctx, f.w.ID, 1, "finished")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishedID := NewID(now)
+	if _, err = f.e.PrepareDelete(ctx, f.w.ID, 1, finishedID, "finished", meta.Version, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.e.CommitDelete(ctx, f.w.ID, 1, finishedID); err != nil {
+		t.Fatal(err)
+	}
+	meta, err = f.e.Stat(ctx, f.w.ID, 1, "uncertain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainID := NewID(now)
+	if _, err = f.e.PrepareDelete(ctx, f.w.ID, 1, uncertainID, "uncertain", meta.Version, false); err != nil {
+		t.Fatal(err)
+	}
+	f.e.afterDeleteRemove = func(string, string) error { return errors.New("interrupt") }
+	_, _ = f.e.CommitDelete(ctx, f.w.ID, 1, uncertainID)
+	f.e.afterDeleteRemove = nil
+	status, err := f.e.CommitDelete(ctx, f.w.ID, 1, uncertainID)
+	if err != nil || status.State != "uncertain" {
+		t.Fatal(status, err)
+	}
+	now = now.Add(ResultLifetime + time.Hour)
+	meta, err = f.e.Stat(ctx, f.w.ID, 1, "trigger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.e.PrepareDelete(ctx, f.w.ID, 1, NewID(now), "trigger", meta.Version, false); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.e.DeleteStatus(ctx, f.w.ID, 1, finishedID)
+	wantCode(t, err, "OPERATION_EXPIRED")
+	_, _, err = f.e.DeleteOutcomes(ctx, f.w.ID, 1, finishedID, 0, 10)
+	wantCode(t, err, "OPERATION_EXPIRED")
+	status, err = f.e.DeleteStatus(ctx, f.w.ID, 1, uncertainID)
+	if err != nil || status.State != "uncertain" {
+		t.Fatal(status, err)
+	}
+	var count int
+	if err = f.e.db.QueryRow(`SELECT count(*) FROM delete_items WHERE operation_id=?`, uncertainID).Scan(&count); err != nil || count != 1 {
+		t.Fatal(count, err)
+	}
+	if err = os.WriteFile(filepath.Join(f.root, "finished"), []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.e.CommitDelete(ctx, f.w.ID, 1, finishedID)
+	wantCode(t, err, "OPERATION_EXPIRED")
+	if string(f.read(t, "finished")) != "new" {
+		t.Fatal("expired operation removed new file")
+	}
+}
+
 func TestPrepareDeleteRejectsStaleRootSpecialAndTraversal(t *testing.T) {
 	f := setupFiles(t)
 	ctx := context.Background()

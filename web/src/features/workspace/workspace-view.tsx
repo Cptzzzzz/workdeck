@@ -10,12 +10,15 @@ import {
   Plus,
   Upload,
   Pencil,
+  Trash2,
   Server,
   Settings2,
   LogOut,
   TerminalSquare,
 } from "lucide-react";
 import type { WorkspaceController, Document } from "./use-workspace";
+import type { CreateIntent } from "../../services/files/drafts";
+import type { DeleteStatus, DeleteOutcome } from "../../services/files/types";
 const MonacoEditor = lazy(() =>
   import("./monaco-editor").then((m) => ({ default: m.MonacoEditor })),
 );
@@ -37,6 +40,7 @@ export function WorkspaceSidebar({
   onLogout,
   onNewItem,
   onRename,
+  onDelete,
 }: {
   controller: WorkspaceController;
   onJoin: () => void;
@@ -45,6 +49,11 @@ export function WorkspaceSidebar({
   onLogout: () => void;
   onNewItem: () => void;
   onRename: (path: string) => void;
+  onDelete: (
+    path: string,
+    directory: boolean,
+    intent?: (typeof controller.intents)[number],
+  ) => void;
 }) {
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadTarget = useRef<{
@@ -116,6 +125,21 @@ export function WorkspaceSidebar({
                     onClick={() => onRename(child)}
                   >
                     <Pencil size={13} />
+                  </button>
+                )}
+                {!entry.restricted && (folder || entry.kind === "file") && (
+                  <button
+                    className="file-tree-download"
+                    title={`删除 ${entry.name}`}
+                    aria-label={`删除 ${entry.name}`}
+                    disabled={
+                      !controller.supportsDelete ||
+                      controller.renaming ||
+                      controller.connection !== "中转连接"
+                    }
+                    onClick={() => onDelete(child, folder)}
+                  >
+                    <Trash2 size={13} />
                   </button>
                 )}
                 {!folder && entry.kind === "file" && !entry.restricted && (
@@ -231,6 +255,25 @@ export function WorkspaceSidebar({
         <div className="workbench-hint">选择一个终端以浏览其工作目录</div>
       )}
       <div className="file-tree">{renderDirectory(".", 0)}</div>
+      {controller.deletedDrafts.length > 0 && (
+        <div className="workbench-intents">
+          <b>已删除文件的草稿</b>
+          {controller.deletedDrafts.map((d) => (
+            <div key={JSON.stringify(d)}>
+              <span title={d.path}>{d.path}</span>
+              <button
+                onClick={() =>
+                  void controller
+                    .openDeletedDraft(d)
+                    .catch((e) => controller.reportError((e as Error).message))
+                }
+              >
+                打开草稿
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {controller.transfer && (
         <div className="workbench-hint" role="status">
           {controller.transfer}
@@ -249,22 +292,25 @@ export function WorkspaceSidebar({
                   controller.connection !== "中转连接" ||
                   !!controller.transfer ||
                   controller.renaming ||
-                  (intent.kind === "rename" && !controller.supportsRename)
+                  (intent.kind === "rename" && !controller.supportsRename) ||
+                  (intent.kind === "delete" && !controller.supportsDelete)
                 }
                 onClick={() =>
                   intent.kind === "upload"
                     ? chooseUpload(intent)
-                    : intent.kind === "rename"
-                      ? void controller
-                          .retryRename(intent)
-                          .catch((e) =>
-                            controller.reportError((e as Error).message),
-                          )
-                      : void controller
-                          .retryCreate(intent)
-                          .catch((e) =>
-                            controller.reportError((e as Error).message),
-                          )
+                    : intent.kind === "delete"
+                      ? onDelete(intent.path, !!intent.recursive, intent)
+                      : intent.kind === "rename"
+                        ? void controller
+                            .retryRename(intent)
+                            .catch((e) =>
+                              controller.reportError((e as Error).message),
+                            )
+                        : void controller
+                            .retryCreate(intent)
+                            .catch((e) =>
+                              controller.reportError((e as Error).message),
+                            )
                 }
               >
                 {intent.kind === "upload" ? "选择原文件继续" : "核对并继续"}
@@ -339,8 +385,12 @@ function exportDraft(doc: Document) {
 }
 export function WorkspaceEditor({
   controller,
+  onSaveDeletedAs,
+  onDiscardDeleted,
 }: {
   controller: WorkspaceController;
+  onSaveDeletedAs: (doc: Document) => void;
+  onDiscardDeleted: (doc: Document) => void;
 }) {
   const doc = controller.document;
   const preview = controller.preview;
@@ -434,7 +484,29 @@ export function WorkspaceEditor({
       )}
       {doc?.conflict && (
         <div className="workbench-notice">
-          远端文件已改变，本地草稿已保留。请导出草稿并比较后处理。
+          {doc.deleted
+            ? "远端文件已删除，本地草稿已保留。"
+            : "远端文件已改变，本地草稿已保留。请导出草稿并比较后处理。"}
+          {doc.deleted && (
+            <button
+              disabled={
+                doc.saving ||
+                controller.renaming ||
+                controller.connection !== "中转连接"
+              }
+              onClick={() => onSaveDeletedAs(doc)}
+            >
+              {doc.pending ? "核对并继续另存" : "另存为新文件"}
+            </button>
+          )}
+          {doc.deleted && (
+            <button
+              disabled={doc.saving || !!doc.pending || controller.renaming}
+              onClick={() => onDiscardDeleted(doc)}
+            >
+              移除本地草稿
+            </button>
+          )}
           <button onClick={() => exportDraft(doc)}>
             <Download size={14} />
             导出草稿
@@ -516,6 +588,385 @@ export function WorkspaceEditor({
         </div>
       )}
     </section>
+  );
+}
+
+export function DiscardDeletedDraftForm({
+  controller,
+  doc,
+  onClose,
+}: {
+  controller: WorkspaceController;
+  doc: Document;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+          await controller.discardDeletedDraft(doc);
+          onClose();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        <Trash2 size={24} />
+      </div>
+      <h2>移除本地草稿</h2>
+      <p className="modal-description">
+        将移除此浏览器中 {doc.path} 的草稿，未另存或导出的修改会丢失。
+      </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={onClose}
+          disabled={busy}
+        >
+          取消
+        </button>
+        <button className="primary" disabled={busy}>
+          {busy ? "正在移除…" : "确认移除草稿"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function SaveDeletedAsForm({
+  controller,
+  doc,
+  onClose,
+}: {
+  controller: WorkspaceController;
+  doc: Document;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(() => doc.path.split("/").pop() + ".copy");
+  const [target] = useState(() => ({
+    parent: controller.selectedDirectory,
+    id: controller.workspace?.id || "",
+    revision: controller.workspace?.root_revision || 0,
+  }));
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+          await controller.saveDeletedAs(
+            doc,
+            name,
+            target.parent,
+            target.id,
+            target.revision,
+          );
+          onClose();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        <Save size={24} />
+      </div>
+      <h2>另存已删除的草稿</h2>
+      <p className="modal-description">
+        {doc.pending
+          ? `继续核对并保存到 ${doc.pending.spec.path}`
+          : `将在 ${target.parent === "." ? "工作区根目录" : target.parent} 创建新文件，不覆盖已有文件。`}
+      </p>
+      {!doc.pending && (
+        <label>
+          新文件名
+          <input
+            aria-label="另存文件名"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+            maxLength={255}
+          />
+        </label>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={onClose}
+        >
+          取消
+        </button>
+        <button className="primary" disabled={busy || (!doc.pending && !name)}>
+          {busy ? "正在保存…" : doc.pending ? "核对并继续" : "另存"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function DeleteItemForm({
+  controller,
+  path,
+  directory,
+  existing,
+  onClose,
+}: {
+  controller: WorkspaceController;
+  path: string;
+  directory: boolean;
+  existing?: CreateIntent;
+  onClose: () => void;
+}) {
+  const [target] = useState(() => ({
+    id: controller.workspace?.id || "",
+    revision: controller.workspace?.root_revision || 0,
+  }));
+  const [intent, setIntent] = useState<CreateIntent | undefined>(existing),
+    [status, setStatus] = useState<DeleteStatus | undefined>();
+  const [outcomes, setOutcomes] = useState<DeleteOutcome[]>([]),
+    [next, setNext] = useState(0),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const showPage = async (i: CreateIntent, offset: number) => {
+    const page = await controller.deleteOutcomes(i, offset);
+    setOutcomes((old) => (offset === 0 ? page.items : [...old, ...page.items]));
+    setNext(page.next);
+  };
+  const inspect = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      if (intent) {
+        let s = await controller.inspectDelete(intent);
+        if (
+          ["committed", "partial", "uncertain", "aborted"].includes(s.state)
+        ) {
+          const result = await controller.executeDelete(intent, false);
+          setIntent(result.intent);
+          s = result.status;
+          await showPage(result.intent, 0);
+        }
+        setStatus(s);
+      } else {
+        const r = await controller.beginDelete(
+          path,
+          directory,
+          target.id,
+          target.revision,
+        );
+        setIntent(r.intent);
+        setStatus(r.preview);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const execute = async (authorize: boolean) => {
+    if (!intent) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await controller.executeDelete(intent, authorize);
+      setIntent(result.intent);
+      setStatus(result.status);
+      if (
+        ["committed", "partial", "uncertain", "aborted"].includes(
+          result.status.state,
+        )
+      )
+        await showPage(result.intent, 0);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancel = async () => {
+    if (!intent) {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await controller.cancelDelete(intent);
+      if (result.state === "aborted") onClose();
+      else {
+        setStatus(result);
+        await showPage(intent, 0);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div>
+      <div className="modal-symbol">
+        <Trash2 size={24} />
+      </div>
+      <h2>删除文件或文件夹</h2>
+      <p className="modal-description">
+        工作区：{controller.workspace?.root_path || "—"}
+        <br />
+        路径：{path}
+        <br />
+        {directory
+          ? "将递归处理此目录中确认清单内的所有项目。"
+          : "将删除此文件。"}
+      </p>
+      {!status && (
+        <button
+          className="secondary"
+          disabled={busy}
+          onClick={() => void inspect()}
+        >
+          {busy ? "正在核对…" : intent ? "核对删除状态" : "检查删除范围"}
+        </button>
+      )}
+      {status && (
+        <div className="modal-description">
+          <p>
+            清单：{status.count} 项，其中 {status.directories}{" "}
+            个目录；文件总大小 {status.bytes} 字节。
+          </p>
+          {status.deleted !== undefined && (
+            <p>
+              已删除 {status.deleted} 项，跳过 {status.skipped} 项，未处理{" "}
+              {status.pending} 项，待核对 {status.uncertain} 项。
+            </p>
+          )}
+          {status.state === "prepared" && !intent?.confirmed && (
+            <p>确认后开始删除；稍后出现的文件不在本次清单中。</p>
+          )}
+          {status.state === "uncertain" && (
+            <p>结果尚不明确，请检查下方项目和暂存路径；操作记录会保留。</p>
+          )}
+          {status.state === "partial" && (
+            <p>部分项目未删除，请检查下方详情。</p>
+          )}
+        </div>
+      )}
+      {outcomes.length > 0 && (
+        <div className="delete-outcomes" aria-label="删除结果">
+          {outcomes.map((item, index) => (
+            <div key={`${index}:${item.path}`}>
+              <span>
+                {item.path} ·{" "}
+                {item.state === "deleted"
+                  ? "已删除"
+                  : item.state === "skipped"
+                    ? "跳过"
+                    : item.state === "uncertain"
+                      ? "待核对"
+                      : "未完成"}
+              </span>
+              {item.error && <small>{item.error.message}</small>}
+            </div>
+          ))}
+          {status && next < status.count && (
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() =>
+                void showPage(intent!, next).catch((e) =>
+                  setError((e as Error).message),
+                )
+              }
+            >
+              加载更多结果
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}。若结果尚未确认，可在文件树下方核对。
+        </div>
+      )}
+      <div className="form-actions">
+        {status && ["committed", "aborted"].includes(status.state) ? (
+          <button className="primary" onClick={onClose}>
+            完成
+          </button>
+        ) : (
+          <>
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() =>
+                status && ["partial", "uncertain"].includes(status.state)
+                  ? onClose()
+                  : void cancel()
+              }
+            >
+              {status?.state === "deleting"
+                ? "停止剩余项"
+                : status && ["partial", "uncertain"].includes(status.state)
+                  ? "关闭"
+                  : "取消"}
+            </button>
+            {status?.state === "partial" && (
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() =>
+                  void controller
+                    .acknowledgeDelete(intent!)
+                    .then(onClose)
+                    .catch((e) => setError((e as Error).message))
+                }
+              >
+                已查看结果
+              </button>
+            )}
+            {status && ["prepared", "deleting"].includes(status.state) && (
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => void execute(!intent?.confirmed)}
+              >
+                {busy
+                  ? "正在删除…"
+                  : intent?.confirmed
+                    ? "继续删除"
+                    : "确认删除"}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -8,6 +8,7 @@ import {
 } from "../../services/files/client";
 import {
   loadDraft,
+  deleteDraft,
   saveDraft,
   type Draft,
   type DraftIdentity,
@@ -16,12 +17,18 @@ import {
   listCreateIntents,
   removeCreateIntent,
   moveDrafts,
+  confirmDeleteIntent,
+  checkDeleteDrafts,
+  markDeletedDrafts,
+  listDeletedDrafts,
 } from "../../services/files/drafts";
 import type {
   FileEntry,
   SaveTransaction,
   UploadTransaction,
   Workspace,
+  DeleteStatus,
+  DeleteOutcome,
 } from "../../services/files/types";
 import type { TerminalRecord } from "../../types";
 import { downloadFile } from "../../services/files/download";
@@ -44,6 +51,7 @@ export type Document = {
   warning: string;
   message: string;
   persistenceError: string;
+  deleted?: boolean;
 };
 export type BinaryPreview = {
   identity: DraftIdentity;
@@ -69,6 +77,7 @@ export function useWorkspace(
   account: string,
   supportsCreate: boolean,
   supportsRename: boolean,
+  supportsDelete: boolean,
 ) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [connection, setConnection] = useState("等待连接");
@@ -78,6 +87,7 @@ export function useWorkspace(
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedDirectory, setSelectedDirectory] = useState(".");
   const [intents, setIntents] = useState<CreateIntent[]>([]);
+  const [deletedDrafts, setDeletedDrafts] = useState<DraftIdentity[]>([]);
   const [transfer, setTransfer] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [reconnect, setReconnect] = useState(0);
@@ -110,6 +120,7 @@ export function useWorkspace(
             encoding: doc.encoding,
             newline: doc.newline,
             pendingSave: doc.pending,
+            deleted: doc.deleted,
           };
           try {
             const stored = await saveDraft(draft, doc.token);
@@ -196,6 +207,7 @@ export function useWorkspace(
     setSelected(null);
     setSelectedDirectory(".");
     setIntents([]);
+    setDeletedDrafts([]);
     setError("");
     if (!enabled || !terminal || !account) {
       setConnection("未连接");
@@ -234,6 +246,13 @@ export function useWorkspace(
             workspaceID: view.workspace.id,
             rootRevision: view.workspace.root_revision,
           });
+          const deleted = await listDeletedDrafts({
+            account,
+            nodeID: terminal.node_id,
+            workspaceID: view.workspace.id,
+            rootRevision: view.workspace.root_revision,
+          });
+          if (!stopped && gen === generation.current) setDeletedDrafts(deleted);
           if (!stopped && gen === generation.current)
             setIntents((old) => [
               ...pending,
@@ -374,6 +393,8 @@ export function useWorkspace(
         } catch (e) {
           persistenceError = (e as Error).message;
         }
+        if (saved?.deleted)
+          throw new Error("此路径有已删除文件的草稿，请先从左侧打开并导出草稿");
         if (saved?.pendingSave) {
           try {
             const operation = await client.operationStatus(
@@ -442,6 +463,169 @@ export function useWorkspace(
     [workspace, terminal?.id, terminal?.node_id, account, update],
   );
   const selectedDocument = selected ? docs.current.get(selected) : undefined;
+  const openDeletedDraft = useCallback(
+    async (identity: DraftIdentity) => {
+      const w = workspace;
+      if (
+        !w ||
+        identity.workspaceID !== w.id ||
+        identity.rootRevision !== w.root_revision ||
+        identity.account !== account
+      )
+        throw new Error("工作区已切换");
+      const id = documentKey(identity),
+        existing = docs.current.get(id);
+      if (existing) {
+        setSelected(id);
+        selections.current.set(w.id, id);
+        return;
+      }
+      const saved = await loadDraft(identity);
+      if (!saved?.deleted) throw new Error("已删除草稿不可用");
+      const doc: Document = {
+        identity,
+        path: identity.path,
+        base: saved.baseText,
+        text: saved.text,
+        version: saved.baseVersion,
+        sequence: saved.sequence,
+        encoding: saved.encoding,
+        newline: saved.newline,
+        token: saved.token,
+        pending: saved.pendingSave,
+        saving: false,
+        conflict: true,
+        deleted: true,
+        warning: "",
+        message: "文件已删除，草稿保留在当前浏览器。",
+        persistenceError: "",
+      };
+      docs.current.set(id, doc);
+      selections.current.set(w.id, id);
+      setSelected(id);
+      update();
+    },
+    [workspace, account, update],
+  );
+  const saveDeletedAs = useCallback(
+    async (
+      doc: Document,
+      name: string,
+      parent: string,
+      expectedWorkspace: string,
+      expectedRevision: number,
+    ) => {
+      const client = clientRef.current;
+      if (
+        !client ||
+        !doc.deleted ||
+        doc.identity.account !== account ||
+        client.workspace.id !== expectedWorkspace ||
+        client.workspace.root_revision !== expectedRevision ||
+        doc.identity.workspaceID !== expectedWorkspace ||
+        doc.identity.rootRevision !== expectedRevision ||
+        doc.saving ||
+        renameLock.current
+      )
+        throw new Error("草稿或文件连接不可用");
+      if (
+        !doc.pending &&
+        (!name ||
+          name === "." ||
+          name === ".." ||
+          /[\/\\\u0000-\u001f]/.test(name) ||
+          new TextEncoder().encode(name).length > 255)
+      )
+        throw new Error("新文件名无效");
+      if (doc.pending && !doc.pending.spec.create)
+        throw new Error("存在其他待确认的保存，请先核对");
+      doc.saving = true;
+      doc.message = "";
+      update();
+      try {
+        let transaction = doc.pending;
+        if (!transaction) {
+          let bytes = new TextEncoder().encode(doc.text);
+          if (doc.encoding === "utf8-bom") {
+            const bom = new Uint8Array(bytes.length + 3);
+            bom.set([0xef, 0xbb, 0xbf]);
+            bom.set(bytes, 3);
+            bytes = bom;
+          }
+          transaction = await client.prepareSave(
+            childPath(parent, name),
+            bytes,
+            "",
+            true,
+          );
+          doc.pending = transaction;
+        }
+        await persist(doc);
+        const saved = await client.save(transaction);
+        if (saved.state !== "committed" || !saved.version)
+          throw new Error("另存结果尚未确认");
+        doc.pending = undefined;
+        try {
+          await persist(doc);
+        } catch (e) {
+          doc.pending = transaction;
+          throw e;
+        }
+        doc.message = `已另存到 ${transaction.spec.path}；原草稿仍保留。`;
+        if (clientRef.current === client) await refresh();
+      } catch (e) {
+        if (
+          e instanceof FileServiceError &&
+          ["ALREADY_EXISTS", "CONFLICT"].includes(e.code)
+        ) {
+          doc.pending = undefined;
+          await persist(doc).catch(() => {});
+        }
+        doc.message = (e as Error).message;
+        throw e;
+      } finally {
+        doc.saving = false;
+        update();
+      }
+    },
+    [account, persist, refresh, update],
+  );
+  const discardDeletedDraft = useCallback(
+    async (doc: Document) => {
+      if (
+        !doc.deleted ||
+        doc.identity.account !== account ||
+        doc.pending ||
+        doc.saving ||
+        !doc.token ||
+        renameLock.current
+      )
+        throw new Error("草稿不可移除，或存在待确认的另存操作");
+      renameLock.current = true;
+      setRenaming(true);
+      try {
+        const id = documentKey(doc.identity),
+          timer = timers.current.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          timers.current.delete(id);
+        }
+        await queues.current.get(id)?.catch(() => {});
+        if (!doc.token) throw new Error("草稿令牌不可用");
+        await deleteDraft(doc.identity, doc.token);
+        docs.current.delete(id);
+        if (selections.current.get(doc.identity.workspaceID) === id)
+          selections.current.delete(doc.identity.workspaceID);
+        setSelected((old) => (old === id ? null : old));
+        setDeletedDrafts((old) => old.filter((d) => documentKey(d) !== id));
+        update();
+      } finally {
+        renameLock.current = false;
+        setRenaming(false);
+      }
+    },
+    [account, update],
+  );
   const selectedPreview = selected ? previews.current.get(selected) : undefined;
   const document =
     selectedDocument?.identity.workspaceID === workspace?.id &&
@@ -473,6 +657,7 @@ export function useWorkspace(
         client.workspace.root_revision !== doc.identity.rootRevision ||
         doc.saving ||
         renameLock.current ||
+        doc.deleted ||
         doc.conflict ||
         doc.warning
       )
@@ -945,6 +1130,420 @@ export function useWorkspace(
     (intent: CreateIntent) => withRenameLock(() => renameIntent(intent)),
     [renameIntent, withRenameLock],
   );
+  const beginDelete = useCallback(
+    async (
+      path: string,
+      recursive: boolean,
+      expectedWorkspace: string,
+      expectedRevision: number,
+    ) => {
+      let result: { intent: CreateIntent; preview: DeleteStatus } | undefined;
+      await withRenameLock(async () => {
+        const client = clientRef.current,
+          w = workspace,
+          gen = generation.current;
+        if (
+          !client ||
+          !w ||
+          !terminal ||
+          !supportsDelete ||
+          w.id !== expectedWorkspace ||
+          w.root_revision !== expectedRevision
+        )
+          throw new Error("工作区已切换或节点尚未升级");
+        if (transferAbort.current)
+          throw new Error("请先完成或取消正在进行的文件传输");
+        const overlap = (a: string, b: string) =>
+          a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+        if (
+          intents.some((i) =>
+            [i.path, i.source].some((p) => !!p && overlap(p, path)),
+          )
+        )
+          throw new Error("相关目录中有待确认文件操作，请先处理");
+        for (const doc of docs.current.values()) {
+          if (
+            doc.identity.account !== account ||
+            doc.identity.nodeID !== terminal.node_id ||
+            doc.identity.workspaceID !== w.id ||
+            doc.identity.rootRevision !== w.root_revision ||
+            !(doc.path === path || doc.path.startsWith(path + "/"))
+          )
+            continue;
+          if (doc.saving || doc.pending)
+            throw new Error("请先完成受影响文件的保存或结果核对");
+          const key = documentKey(doc.identity),
+            timer = timers.current.get(key);
+          if (timer) {
+            clearTimeout(timer);
+            timers.current.delete(key);
+          }
+          await persist(doc);
+        }
+        const scope = {
+          account,
+          nodeID: terminal.node_id,
+          workspaceID: w.id,
+          rootRevision: w.root_revision,
+        };
+        await checkDeleteDrafts(scope, path);
+        const meta = await client.stat(path);
+        if (
+          !meta.version ||
+          meta.restricted ||
+          (recursive ? meta.kind !== "directory" : meta.kind !== "file")
+        )
+          throw new Error("文件类型已改变，请刷新后重新选择");
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，请重新选择文件");
+        const intent: CreateIntent = {
+          ...scope,
+          opID: client.newOperationID(),
+          kind: "delete",
+          path,
+          version: meta.version,
+          recursive,
+          confirmed: false,
+          createdAt: Date.now(),
+        };
+        await recordCreateIntent(intent);
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，操作记录已保存，请返回后核对");
+        setIntents((old) => [...old, intent]);
+        try {
+          const preview = await client.prepareDelete(
+            intent.opID,
+            path,
+            meta.version,
+            recursive,
+          );
+          if (
+            preview.path !== path ||
+            preview.recursive !== recursive ||
+            preview.state !== "prepared"
+          )
+            throw new Error("节点返回的删除预览不匹配");
+          result = { intent, preview };
+        } catch (e) {
+          if (
+            e instanceof FileServiceError &&
+            [
+              "FILE_CHANGED",
+              "SPECIAL_FILE",
+              "MOUNT_BOUNDARY",
+              "DELETE_LIMIT",
+              "DIRECTORY_NOT_EMPTY",
+              "UNSUPPORTED_FILESYSTEM",
+              "NOT_FOUND",
+            ].includes(e.code)
+          ) {
+            await removeCreateIntent(intent.opID);
+            setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+          }
+          throw e;
+        }
+      });
+      return result!;
+    },
+    [
+      workspace,
+      terminal?.id,
+      terminal?.node_id,
+      supportsDelete,
+      intents,
+      account,
+      persist,
+      withRenameLock,
+    ],
+  );
+
+  const inspectDelete = useCallback(
+    async (intent: CreateIntent): Promise<DeleteStatus> => {
+      const client = clientRef.current;
+      if (
+        !client ||
+        intent.kind !== "delete" ||
+        client.workspace.id !== intent.workspaceID ||
+        client.workspace.root_revision !== intent.rootRevision ||
+        !intent.version ||
+        typeof intent.recursive !== "boolean"
+      )
+        throw new Error("工作区或删除记录无效");
+      let status: DeleteStatus;
+      try {
+        status = await client.deleteStatus(intent.opID);
+      } catch (e) {
+        if (
+          !(e instanceof FileServiceError) ||
+          e.code !== "OPERATION_NOT_FOUND" ||
+          intent.confirmed
+        )
+          throw e;
+        status = await client.prepareDelete(
+          intent.opID,
+          intent.path,
+          intent.version,
+          intent.recursive,
+        );
+      }
+      if (status.path !== intent.path || status.recursive !== intent.recursive)
+        throw new Error("节点返回的删除范围不匹配");
+      return status;
+    },
+    [],
+  );
+
+  const reconcileDelete = useCallback(
+    async (intent: CreateIntent, status: DeleteStatus): Promise<void> => {
+      const client = clientRef.current,
+        gen = generation.current;
+      if (
+        !client ||
+        client.workspace.id !== intent.workspaceID ||
+        client.workspace.root_revision !== intent.rootRevision
+      )
+        throw new Error("工作区已切换，请返回后核对删除结果");
+      if (status.path !== intent.path || status.count > 8192)
+        throw new Error("删除结果与操作记录不匹配");
+      const deleted: string[] = [],
+        removedDirs: string[] = [];
+      for (let offset = 0; offset < status.count; ) {
+        const page = await client.deleteOutcomes(intent.opID, offset);
+        if (!page.items.length || page.next > status.count)
+          throw new Error("删除结果不完整，请稍后核对");
+        for (const item of page.items)
+          if (item.state === "deleted") {
+            if (item.kind === "file") deleted.push(item.path);
+            if (item.kind === "directory") removedDirs.push(item.path);
+          }
+        offset = page.next;
+      }
+      if (gen !== generation.current || clientRef.current !== client)
+        throw new Error("工作区已切换，请返回后核对删除结果");
+      const changes = await markDeletedDrafts(intent, deleted),
+        byKey = new Map(changes.map((c) => [documentKey(c.identity), c]));
+      if (gen !== generation.current || clientRef.current !== client)
+        throw new Error("工作区已切换，草稿标记已保存，请返回后核对");
+      const deletedSet = new Set(deleted);
+      for (const [key, doc] of docs.current) {
+        if (
+          doc.identity.account !== intent.account ||
+          doc.identity.nodeID !== intent.nodeID ||
+          doc.identity.workspaceID !== intent.workspaceID ||
+          doc.identity.rootRevision !== intent.rootRevision ||
+          !deletedSet.has(doc.path)
+        )
+          continue;
+        const change = byKey.get(key);
+        if (!change || change.previousToken !== doc.token)
+          doc.persistenceError = "草稿在其他标签页发生变化，请导出当前内容";
+        else doc.token = change.token;
+        doc.deleted = true;
+        doc.conflict = true;
+        doc.message = "文件已删除，草稿保留在当前浏览器。";
+      }
+      for (const [key, preview] of previews.current) {
+        if (
+          preview.identity.account === intent.account &&
+          preview.identity.nodeID === intent.nodeID &&
+          preview.identity.workspaceID === intent.workspaceID &&
+          preview.identity.rootRevision === intent.rootRevision &&
+          deletedSet.has(preview.path)
+        ) {
+          previews.current.delete(key);
+          if (selections.current.get(intent.workspaceID) === key)
+            selections.current.delete(intent.workspaceID);
+          setSelected((old) => (old === key ? null : old));
+        }
+      }
+      setDeletedDrafts(await listDeletedDrafts(intent));
+      const removed = (p: string) =>
+        removedDirs.some((dir) => p === dir || p.startsWith(dir + "/"));
+      if (gen === generation.current && clientRef.current === client) {
+        setExpanded(
+          (old) => new Set(Array.from(old).filter((p) => !removed(p))),
+        );
+        setSelectedDirectory((old) => (removed(old) ? "." : old));
+        setDirectories((old) => {
+          const next: Record<string, Directory> = {};
+          for (const [p, v] of Object.entries(old))
+            if (!removed(p)) next[p] = v;
+          return next;
+        });
+        for (const p of expanded)
+          if (!removed(p)) await loadDirectory(client, p, gen).catch(() => {});
+      }
+      update();
+    },
+    [expanded, loadDirectory, update],
+  );
+
+  const flushDeleteDrafts = useCallback(
+    async (intent: CreateIntent) => {
+      for (const doc of docs.current.values())
+        if (
+          doc.identity.account === intent.account &&
+          doc.identity.nodeID === intent.nodeID &&
+          doc.identity.workspaceID === intent.workspaceID &&
+          doc.identity.rootRevision === intent.rootRevision &&
+          (doc.path === intent.path || doc.path.startsWith(intent.path + "/"))
+        ) {
+          if (doc.saving || doc.pending)
+            throw new Error("请先完成受影响文件的保存或结果核对");
+          const key = documentKey(doc.identity),
+            timer = timers.current.get(key);
+          if (timer) {
+            clearTimeout(timer);
+            timers.current.delete(key);
+          }
+          await persist(doc);
+        }
+      await checkDeleteDrafts(intent, intent.path);
+    },
+    [persist],
+  );
+  const executeDelete = useCallback(
+    async (
+      intent: CreateIntent,
+      authorize: boolean,
+    ): Promise<{ intent: CreateIntent; status: DeleteStatus }> => {
+      let result: { intent: CreateIntent; status: DeleteStatus } | undefined;
+      await withRenameLock(async () => {
+        const client = clientRef.current;
+        if (
+          !client ||
+          intent.kind !== "delete" ||
+          !supportsDelete ||
+          client.workspace.id !== intent.workspaceID ||
+          client.workspace.root_revision !== intent.rootRevision
+        )
+          throw new Error("工作区已断开或节点尚未升级");
+        if (transferAbort.current)
+          throw new Error("请先完成或取消正在进行的文件传输");
+        if (activeIntents.current.has(intent.opID))
+          throw new Error("此删除正在进行");
+        activeIntents.current.add(intent.opID);
+        try {
+          let status = await inspectDelete(intent);
+          if (status.state !== "aborted") await flushDeleteDrafts(intent);
+          if (authorize) {
+            if (status.state !== "prepared")
+              throw new Error("删除预览状态已改变，请重新核对");
+            intent = await confirmDeleteIntent(intent.opID);
+            setIntents((old) =>
+              old.map((i) => (i.opID === intent.opID ? intent : i)),
+            );
+          }
+          if (
+            !intent.confirmed &&
+            (status.state === "prepared" || status.state === "deleting")
+          )
+            throw new Error("请先确认删除范围");
+          let attempts = 0;
+          while (
+            intent.confirmed &&
+            (status.state === "prepared" || status.state === "deleting")
+          ) {
+            const previous = (status.deleted || 0) + (status.skipped || 0);
+            status = await client.commitDelete(intent.opID);
+            if (
+              status.path !== intent.path ||
+              status.recursive !== intent.recursive
+            )
+              throw new Error("删除结果与操作记录不匹配");
+            if (
+              ++attempts > Math.ceil(status.count / 32) + 2 ||
+              (status.state === "deleting" &&
+                (status.deleted || 0) + (status.skipped || 0) <= previous)
+            )
+              throw new Error("删除进度未推进，请稍后核对");
+          }
+          if (
+            ["committed", "partial", "uncertain", "aborted"].includes(
+              status.state,
+            )
+          ) {
+            await reconcileDelete(intent, status);
+            if (status.state === "committed" || status.state === "aborted") {
+              await removeCreateIntent(intent.opID);
+              setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+            }
+          }
+          result = { intent, status };
+        } finally {
+          activeIntents.current.delete(intent.opID);
+        }
+      });
+      return result!;
+    },
+    [
+      supportsDelete,
+      inspectDelete,
+      flushDeleteDrafts,
+      reconcileDelete,
+      withRenameLock,
+    ],
+  );
+
+  const cancelDelete = useCallback(
+    async (intent: CreateIntent): Promise<DeleteStatus> => {
+      let result: DeleteStatus | undefined;
+      await withRenameLock(async () => {
+        const client = clientRef.current;
+        if (
+          !client ||
+          intent.kind !== "delete" ||
+          client.workspace.id !== intent.workspaceID ||
+          client.workspace.root_revision !== intent.rootRevision
+        )
+          throw new Error("工作区已断开");
+        if (activeIntents.current.has(intent.opID))
+          throw new Error("删除正在执行，请等待当前批次完成");
+        await flushDeleteDrafts(intent);
+        const status = await client.cancelDelete(intent.opID);
+        if (status.path !== intent.path) throw new Error("删除记录不匹配");
+        const current = await client.deleteStatus(intent.opID);
+        await reconcileDelete(intent, current);
+        if (current.state === "aborted") {
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+        }
+        result = current;
+      });
+      return result!;
+    },
+    [reconcileDelete, flushDeleteDrafts, withRenameLock],
+  );
+  const acknowledgeDelete = useCallback(
+    async (intent: CreateIntent) => {
+      await withRenameLock(async () => {
+        const status = await inspectDelete(intent);
+        if (status.state !== "partial")
+          throw new Error("结果尚未完成或存在不确定项，不能移除记录");
+        await flushDeleteDrafts(intent);
+        await reconcileDelete(intent, status);
+        await removeCreateIntent(intent.opID);
+        setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+      });
+    },
+    [inspectDelete, flushDeleteDrafts, reconcileDelete, withRenameLock],
+  );
+  const deleteOutcomes = useCallback(
+    async (
+      intent: CreateIntent,
+      offset: number,
+    ): Promise<{ items: DeleteOutcome[]; next: number }> => {
+      const client = clientRef.current;
+      if (
+        !client ||
+        client.workspace.id !== intent.workspaceID ||
+        client.workspace.root_revision !== intent.rootRevision
+      )
+        throw new Error("工作区已断开");
+      return client.deleteOutcomes(intent.opID, offset);
+    },
+    [],
+  );
   const runUploadFile = useCallback(
     async (
       file: File,
@@ -1253,8 +1852,19 @@ export function useWorkspace(
     intents,
     renaming,
     supportsRename,
+    supportsDelete,
     renameItem,
     retryRename,
+    deletedDrafts,
+    openDeletedDraft,
+    saveDeletedAs,
+    discardDeletedDraft,
+    beginDelete,
+    inspectDelete,
+    executeDelete,
+    cancelDelete,
+    acknowledgeDelete,
+    deleteOutcomes,
     transfer,
     clearTransfer: () => setTransfer(""),
     uploadFile,

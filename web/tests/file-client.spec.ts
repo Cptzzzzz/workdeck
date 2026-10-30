@@ -555,6 +555,25 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       } catch (e) {
         stale = (e as Error).name === "DraftConflictError";
       }
+      const pendingDelete = await drafts.saveDraft(
+        make("renamed/pending.txt", { pendingSave: { opID: "waiting" } }),
+        null,
+      );
+      let deletionBlocked = false;
+      try {
+        await drafts.checkDeleteDrafts(scope, "renamed");
+      } catch {
+        deletionBlocked = true;
+      }
+      await drafts.deleteDraft(pendingDelete.identity, pendingDelete.token);
+      const marks = await drafts.markDeletedDrafts(scope, ["renamed/a.txt"]);
+      let oldTabBlocked = false;
+      try {
+        await drafts.saveDraft({ ...moved, text: "stale change" }, moved.token);
+      } catch (e) {
+        oldTabBlocked = (e as Error).name === "DraftConflictError";
+      }
+      const listedDeleted = await drafts.listDeletedDrafts(scope);
       return {
         conflict,
         retained,
@@ -564,6 +583,10 @@ test("draft storage prevents stale writes and preserves a pending save", async (
         oldRemoved: !(await drafts.loadDraft(make("project/a.txt").identity)),
         otherRetained: !!(await drafts.loadDraft(other.identity)),
         stale,
+        deletionBlocked,
+        markCount: marks.length,
+        oldTabBlocked,
+        listedDeleted: listedDeleted.map((id: any) => id.path),
       };
     });
     expect(migration).toEqual({
@@ -575,6 +598,10 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       oldRemoved: true,
       otherRetained: true,
       stale: true,
+      deletionBlocked: true,
+      markCount: 1,
+      oldTabBlocked: true,
+      listedDeleted: ["renamed/a.txt"],
     });
   } finally {
     rmSync(bundleDir, { recursive: true, force: true });
@@ -774,11 +801,25 @@ test("pending create intents survive migration and prevent duplicate targets", a
       }
       const listed = await drafts.listCreateIntents(scope);
       await drafts.removeCreateIntent("first");
+      await drafts.recordCreateIntent({
+        ...intent,
+        opID: "delete",
+        kind: "delete",
+        path: "target",
+        version: "v",
+        recursive: false,
+        confirmed: false,
+      });
+      const confirmed = await drafts.confirmDeleteIntent("delete");
+      const recovered = await drafts.listCreateIntents(scope);
+      await drafts.removeCreateIntent("delete");
       return {
         old: old.text,
         duplicate,
         count: listed.length,
         remaining: (await drafts.listCreateIntents(scope)).length,
+        confirmed: confirmed.confirmed,
+        recovered: recovered[0].confirmed,
       };
     });
     expect(result).toEqual({
@@ -786,6 +827,8 @@ test("pending create intents survive migration and prevent duplicate targets", a
       duplicate: true,
       count: 1,
       remaining: 0,
+      confirmed: true,
+      recovered: true,
     });
   } finally {
     rmSync(bundleDir, { recursive: true, force: true });

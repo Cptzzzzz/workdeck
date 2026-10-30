@@ -126,6 +126,9 @@ func (e *Engine) PrepareDelete(ctx context.Context, workspace string, revision i
 	if err = checkDeleteAnchors(r, anchors, rootMount); err != nil {
 		return DeletePreview{}, err
 	}
+	if err = e.pruneDeleteJournal(ctx); err != nil {
+		return DeletePreview{}, err
+	}
 	var journalItems int
 	if err = e.db.QueryRowContext(ctx, `SELECT count(*) FROM delete_items`).Scan(&journalItems); err != nil {
 		return DeletePreview{}, err
@@ -170,6 +173,24 @@ func (e *Engine) PrepareDelete(ctx context.Context, workspace string, revision i
 	}
 	m = mutationRecord{Operation: Operation{ID: id, WorkspaceID: workspace, Revision: revision, Kind: "entry.delete", State: "prepared"}, fingerprint: fp, plan: plan}
 	return deletePreview(m), nil
+}
+
+// Keep completed details for at least ResultLifetime while retaining the
+// operation identity indefinitely, so an expired ID can never be replayed.
+func (e *Engine) pruneDeleteJournal(ctx context.Context) error {
+	tx, err := e.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	cutoff := e.now().Add(-ResultLifetime).UnixMilli()
+	if _, err = tx.ExecContext(ctx, `UPDATE mutations SET error_code='RESULT_EXPIRED',error_message='删除结果详情已过期' WHERE kind='entry.delete' AND state IN ('committed','partial','aborted') AND updated_at<? AND error_code=''`, cutoff); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM delete_items WHERE operation_id IN (SELECT id FROM mutations WHERE kind='entry.delete' AND error_code='RESULT_EXPIRED')`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func deleteMountID(root *os.Root, name string, expected fileIdentity) (uint64, error) {
