@@ -134,7 +134,10 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     await page.getByRole("button", { name: "关闭对话框" }).click();
     const pending = page
       .locator(".workbench-intents > div")
-      .filter({ hasText: "project" });
+      .filter({
+        hasText: "project",
+        has: page.getByRole("button", { name: "核对并继续" }),
+      });
     await expect(pending).toBeVisible();
     const retry = pending.getByRole("button", { name: "核对并继续" });
     await expect(retry).toBeEnabled({ timeout: 15000 });

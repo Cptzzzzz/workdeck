@@ -17,6 +17,7 @@ export type Draft = {
   newline: "lf" | "crlf";
   pendingSave?: SaveTransaction;
   deleted?: boolean;
+  unavailable?: boolean;
 };
 export type StoredDraft = Draft & { token: string; updatedAt: number };
 export class DraftConflictError extends Error {
@@ -215,7 +216,7 @@ export async function checkDeleteDrafts(
           inDraftScope(id, scope) &&
           typeof id.path === "string" &&
           (id.path === path || id.path.startsWith(path + "/")) &&
-          draft.pendingSave
+          (draft.pendingSave || draft.unavailable)
         ) {
           blocked = true;
           tx.abort();
@@ -227,7 +228,9 @@ export async function checkDeleteDrafts(
       tx.onabort = () =>
         reject(
           blocked
-            ? new Error("受影响草稿存在待确认保存，请先核对")
+            ? new Error(
+                "受影响草稿存在待确认保存或原文件不可访问，请先处理草稿",
+              )
             : tx.error || new Error("无法核对草稿"),
         );
       tx.onerror = () => {};
@@ -325,6 +328,38 @@ export async function listDeletedDrafts(
     db.close();
   }
 }
+export async function listRecoverableDrafts(
+  scope: DraftScope,
+): Promise<DraftIdentity[]> {
+  const db = await openDB();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly"),
+        cursor = tx.objectStore(STORE).openCursor(),
+        result: DraftIdentity[] = [];
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const draft = item.value as StoredDraft;
+        if (
+          draft?.identity &&
+          inDraftScope(draft.identity, scope) &&
+          !draft.deleted &&
+          (draft.unavailable ||
+            draft.pendingSave ||
+            draft.text !== draft.baseText)
+        )
+          result.push(draft.identity);
+        item.continue();
+      };
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error || new Error("无法读取本地草稿"));
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
 export async function loadDraft(
   identity: DraftIdentity,
 ): Promise<StoredDraft | undefined> {
@@ -404,10 +439,13 @@ export async function moveDrafts(
         ) {
           if (
             draft.pendingSave ||
+            draft.unavailable ||
+            draft.deleted ||
             typeof draft.token !== "string" ||
             item.primaryKey !== key(id)
           ) {
-            problem = "草稿存在待确认保存或数据异常，请先核对";
+            problem =
+              "草稿存在待确认保存、原文件不可访问或数据异常，请先处理草稿";
             tx.abort();
             return;
           }

@@ -22,6 +22,7 @@ import {
   checkDeleteDrafts,
   markDeletedDrafts,
   listDeletedDrafts,
+  listRecoverableDrafts,
 } from "../../services/files/drafts";
 import type {
   FileEntry,
@@ -53,6 +54,7 @@ export type Document = {
   message: string;
   persistenceError: string;
   deleted?: boolean;
+  unavailable?: boolean;
 };
 export type BinaryPreview = {
   identity: DraftIdentity;
@@ -93,6 +95,9 @@ export function useWorkspace(
   const [selectedDirectory, setSelectedDirectory] = useState(".");
   const [intents, setIntents] = useState<CreateIntent[]>([]);
   const [deletedDrafts, setDeletedDrafts] = useState<DraftIdentity[]>([]);
+  const [recoverableDrafts, setRecoverableDrafts] = useState<DraftIdentity[]>(
+    [],
+  );
   const [transfer, setTransfer] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [reconnect, setReconnect] = useState(0);
@@ -126,6 +131,7 @@ export function useWorkspace(
             newline: doc.newline,
             pendingSave: doc.pending,
             deleted: doc.deleted,
+            unavailable: doc.unavailable,
           };
           try {
             const stored = await saveDraft(draft, doc.token);
@@ -214,6 +220,7 @@ export function useWorkspace(
     setIntents([]);
     setFileMetrics(null);
     setDeletedDrafts([]);
+    setRecoverableDrafts([]);
     setError("");
     if (!enabled || !terminal || !account) {
       setConnection("未连接");
@@ -266,7 +273,15 @@ export function useWorkspace(
             workspaceID: view.workspace.id,
             rootRevision: view.workspace.root_revision,
           });
+          const recoverable = await listRecoverableDrafts({
+            account,
+            nodeID: terminal.node_id,
+            workspaceID: view.workspace.id,
+            rootRevision: view.workspace.root_revision,
+          });
           if (!stopped && gen === generation.current) setDeletedDrafts(deleted);
+          if (!stopped && gen === generation.current)
+            setRecoverableDrafts(recoverable);
           if (!stopped && gen === generation.current)
             setIntents((old) => [
               ...pending,
@@ -404,8 +419,17 @@ export function useWorkspace(
             e.code === "NOT_FOUND"
           ) {
             doc.conflict = true;
+            doc.unavailable = true;
             doc.message = "文件不存在或无法访问，本地内容已保留。";
-            await persist(doc).catch(() => {});
+            try {
+              await persist(doc);
+              if (gen === generation.current)
+                setRecoverableDrafts((old) =>
+                  old.some((d) => documentKey(d) === documentKey(doc.identity))
+                    ? old
+                    : [...old, doc.identity],
+                );
+            } catch {}
             update();
           } else if (
             unchanged() &&
@@ -535,6 +559,10 @@ export function useWorkspace(
         }
         if (saved?.deleted)
           throw new Error("此路径有已删除文件的草稿，请先从左侧打开并导出草稿");
+        if (saved?.unavailable)
+          throw new Error(
+            "此路径有不可访问文件的草稿，请先从左侧打开并处理草稿",
+          );
         if (saved?.pendingSave) {
           try {
             const operation = await client.operationStatus(
@@ -647,6 +675,71 @@ export function useWorkspace(
     },
     [workspace, account, update],
   );
+  const openRecoverableDraft = useCallback(
+    async (identity: DraftIdentity) => {
+      const client = clientRef.current,
+        w = workspace,
+        gen = generation.current;
+      if (
+        !client ||
+        !w ||
+        identity.account !== account ||
+        identity.nodeID !== terminal?.node_id ||
+        identity.workspaceID !== w.id ||
+        identity.rootRevision !== w.root_revision
+      )
+        throw new Error("工作区已切换或文件连接不可用");
+      const id = documentKey(identity),
+        existing = docs.current.get(id);
+      if (existing) {
+        selections.current.set(w.id, id);
+        setSelected(id);
+        return;
+      }
+      const saved = await loadDraft(identity);
+      if (!saved || saved.deleted) throw new Error("本地草稿不可用");
+      let unavailable = !!saved.unavailable;
+      if (!unavailable) {
+        try {
+          await client.stat(identity.path);
+        } catch (e) {
+          if (e instanceof FileServiceError && e.code === "NOT_FOUND")
+            unavailable = true;
+          else throw e;
+        }
+      }
+      if (gen !== generation.current || clientRef.current !== client)
+        throw new Error("工作区已切换");
+      if (!unavailable) {
+        await openFile(identity.path);
+        return;
+      }
+      const doc: Document = {
+        identity,
+        path: identity.path,
+        base: saved.baseText,
+        text: saved.text,
+        version: saved.baseVersion,
+        sequence: saved.sequence,
+        encoding: saved.encoding,
+        newline: saved.newline,
+        token: saved.token,
+        pending: saved.pendingSave,
+        saving: false,
+        conflict: true,
+        unavailable: true,
+        warning: "",
+        message: "文件不存在或无法访问，本地内容已保留。",
+        persistenceError: "",
+      };
+      docs.current.set(id, doc);
+      selections.current.set(w.id, id);
+      setSelected(id);
+      update();
+      if (!saved.unavailable) await persist(doc).catch(() => {});
+    },
+    [workspace, account, terminal?.node_id, openFile, persist, update],
+  );
   const saveDeletedAs = useCallback(
     async (
       doc: Document,
@@ -658,7 +751,7 @@ export function useWorkspace(
       const client = clientRef.current;
       if (
         !client ||
-        !doc.deleted ||
+        (!doc.deleted && !doc.unavailable) ||
         doc.identity.account !== account ||
         client.workspace.id !== expectedWorkspace ||
         client.workspace.root_revision !== expectedRevision ||
@@ -733,7 +826,7 @@ export function useWorkspace(
   const discardDeletedDraft = useCallback(
     async (doc: Document) => {
       if (
-        !doc.deleted ||
+        (!doc.deleted && !doc.unavailable) ||
         doc.identity.account !== account ||
         doc.pending ||
         doc.saving ||
@@ -758,6 +851,7 @@ export function useWorkspace(
           selections.current.delete(doc.identity.workspaceID);
         setSelected((old) => (old === id ? null : old));
         setDeletedDrafts((old) => old.filter((d) => documentKey(d) !== id));
+        setRecoverableDrafts((old) => old.filter((d) => documentKey(d) !== id));
         update();
       } finally {
         renameLock.current = false;
@@ -833,6 +927,10 @@ export function useWorkspace(
         doc.pending = undefined;
         doc.conflict = false;
         await persist(doc);
+        if (doc.text === doc.base)
+          setRecoverableDrafts((old) =>
+            old.filter((d) => documentKey(d) !== documentKey(doc.identity)),
+          );
         void refresh();
       } catch (e) {
         if (e instanceof UncertainSaveError) doc.pending = e.transaction;
@@ -1571,6 +1669,7 @@ export function useWorkspace(
         }
       }
       setDeletedDrafts(await listDeletedDrafts(intent));
+      setRecoverableDrafts(await listRecoverableDrafts(intent));
       const removed = (p: string) =>
         removedDirs.some((dir) => p === dir || p.startsWith(dir + "/"));
       if (gen === generation.current && clientRef.current === client) {
@@ -2072,7 +2171,9 @@ export function useWorkspace(
     renameItem,
     retryRename,
     deletedDrafts,
+    recoverableDrafts,
     openDeletedDraft,
+    openRecoverableDraft,
     saveDeletedAs,
     discardDeletedDraft,
     beginDelete,

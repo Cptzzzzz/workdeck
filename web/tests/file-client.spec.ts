@@ -547,6 +547,23 @@ test("draft storage prevents stale writes and preserves a pending save", async (
         pendingBlocked = true;
       }
       await drafts.deleteDraft(pending.identity, pending.token);
+      const unavailable = await drafts.saveDraft(
+        make("project/unavailable.txt", { unavailable: true }),
+        null,
+      );
+      let unavailableMoveBlocked = false,
+        unavailableDeleteBlocked = false;
+      try {
+        await drafts.moveDrafts(scope, "project", "renamed");
+      } catch {
+        unavailableMoveBlocked = true;
+      }
+      try {
+        await drafts.checkDeleteDrafts(scope, "project");
+      } catch {
+        unavailableDeleteBlocked = true;
+      }
+      await drafts.deleteDraft(unavailable.identity, unavailable.token);
       const moves = await drafts.moveDrafts(scope, "project", "renamed");
       const moved = await drafts.loadDraft(make("renamed/a.txt").identity);
       let stale = false;
@@ -578,6 +595,8 @@ test("draft storage prevents stale writes and preserves a pending save", async (
         conflict,
         retained,
         pendingBlocked,
+        unavailableMoveBlocked,
+        unavailableDeleteBlocked,
         count: moves.length,
         text: moved.text,
         oldRemoved: !(await drafts.loadDraft(make("project/a.txt").identity)),
@@ -593,6 +612,8 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       conflict: true,
       retained: true,
       pendingBlocked: true,
+      unavailableMoveBlocked: true,
+      unavailableDeleteBlocked: true,
       count: 2,
       text: "project/a.txt",
       oldRemoved: true,

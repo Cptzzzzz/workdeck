@@ -962,7 +962,9 @@ function App() {
                         : modal === "file-discard-draft"
                           ? "移除本地草稿"
                           : modal === "file-save-as"
-                            ? "另存已删除的草稿"
+                            ? deletedSaveTarget?.unavailable
+                              ? "另存不可访问的草稿"
+                              : "另存已删除的草稿"
                             : modal === "file-delete"
                               ? "删除文件或文件夹"
                               : modal === "file-rename"

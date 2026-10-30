@@ -275,6 +275,25 @@ export function WorkspaceSidebar({
           ))}
         </div>
       )}
+      {controller.recoverableDrafts.length > 0 && (
+        <div className="workbench-intents">
+          <b>本地未保存草稿</b>
+          {controller.recoverableDrafts.map((d) => (
+            <div key={JSON.stringify(d)}>
+              <span title={d.path}>{d.path}</span>
+              <button
+                onClick={() =>
+                  void controller
+                    .openRecoverableDraft(d)
+                    .catch((e) => controller.reportError((e as Error).message))
+                }
+              >
+                打开草稿
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {controller.transfer && (
         <div className="workbench-hint" role="status">
           {controller.transfer}
@@ -506,8 +525,10 @@ export function WorkspaceEditor({
         <div className="workbench-notice">
           {doc.deleted
             ? "远端文件已删除，本地草稿已保留。"
-            : "远端文件已改变，本地草稿已保留。请导出草稿并比较后处理。"}
-          {doc.deleted && (
+            : doc.unavailable
+              ? "远端文件不存在或无法访问，本地草稿已保留。"
+              : "远端文件已改变，本地草稿已保留。请导出草稿并比较后处理。"}
+          {(doc.deleted || doc.unavailable) && (
             <button
               disabled={
                 doc.saving || controller.renaming || !controller.fileReady
@@ -517,7 +538,7 @@ export function WorkspaceEditor({
               {doc.pending ? "核对并继续另存" : "另存为新文件"}
             </button>
           )}
-          {doc.deleted && (
+          {(doc.deleted || doc.unavailable) && (
             <button
               disabled={doc.saving || !!doc.pending || controller.renaming}
               onClick={() => onDiscardDeleted(doc)}
@@ -709,7 +730,7 @@ export function SaveDeletedAsForm({
       <div className="modal-symbol">
         <Save size={24} />
       </div>
-      <h2>另存已删除的草稿</h2>
+      <h2>{doc.unavailable ? "另存不可访问的草稿" : "另存已删除的草稿"}</h2>
       <p className="modal-description">
         {doc.pending
           ? `继续核对并保存到 ${doc.pending.spec.path}`

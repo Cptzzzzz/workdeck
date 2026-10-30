@@ -125,6 +125,68 @@ test("refresh updates clean files and protects dirty drafts", async ({
       page.getByText("文件不存在或无法访问，本地内容已保留。", { exact: true }),
     ).toBeVisible();
     await expect(screen).toContainText("deleted draft");
+    writeFileSync(path.join(dir, "new.txt"), "replacement\n");
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    const drafts = page
+      .locator(".workbench-intents")
+      .filter({ hasText: "本地未保存草稿" });
+    await expect(drafts).toBeVisible();
+    await drafts
+      .locator("div")
+      .filter({ hasText: "new.txt" })
+      .getByRole("button", { name: "打开草稿" })
+      .click();
+    await expect(screen).toContainText("deleted draft");
+    await page.getByRole("button", { name: "另存为新文件" }).click();
+    const saveAs = page.getByRole("dialog", { name: "另存不可访问的草稿" });
+    await saveAs.getByLabel("另存文件名").fill("recovered.txt");
+    await saveAs.getByRole("button", { name: "另存", exact: true }).click();
+    await expect
+      .poll(() => {
+        try {
+          return readFileSync(path.join(dir, "recovered.txt"), "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .toBe("deleted draft\n");
+    expect(readFileSync(path.join(dir, "new.txt"), "utf8")).toBe(
+      "replacement\n",
+    );
+    writeFileSync(path.join(dir, "orphan.txt"), "orphan original\n");
+    await page.getByRole("button", { name: "刷新文件树" }).click();
+    await page.getByRole("button", { name: "orphan.txt", exact: true }).click();
+    await expect(screen).toContainText("orphan original");
+    await editor.focus();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.insertText("orphan draft\n");
+    await page.waitForTimeout(800);
+    unlinkSync(path.join(dir, "orphan.txt"));
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    const orphanDrafts = page
+      .locator(".workbench-intents")
+      .filter({ hasText: "本地未保存草稿" });
+    await orphanDrafts
+      .locator("div")
+      .filter({ hasText: "orphan.txt" })
+      .getByRole("button", { name: "打开草稿" })
+      .click();
+    await expect(screen).toContainText("orphan draft");
+    await page.getByRole("button", { name: "另存为新文件" }).click();
+    const orphanSave = page.getByRole("dialog", { name: "另存不可访问的草稿" });
+    await orphanSave.getByLabel("另存文件名").fill("orphan-recovered.txt");
+    await orphanSave.getByRole("button", { name: "另存", exact: true }).click();
+    await expect
+      .poll(() => {
+        try {
+          return readFileSync(path.join(dir, "orphan-recovered.txt"), "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .toBe("orphan draft\n");
     expect(pane()).toBe(pid);
   } finally {
     if (id && csrf)
