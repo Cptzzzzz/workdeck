@@ -118,6 +118,13 @@ func (e *Engine) BeginWrite(ctx context.Context, workspace string, revision int6
 	if ErrorCode(err) != "OPERATION_NOT_FOUND" {
 		return Operation{}, err
 	}
+	var conflictingID int
+	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM root_changes WHERE id=?`, id).Scan(&conflictingID); err != nil {
+		return Operation{}, err
+	}
+	if conflictingID != 0 {
+		return Operation{}, fail("ID_REUSED", "操作标识不能用于不同内容")
+	}
 	if !freshID(id, e.now()) {
 		return Operation{}, fail("OPERATION_EXPIRED", "操作标识已过期，请重新核对文件后保存")
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"workdeck/internal/agent"
+	"workdeck/internal/fileworker"
 	"workdeck/internal/hub"
 )
 
@@ -30,6 +31,17 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	switch os.Args[1] {
+	case "file-worker":
+		f := flag.NewFlagSet("file-worker", flag.ContinueOnError)
+		dir := f.String("data-dir", "", "private file worker state directory")
+		if err := f.Parse(os.Args[2:]); err != nil {
+			return err
+		}
+		if *dir == "" || !filepath.IsAbs(*dir) {
+			return fmt.Errorf("file-worker requires an absolute --data-dir")
+		}
+		go func() { <-ctx.Done(); _ = os.Stdin.Close() }()
+		return fileworker.Run(ctx, *dir, os.Stdin, os.Stdout)
 	case "version":
 		fmt.Println(version)
 		return nil

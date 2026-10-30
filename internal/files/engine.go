@@ -16,9 +16,10 @@ import (
 )
 
 type workspaceHandle struct {
-	spec Workspace
-	root *os.Root
-	mu   sync.RWMutex
+	spec     Workspace
+	root     *os.Root
+	mu       sync.RWMutex
+	draining bool // guarded by Engine.mu
 }
 
 type Engine struct {
@@ -56,6 +57,8 @@ func Open(dir string) (*Engine, error) {
 	const schema = `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,terminal_id TEXT NOT NULL,root_path TEXT NOT NULL,revision INTEGER NOT NULL,user_name TEXT NOT NULL,device TEXT NOT NULL,inode TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,revision INTEGER NOT NULL,kind TEXT NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL,offset INTEGER NOT NULL DEFAULT 0,version TEXT NOT NULL DEFAULT '',spec TEXT NOT NULL,temp_path TEXT NOT NULL DEFAULT '',temp_device TEXT NOT NULL DEFAULT '',temp_inode TEXT NOT NULL DEFAULT '',error_code TEXT NOT NULL DEFAULT '',error_message TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS root_changes(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,old_revision INTEGER NOT NULL,fingerprint TEXT NOT NULL,state TEXT NOT NULL,candidate TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+ CREATE UNIQUE INDEX IF NOT EXISTS one_prepared_root_change ON root_changes(workspace_id) WHERE state='prepared';
  CREATE INDEX IF NOT EXISTS operations_workspace ON operations(workspace_id);`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
@@ -183,10 +186,23 @@ func (e *Engine) acquire(ctx context.Context, id string, revision int64) (*works
 		r = &workspaceHandle{spec: spec, root: root}
 		e.roots[id] = r
 	}
+	if r.draining {
+		return nil, nil, fail("WORKSPACE_BUSY", "工作区正在切换目录")
+	}
 	r.mu.RLock()
 	if r.spec.Revision != revision {
 		r.mu.RUnlock()
 		return nil, nil, fail("STALE_WORKSPACE", "工作区根目录已改变")
 	}
 	return r, r.mu.RUnlock, nil
+}
+
+// ValidateWorkspace rejects stale directory snapshots after a root change.
+func (e *Engine) ValidateWorkspace(ctx context.Context, id string, revision int64) error {
+	_, release, err := e.acquire(ctx, id, revision)
+	if err != nil {
+		return err
+	}
+	release()
+	return nil
 }
