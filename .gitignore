@@ -15,3 +15,5 @@
 /web/public/install-agent.sh
 /deploy/ca-certificates.crt
 /web/*.tsbuildinfo
+/web/test-results/
+/web/playwright-report/
