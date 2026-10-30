@@ -43,6 +43,10 @@ ssh deploy@server.example.com '
 
 Back up each node's private `~/.local/share/workdeck` separately. Protect its identity as a login credential. Metadata backups do not checkpoint operating-system processes; restoring records after reboot marks unavailable sessions lost and does not replay commands.
 
+## Terminal font size
+
+Use the font icon in the terminal toolbar to choose 10–24 px, adjust one step at a time, or restore the default 13 px. Changes apply immediately to this browser's terminals without reconnecting them, and resizing recalculates the available rows/columns. The same browser profile remembers the choice after reload and shares it across tabs; separate devices/profiles retain independent choices. Readonly viewers may adjust their own display without taking control. Preferences contain no credentials and are stored locally under `workdeck.terminal.fontSize`. If browser storage is unavailable, changing the current view still works for the active page.
+
 ## Terminal wheel and command history
 
 In a terminal you control, the wheel scrolls retained tmux history. Scroll down to the live prompt or simply start typing to return to the live application. Physical Up/Down and the mobile arrow buttons retain command history behavior in the Shell, including immediately after scrolling. In mouse-aware TUIs, wheel reports and cursor keys retain the application's native behavior. Hold Shift when dragging to select text with the browser rather than tmux mouse handling.

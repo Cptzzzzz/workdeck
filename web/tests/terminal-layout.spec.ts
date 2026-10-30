@@ -107,6 +107,19 @@ test("last terminal row remains fully visible through resizing, network details 
     await assertLastRowFits(page);
     await page.setViewportSize({ width: 390, height: 844 });
     await assertLastRowFits(page);
+    for (const font of ["10", "12", "18", "24"]) {
+      await page.getByRole("button", { name: "终端字号", exact: true }).click();
+      const settings = page.getByRole("dialog", {
+        name: "终端字号设置",
+        exact: true,
+      });
+      await settings
+        .getByRole("combobox", { name: "字号", exact: true })
+        .selectOption(font);
+      await settings.getByRole("button", { name: "关闭字号设置" }).click();
+      await test.step(`mobile font ${font}: last row visible`, () =>
+        assertLastRowFits(page));
+    }
     await page.screenshot({
       path: "../test-results/terminal-bottom-mobile.png",
     });

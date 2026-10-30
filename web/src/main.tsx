@@ -36,6 +36,13 @@ import "./style.css";
 import { TerminalTransport, type TransportStatus } from "./terminal-transport";
 import { initialTransportStatus, formatLatency } from "./network-metrics";
 import { NetworkPanel } from "./network-panel";
+import { TerminalFontControl } from "./terminal-font-control";
+import {
+  FONT_SIZE_KEY,
+  parseFontSize,
+  readFontSize,
+  saveFontSize,
+} from "./terminal-preferences";
 
 type Node = {
   run_user?: string;
@@ -120,6 +127,19 @@ function status(t: Term, node?: Node) {
   return states[t.state] || { text: t.state, kind: "muted" };
 }
 function App() {
+  const [fontSize, setFontSize] = useState(readFontSize);
+  const changeFontSize = useCallback((size: number) => {
+    setFontSize(size);
+    saveFontSize(size);
+  }, []);
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (event.key === FONT_SIZE_KEY || event.key === null)
+        setFontSize(parseFontSize(event.key === null ? null : event.newValue));
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
   const [user, setUser] = useState<User | null>(null),
     [loading, setLoading] = useState(true);
   const [data, setData] = useState<Snapshot>({ nodes: [], terminals: [] });
@@ -680,6 +700,8 @@ function App() {
               terminal={t}
               node={data.nodes.find((n) => n.id === t.node_id)}
               visible={active === id}
+              fontSize={fontSize}
+              onFontSizeChange={changeFontSize}
               onBack={() => setActive(null)}
               onStop={() => void stop(t)}
               notify={notify}
@@ -1497,6 +1519,8 @@ function TerminalView({
   terminal,
   node,
   visible,
+  fontSize,
+  onFontSizeChange,
   onBack,
   onStop,
   notify,
@@ -1504,6 +1528,8 @@ function TerminalView({
   terminal: Term;
   node?: Node;
   visible: boolean;
+  fontSize: number;
+  onFontSizeChange: (size: number) => void;
   onBack: () => void;
   onStop: () => void;
   notify: (s: string) => void;
@@ -1528,12 +1554,15 @@ function TerminalView({
     ["closed", "lost", "error"].includes(terminal.state);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const focusTerminal = useCallback(() => instance.current?.focus(), []);
   useEffect(() => {
     if (!container.current || stopped) return;
     const term = new XTerminal({
       cursorBlink: true,
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-      fontSize: 14,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.25,
       scrollback: 5000,
       allowProposedApi: false,
@@ -1701,6 +1730,15 @@ function TerminalView({
       });
     }
   }, [visible]);
+  useEffect(() => {
+    // Hidden tabs are measured when shown, including browsers which use DOM
+    // font measurement and cannot measure inside display:none.
+    if (visible && instance.current) {
+      instance.current.options.fontSize = fontSize;
+      const frame = requestAnimationFrame(() => fitRef.current());
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [fontSize, visible]);
   const send = (s: string) => {
     if (readonly || socket.current?.readyState !== WebSocket.OPEN) return;
     inputRef.current(new TextEncoder().encode(s));
@@ -1745,6 +1783,11 @@ function TerminalView({
                 : ""}
             </span>
           )}
+          <TerminalFontControl
+            size={fontSize}
+            onChange={onFontSizeChange}
+            onClose={focusTerminal}
+          />
           <button
             className="icon-button"
             title="重新连接"
