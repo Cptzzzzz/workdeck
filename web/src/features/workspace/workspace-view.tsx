@@ -521,6 +521,30 @@ export function WorkspaceEditor({
           <button onClick={controller.retry}>重新连接</button>
         </div>
       )}
+      {doc?.pending && (
+        <div className="workbench-notice">
+          保存结果待确认，本地草稿已保留。
+          <button
+            disabled={
+              doc.saving || controller.renaming || !controller.fileReady
+            }
+            onClick={() => void controller.checkPendingSave(doc)}
+          >
+            核对保存状态
+          </button>
+          {(doc.pendingState === "receiving" ||
+            doc.pendingState === "ready") && (
+            <button
+              disabled={
+                doc.saving || controller.renaming || !controller.fileReady
+              }
+              onClick={() => void controller.checkPendingSave(doc, true)}
+            >
+              取消未完成保存
+            </button>
+          )}
+        </div>
+      )}
       {doc?.conflict && (
         <div className="workbench-notice">
           {doc.deleted
@@ -531,7 +555,10 @@ export function WorkspaceEditor({
           {(doc.deleted || doc.unavailable) && (
             <button
               disabled={
-                doc.saving || controller.renaming || !controller.fileReady
+                doc.saving ||
+                controller.renaming ||
+                !controller.fileReady ||
+                (!!doc.pending && !doc.pending.spec.create)
               }
               onClick={() => onSaveDeletedAs(doc)}
             >

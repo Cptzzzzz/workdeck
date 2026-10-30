@@ -962,7 +962,7 @@ export class FileClient {
     return op;
   }
   async abortSave(transaction: SaveTransaction): Promise<FileOperation> {
-    this.checkOperation(
+    const operation = this.checkOperation(
       (
         await this.request("file.write.begin", {
           op_id: transaction.opID,
@@ -971,6 +971,10 @@ export class FileClient {
       ).value,
       transaction.opID,
     );
+    if (operation.state === "committed" || operation.state === "aborted")
+      return operation;
+    if (operation.state !== "receiving" && operation.state !== "ready")
+      throw new FileServiceError("INVALID_STATE", "保存结果尚不能安全取消");
     return this.checkOperation(
       (await this.request("file.write.abort", { op_id: transaction.opID }))
         .value,

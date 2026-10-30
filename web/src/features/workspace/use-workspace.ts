@@ -48,6 +48,7 @@ export type Document = {
   newline: "lf" | "crlf";
   token: string | null;
   pending?: SaveTransaction;
+  pendingState?: string;
   saving: boolean;
   conflict: boolean;
   warning: string;
@@ -881,6 +882,130 @@ export function useWorkspace(
       update();
     },
     [schedule, update],
+  );
+  const checkPendingSave = useCallback(
+    async (doc: Document, cancel = false) => {
+      const client = clientRef.current,
+        transaction = doc.pending,
+        gen = generation.current;
+      if (
+        !client ||
+        !transaction ||
+        doc.saving ||
+        renameLock.current ||
+        client.workspace.id !== doc.identity.workspaceID ||
+        client.workspace.root_revision !== doc.identity.rootRevision ||
+        doc.identity.account !== account
+      ) {
+        doc.message = "待确认保存或文件连接不可用";
+        update();
+        return;
+      }
+      doc.saving = true;
+      doc.pendingState = undefined;
+      update();
+      try {
+        let operation = await client.operationStatus(transaction.opID);
+        if (
+          gen !== generation.current ||
+          clientRef.current !== client ||
+          doc.pending !== transaction
+        )
+          throw new Error("工作区已切换，请重新核对保存状态");
+        if (operation.offset > transaction.content.length)
+          throw new Error("节点返回的保存偏移无效，请重新核对");
+        if (cancel && ["receiving", "ready"].includes(operation.state))
+          operation = await client.abortSave(transaction);
+        if (
+          gen !== generation.current ||
+          clientRef.current !== client ||
+          doc.pending !== transaction
+        )
+          throw new Error("工作区已切换，请重新核对保存状态");
+        if (operation.offset > transaction.content.length)
+          throw new Error("节点返回的保存偏移无效，请重新核对");
+        if (operation.state === "receiving" || operation.state === "ready") {
+          doc.pendingState = operation.state;
+          doc.message = `保存尚未提交，节点已确认 ${operation.offset} / ${transaction.content.length} 字节。${doc.conflict || doc.deleted || doc.unavailable ? "请取消未完成保存后处理草稿。" : "可继续原保存或取消未完成保存。"}`;
+        } else if (
+          operation.state === "committed" ||
+          operation.state === "aborted" ||
+          operation.state === "conflict"
+        ) {
+          if (operation.state === "committed" && !operation.version)
+            throw new Error("节点未返回已提交文件的版本，请稍后重新核对");
+          let matches = false,
+            missing = false;
+          if (operation.state === "committed" && !transaction.spec.create) {
+            try {
+              const current = await client.stat(doc.path);
+              matches =
+                current.kind === "file" &&
+                current.version === operation.version;
+            } catch (e) {
+              if (e instanceof FileServiceError && e.code === "NOT_FOUND")
+                missing = true;
+            }
+            if (
+              gen !== generation.current ||
+              clientRef.current !== client ||
+              doc.pending !== transaction
+            )
+              throw new Error("工作区已切换，请重新核对保存状态");
+          }
+          const before = {
+            base: doc.base,
+            version: doc.version,
+            conflict: doc.conflict,
+            unavailable: doc.unavailable,
+            message: doc.message,
+          };
+          if (operation.state === "committed" && !transaction.spec.create) {
+            doc.base = new TextDecoder().decode(transaction.content);
+            doc.version = operation.version!;
+            doc.conflict = !matches || !!doc.deleted;
+            if (matches && !doc.deleted) doc.unavailable = false;
+            else if (missing) doc.unavailable = true;
+            doc.message =
+              matches && !doc.deleted
+                ? "已确认保存；之后的编辑仍保留。"
+                : "已确认先前保存，但当前文件已变化或不可访问，请先处理草稿。";
+          } else if (operation.state === "committed") {
+            doc.message = `已确认另存到 ${transaction.spec.path}；原草稿仍保留。`;
+          } else if (operation.state === "conflict") {
+            doc.conflict = true;
+            doc.message =
+              operation.error?.message || "保存未提交，远端文件发生冲突。";
+          } else {
+            doc.message = "未完成的保存已取消，本地草稿仍保留。";
+          }
+          doc.pending = undefined;
+          try {
+            await persist(doc);
+          } catch (e) {
+            doc.pending = transaction;
+            Object.assign(doc, before);
+            throw e;
+          }
+          if (!doc.unavailable && !doc.deleted && doc.text === doc.base)
+            setRecoverableDrafts((old) =>
+              old.filter((d) => documentKey(d) !== documentKey(doc.identity)),
+            );
+        } else {
+          doc.message =
+            "节点暂不能确认保存结果，请稍后再次核对；本地草稿已保留。";
+        }
+      } catch (e) {
+        doc.message =
+          e instanceof FileServiceError && e.code === "OPERATION_NOT_FOUND"
+            ? "节点没有可查询的原保存记录，无法确定结果；请导出草稿并人工核对。"
+            : (e as Error).message;
+      } finally {
+        doc.saving = false;
+        update();
+      }
+    },
+    [account, persist, update],
   );
   const save = useCallback(
     async (doc: Document) => {
@@ -2232,6 +2357,7 @@ export function useWorkspace(
     openFile,
     edit,
     save,
+    checkPendingSave,
     retry,
     select: (id: string) => {
       if (workspace) selections.current.set(workspace.id, id);
