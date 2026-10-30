@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -16,6 +16,15 @@ import {
 import type { WorkspaceController, Document } from "./use-workspace";
 const MonacoEditor = lazy(() =>
   import("./monaco-editor").then((m) => ({ default: m.MonacoEditor })),
+);
+const MarkdownPreview = lazy(() =>
+  import("./markdown-preview").then((m) => ({ default: m.MarkdownPreview })),
+);
+const ImagePreview = lazy(() =>
+  import("./image-preview").then((m) => ({ default: m.ImagePreview })),
+);
+const PDFPreview = lazy(() =>
+  import("./pdf-preview").then((m) => ({ default: m.PDFPreview })),
 );
 
 export function WorkspaceSidebar({
@@ -131,6 +140,15 @@ export function WorkspaceEditor({
   controller: WorkspaceController;
 }) {
   const doc = controller.document;
+  const preview = controller.preview;
+  const markdown = !!doc && /\.(?:md|markdown|mdown)$/i.test(doc.path);
+  const [markdownMode, setMarkdownMode] = useState<
+    "edit" | "preview" | "split"
+  >("edit");
+  useEffect(
+    () => setMarkdownMode("edit"),
+    [doc?.identity.workspaceID, doc?.path],
+  );
   return (
     <section className="workbench-editor" aria-label="文件工作区">
       <div className="workbench-tabs">
@@ -146,12 +164,48 @@ export function WorkspaceEditor({
             {item.text !== item.base && <i aria-label="未保存">●</i>}
           </button>
         ))}
+        {controller.previews.map(([id, item]) => (
+          <button
+            key={id}
+            className={id === controller.selected ? "active" : ""}
+            onClick={() => controller.select(id)}
+            title={item.path}
+          >
+            <File size={14} />
+            <span>{item.path.split("/").pop()}</span>
+          </button>
+        ))}
       </div>
       <div className="workbench-editor-toolbar">
         <span>
-          {doc?.path || controller.workspace?.root_path || "文件工作区"}
+          {doc?.path ||
+            preview?.path ||
+            controller.workspace?.root_path ||
+            "文件工作区"}
         </span>
         <span className="workbench-route">文件 · {controller.connection}</span>
+        {markdown && (
+          <div className="markdown-modes" aria-label="Markdown 视图">
+            <button
+              className={markdownMode === "edit" ? "active" : ""}
+              onClick={() => setMarkdownMode("edit")}
+            >
+              编辑
+            </button>
+            <button
+              className={markdownMode === "preview" ? "active" : ""}
+              onClick={() => setMarkdownMode("preview")}
+            >
+              预览
+            </button>
+            <button
+              className={markdownMode === "split" ? "active" : ""}
+              onClick={() => setMarkdownMode("split")}
+            >
+              并排
+            </button>
+          </div>
+        )}
         {doc && (
           <button
             className="secondary"
@@ -203,15 +257,54 @@ export function WorkspaceEditor({
         </div>
       )}
       {doc ? (
+        <div className="workbench-document">
+          <div
+            className={
+              "workbench-code " +
+              (markdown && markdownMode === "preview" ? "hidden" : "")
+            }
+          >
+            <Suspense
+              fallback={<div className="workbench-empty">正在加载编辑器…</div>}
+            >
+              <MonacoEditor
+                document={doc}
+                onChange={(text) => controller.edit(doc, text)}
+                onSave={() => void controller.save(doc)}
+              />
+            </Suspense>
+          </div>
+          {markdown &&
+            markdownMode !== "edit" &&
+            (controller.client ? (
+              <Suspense
+                fallback={
+                  <div className="workbench-empty">正在加载 Markdown 预览…</div>
+                }
+              >
+                <MarkdownPreview
+                  text={doc.text}
+                  path={doc.path}
+                  client={controller.client}
+                  onOpen={(path) => void controller.openFile(path)}
+                />
+              </Suspense>
+            ) : (
+              <div className="workbench-empty">文件连接已断开</div>
+            ))}
+        </div>
+      ) : preview && controller.client ? (
         <Suspense
-          fallback={<div className="workbench-empty">正在加载编辑器…</div>}
+          fallback={<div className="workbench-empty">正在加载预览…</div>}
         >
-          <MonacoEditor
-            document={doc}
-            onChange={(text) => controller.edit(doc, text)}
-            onSave={() => void controller.save(doc)}
-          />
+          {preview.kind === "image" ? (
+            <ImagePreview client={controller.client} preview={preview} />
+          ) : (
+            <PDFPreview client={controller.client} preview={preview} />
+          )}
         </Suspense>
+      ) : preview ? (
+        <div className="workbench-empty">文件连接已断开</div>
       ) : (
         <div className="workbench-empty">
           从左侧选择文件，或在下方继续使用终端。

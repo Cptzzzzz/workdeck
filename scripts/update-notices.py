@@ -38,6 +38,20 @@ def main():
     rows = []
     for name, version, directory in entries:
         files = sorted(p for p in directory.iterdir() if p.is_file() and p.name.upper().startswith(("LICENSE", "COPYING", "NOTICE")))
+        if name == "pdfjs-dist":
+            files += sorted((directory / "standard_fonts").glob("LICENSE*"))
+        # The optional, platform-specific canvas packages ship the native
+        # binary without a separate license file; their metadata declares the
+        # same MIT license and upstream repository as the parent package.
+        if not files and name.startswith("@napi-rs/canvas-"):
+            info = json.loads((directory / "package.json").read_text())
+            parent_dir = directory.parent / "canvas"
+            parent_info = json.loads((parent_dir / "package.json").read_text())
+            parent = parent_dir / "LICENSE"
+            if (info.get("license") == parent_info.get("license") == "MIT"
+                    and info.get("repository") == parent_info.get("repository")
+                    and parent.is_file()):
+                files = [parent]
         if not files:
             raise SystemExit(f"未找到许可原文：{name} {version}；请人工核对。")
         links = []

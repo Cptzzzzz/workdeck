@@ -18,6 +18,7 @@ import type {
   Workspace,
 } from "../../services/files/types";
 import type { TerminalRecord } from "../../types";
+import { previewKind } from "./preview-utils";
 
 type Directory = { entries: FileEntry[]; truncated: boolean };
 export type Document = {
@@ -36,6 +37,13 @@ export type Document = {
   warning: string;
   message: string;
   persistenceError: string;
+};
+export type BinaryPreview = {
+  identity: DraftIdentity;
+  path: string;
+  kind: "image" | "pdf";
+  version: string;
+  size: number;
 };
 const documentKey = (id: DraftIdentity) =>
   JSON.stringify([
@@ -63,6 +71,7 @@ export function useWorkspace(
   const clientRef = useRef<FileClient | null>(null),
     generation = useRef(0);
   const docs = useRef(new Map<string, Document>()),
+    previews = useRef(new Map<string, BinaryPreview>()),
     selections = useRef(new Map<string, string>()),
     timers = useRef(new Map<string, number>()),
     queues = useRef(new Map<string, Promise<void>>());
@@ -286,6 +295,24 @@ export function useWorkspace(
         return;
       }
       try {
+        const kind = previewKind(path);
+        if (kind) {
+          const entry = await client.stat(path);
+          if (gen !== generation.current) return;
+          if (entry.kind !== "file" || !entry.version)
+            throw new Error("文件无法预览");
+          previews.current.set(key, {
+            identity,
+            path,
+            kind,
+            version: entry.version,
+            size: entry.size,
+          });
+          selections.current.set(w.id, key);
+          setSelected(key);
+          update();
+          return;
+        }
         const { entry, bytes } = await client.readBytes(path);
         if (!entry.version) throw new Error("文件缺少版本信息");
         const bom =
@@ -365,11 +392,18 @@ export function useWorkspace(
     [workspace, terminal?.id, terminal?.node_id, account, update],
   );
   const selectedDocument = selected ? docs.current.get(selected) : undefined;
+  const selectedPreview = selected ? previews.current.get(selected) : undefined;
   const document =
     selectedDocument?.identity.workspaceID === workspace?.id &&
     selectedDocument?.identity.rootRevision === workspace?.root_revision &&
     selectedDocument?.identity.account === account
       ? selectedDocument
+      : undefined;
+  const preview =
+    selectedPreview?.identity.workspaceID === workspace?.id &&
+    selectedPreview?.identity.rootRevision === workspace?.root_revision &&
+    selectedPreview?.identity.account === account
+      ? selectedPreview
       : undefined;
   const edit = useCallback(
     (doc: Document, text: string) => {
@@ -446,11 +480,19 @@ export function useWorkspace(
     expanded,
     selected,
     document,
+    preview,
+    client: clientRef.current,
     documents: Array.from(docs.current.entries()).filter(
       ([, d]) =>
         d.identity.workspaceID === workspace?.id &&
         d.identity.rootRevision === workspace?.root_revision &&
         d.identity.account === account,
+    ),
+    previews: Array.from(previews.current.entries()).filter(
+      ([, p]) =>
+        p.identity.workspaceID === workspace?.id &&
+        p.identity.rootRevision === workspace?.root_revision &&
+        p.identity.account === account,
     ),
     refresh,
     toggle,
