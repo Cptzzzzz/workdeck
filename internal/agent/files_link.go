@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -41,16 +42,14 @@ func (a *Agent) attachFiles(parent context.Context, pool *fileWorkerPool, msg pr
 	done := make(chan struct{})
 	defer close(done)
 	go socket.Heartbeat(done)
-	link := fileLink{ctx: ctx, worker: worker, socket: socket, workspace: msg.WorkspaceID, terminal: msg.TerminalID, revision: msg.RootRevision, readers: make(map[string]string), uploads: make(map[string]bool)}
-	defer func() { cancel(); link.closeReaders() }()
-	if err = link.send(files.NewID(time.Now()), "file.ready", map[string]any{"node_time_ms": time.Now().UnixMilli(), "route": "relay"}, nil); err != nil {
+	packets := make(chan filePacket, 8)
+	link := fileLink{ctx: ctx, worker: worker, socket: socket, workspace: msg.WorkspaceID, terminal: msg.TerminalID, revision: msg.RootRevision, readers: make(map[string]string), uploads: make(map[string]bool), active: "relay", epoch: 1}
+	link.peer = &filePeer{ctx: ctx, packets: packets, signal: func(id, kind string, value any) error { return link.sendTo("relay", 1, id, kind, value, nil) }}
+	defer func() { cancel(); link.peer.close(); link.closeReaders() }()
+	directEnabled := os.Getenv("WORKDECK_DIRECT") != "0"
+	if err = link.send(files.NewID(time.Now()), "file.ready", map[string]any{"node_time_ms": time.Now().UnixMilli(), "route": "relay", "direct": directEnabled, "ice_servers": stunURLs()}, nil); err != nil {
 		return err
 	}
-	type packet struct {
-		kind int
-		data []byte
-	}
-	packets := make(chan packet, 8)
 	go func() {
 		defer cancel()
 		for {
@@ -59,7 +58,7 @@ func (a *Agent) attachFiles(parent context.Context, pool *fileWorkerPool, msg pr
 				return
 			}
 			select {
-			case packets <- packet{kind, data}:
+			case packets <- filePacket{route: "relay", kind: kind, data: data}:
 			case <-ctx.Done():
 				return
 			default:
@@ -68,7 +67,7 @@ func (a *Agent) attachFiles(parent context.Context, pool *fileWorkerPool, msg pr
 		}
 	}()
 	for {
-		var frame packet
+		var frame filePacket
 		select {
 		case frame = <-packets:
 		case <-ctx.Done():
@@ -83,16 +82,58 @@ func (a *Agent) attachFiles(parent context.Context, pool *fileWorkerPool, msg pr
 			if err != nil {
 				return err
 			}
-			if request.WorkspaceID != link.workspace || request.RootRevision != link.revision || request.RouteEpoch != 1 {
+			if request.WorkspaceID != link.workspace || request.RootRevision != link.revision {
 				return fileprotocol.ErrFrame
+			}
+			if request.Type == "file.rtc.offer" {
+				if frame.route != "relay" {
+					continue
+				}
+				var offer struct {
+					SDP string `json:"sdp"`
+				}
+				if fileParams(request.Payload, &offer) != nil {
+					return fileprotocol.ErrFrame
+				}
+				link.peer.offer(request.RequestID, offer.SDP)
+				continue
+			}
+			if request.Type == "file.probe" {
+				if request.RouteEpoch == link.epoch {
+					if err = link.sendTo(frame.route, link.epoch, request.RequestID, "file.probe.reply", nil, nil); err != nil && frame.route == "relay" {
+						return err
+					}
+				}
+				continue
+			}
+			if request.RouteEpoch != link.epoch || frame.route != link.active {
+				continue
+			}
+			if request.Type == "file.route" {
+				var change struct {
+					Route string `json:"route"`
+					Epoch uint32 `json:"epoch"`
+				}
+				if fileParams(request.Payload, &change) != nil || link.epoch == ^uint32(0) || change.Epoch != link.epoch+1 || (change.Route != "relay" && change.Route != "direct") || change.Route == link.active || (change.Route == "direct" && !link.peer.available()) {
+					return fileprotocol.ErrFrame
+				}
+				if err = link.send(request.RequestID, "result", map[string]any{"route": change.Route, "epoch": change.Epoch}, nil); err != nil {
+					return err
+				}
+				link.active = change.Route
+				link.epoch = change.Epoch
+				continue
 			}
 			if err = link.control(request); err != nil {
 				return err
 			}
 		} else if kind == websocket.BinaryMessage {
 			chunk, err := fileprotocol.DecodeChunk(data, fileprotocol.UploadChunk)
-			if err != nil || chunk.RouteEpoch != 1 {
+			if err != nil {
 				return fileprotocol.ErrFrame
+			}
+			if frame.route != link.active || chunk.RouteEpoch != link.epoch {
+				continue
 			}
 			if err = link.upload(chunk); err != nil {
 				return err
@@ -111,6 +152,9 @@ type fileLink struct {
 	revision            int64
 	readers             map[string]string // browser read request ID -> private worker handle
 	uploads             map[string]bool
+	peer                *filePeer
+	active              string
+	epoch               uint32
 }
 
 func fileParams(raw json.RawMessage, out any) error {
@@ -145,6 +189,9 @@ func (l *fileLink) call(method string, params any, result any) error {
 	return l.worker.Call(l.ctx, method, l.workspace, l.revision, params, result)
 }
 func (l *fileLink) send(id, kind string, value any, err error) error {
+	return l.sendTo(l.active, l.epoch, id, kind, value, err)
+}
+func (l *fileLink) sendTo(route string, epoch uint32, id, kind string, value any, err error) error {
 	payload := struct {
 		Result any          `json:"result,omitempty"`
 		Error  *files.Error `json:"error,omitempty"`
@@ -162,14 +209,20 @@ func (l *fileLink) send(id, kind string, value any, err error) error {
 	if e != nil {
 		return e
 	}
-	encoded, e := fileprotocol.EncodeControl(fileprotocol.Envelope{Version: 1, Type: kind, RequestID: id, WorkspaceID: l.workspace, RootRevision: l.revision, RouteEpoch: 1, Payload: raw})
+	encoded, e := fileprotocol.EncodeControl(fileprotocol.Envelope{Version: 1, Type: kind, RequestID: id, WorkspaceID: l.workspace, RootRevision: l.revision, RouteEpoch: epoch, Payload: raw})
 	if e != nil {
 		return e
 	}
 	if l.ctx.Err() != nil {
 		return l.ctx.Err()
 	}
-	return l.socket.Write(websocket.TextMessage, encoded)
+	return l.write(route, websocket.TextMessage, encoded)
+}
+func (l *fileLink) write(route string, kind int, data []byte) error {
+	if route == "relay" {
+		return l.socket.Write(kind, data)
+	}
+	return l.peer.write(kind, data)
 }
 func (l *fileLink) control(request fileprotocol.Envelope) error {
 	id := request.RequestID
@@ -218,11 +271,11 @@ func (l *fileLink) control(request fileprotocol.Envelope) error {
 		var data []byte
 		err := l.call("read.chunk", map[string]any{"handle": handle, "offset": p.Offset, "length": p.Length}, &data)
 		if err == nil && len(data) > 0 {
-			encoded, e := fileprotocol.EncodeChunk(fileprotocol.Chunk{Kind: fileprotocol.DownloadChunk, RequestID: id, Offset: p.Offset, RouteEpoch: 1, Data: data})
+			encoded, e := fileprotocol.EncodeChunk(fileprotocol.Chunk{Kind: fileprotocol.DownloadChunk, RequestID: id, Offset: p.Offset, RouteEpoch: l.epoch, Data: data})
 			if e != nil {
 				return e
 			}
-			if e = l.socket.Write(websocket.BinaryMessage, encoded); e != nil {
+			if e = l.write(l.active, websocket.BinaryMessage, encoded); e != nil {
 				return e
 			}
 		}

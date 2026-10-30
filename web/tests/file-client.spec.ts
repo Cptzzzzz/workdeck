@@ -32,7 +32,7 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
       platform: "browser",
       outfile: bundle,
     });
-    await page.goto("/");
+    await page.goto("/?transport=relay");
     const password = readFileSync(
       process.env.WORKDECK_TEST_PASSWORD_FILE!,
       "utf8",
@@ -679,7 +679,7 @@ test("malformed file acknowledgements reject the pending request", async ({
                 data: JSON.stringify({
                   ...request,
                   type: "result",
-                  payload: { result: { bytes: 5 } },
+                  payload: { result: { bytes: 6 } },
                 }),
               }),
             0,
@@ -706,6 +706,140 @@ test("malformed file acknowledgements reject the pending request", async ({
       }
     });
     expect(code).toBe("PROTOCOL_ERROR");
+  } finally {
+    rmSync(bundleDir, { recursive: true, force: true });
+  }
+});
+
+test("read waits when control confirmation arrives before the data channel", async ({
+  page,
+}) => {
+  const bundleDir = mkdtempSync(path.join(os.tmpdir(), "workdeck-file-order-")),
+    bundle = path.join(bundleDir, "client.js");
+  try {
+    await build({
+      entryPoints: [path.resolve("tests/fixtures/file-client-harness.ts")],
+      bundle: true,
+      format: "iife",
+      platform: "browser",
+      outfile: bundle,
+    });
+    await page.goto("/");
+    await page.route("**/__order-harness.js", (route) =>
+      route.fulfill({ path: bundle, contentType: "text/javascript" }),
+    );
+    await page.route("**/api/workspaces/*/connections", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ticket: "1".repeat(48) }),
+      }),
+    );
+    await page.addScriptTag({ url: "/__order-harness.js" });
+    const result = await page.evaluate(async () => {
+      const previous = window.WebSocket,
+        w = {
+          id: "a".repeat(48),
+          terminal_id: "b".repeat(48),
+          root_path: "/fixture",
+          root_revision: 1,
+          run_user: "fixture",
+        };
+      let completedBeforeData = false,
+        completed = false;
+      class FakeSocket {
+        static OPEN = 1;
+        static CLOSING = 2;
+        readyState = 1;
+        binaryType = "";
+        onmessage: any;
+        onclose: any;
+        constructor() {
+          setTimeout(
+            () =>
+              this.onmessage({
+                data: JSON.stringify({
+                  version: 1,
+                  type: "file.ready",
+                  request_id: "c".repeat(48),
+                  workspace_id: w.id,
+                  root_revision: 1,
+                  route_epoch: 1,
+                  payload: {
+                    result: { node_time_ms: Date.now(), route: "relay" },
+                  },
+                }),
+              }),
+            0,
+          );
+        }
+        send(data: string) {
+          const request = JSON.parse(data);
+          const makeFrame = (epoch: number, content: number[]) => {
+            const frame = new ArrayBuffer(53),
+              bytes = new Uint8Array(frame),
+              view = new DataView(frame);
+            bytes.set([87, 68, 70, 49, 1, 2, 0, 0]);
+            for (let i = 0; i < 24; i++)
+              bytes[8 + i] = parseInt(
+                request.request_id.slice(i * 2, i * 2 + 2),
+                16,
+              );
+            view.setBigUint64(32, 0n);
+            view.setUint32(40, 5);
+            view.setUint32(44, epoch);
+            bytes.set(content, 48);
+            return frame;
+          };
+          setTimeout(
+            () => this.onmessage({ data: makeFrame(1, [9, 9, 9, 9, 9]) }),
+            0,
+          );
+          setTimeout(
+            () =>
+              this.onmessage({
+                data: JSON.stringify({
+                  ...request,
+                  type: "result",
+                  payload: { result: { bytes: 5 } },
+                }),
+              }),
+            0,
+          );
+          setTimeout(() => {
+            completedBeforeData = completed;
+            this.onmessage({
+              data: makeFrame(request.route_epoch, [1, 2, 3, 4, 5]),
+            });
+          }, 30);
+        }
+        close() {
+          this.readyState = 3;
+          this.onclose?.();
+        }
+      }
+      (window as any).WebSocket = FakeSocket;
+      try {
+        const client = await (
+          window as any
+        ).workdeckFileTest.FileClient.connect(w);
+        client.epoch = 2;
+        const bytes = await client
+          .readChunk("d".repeat(48), 0, 5)
+          .then((v: Uint8Array) => {
+            completed = true;
+            return v;
+          });
+        client.close();
+        return { completedBeforeData, bytes: Array.from(bytes) };
+      } finally {
+        window.WebSocket = previous;
+      }
+    });
+    expect(result).toEqual({
+      completedBeforeData: false,
+      bytes: [1, 2, 3, 4, 5],
+    });
   } finally {
     rmSync(bundleDir, { recursive: true, force: true });
   }

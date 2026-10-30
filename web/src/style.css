@@ -2338,6 +2338,9 @@ main {
 .workbench-route {
   color: #8fa393;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .workbench-empty {
   flex: 1;

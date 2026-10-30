@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   FileClient,
   FileServiceError,
+  type FileTransportMetrics,
   getWorkspace,
   initializeWorkspace,
   UncertainSaveError,
@@ -81,6 +82,9 @@ export function useWorkspace(
 ) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [connection, setConnection] = useState("等待连接");
+  const [fileMetrics, setFileMetrics] = useState<FileTransportMetrics | null>(
+    null,
+  );
   const [error, setError] = useState("");
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["."]));
@@ -207,6 +211,7 @@ export function useWorkspace(
     setSelected(null);
     setSelectedDirectory(".");
     setIntents([]);
+    setFileMetrics(null);
     setDeletedDrafts([]);
     setError("");
     if (!enabled || !terminal || !account) {
@@ -230,11 +235,19 @@ export function useWorkspace(
         setWorkspace(view.workspace);
         setSelected(selections.current.get(view.workspace.id) || null);
         setConnection("中转连接");
+        connected.onRoute((route) => {
+          if (!stopped && gen === generation.current)
+            setConnection(route === "direct" ? "WebRTC 直连" : "中转连接");
+        });
+        connected.onMetrics((metrics) => {
+          if (!stopped && gen === generation.current) setFileMetrics(metrics);
+        });
         setError("");
         connected.onDisconnect(() => {
           if (!stopped && gen === generation.current) {
             clientRef.current = null;
             setConnection("连接已断开");
+            setFileMetrics(null);
             setError("文件连接已断开，正在尝试恢复");
             retry = window.setTimeout(() => setReconnect((n) => n + 1), 3000);
           }
@@ -1844,6 +1857,8 @@ export function useWorkspace(
   return {
     workspace,
     connection,
+    fileReady: connection === "中转连接" || connection === "WebRTC 直连",
+    fileMetrics,
     error,
     directories,
     expanded,

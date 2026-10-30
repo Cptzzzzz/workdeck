@@ -19,6 +19,7 @@ import {
 import type { WorkspaceController, Document } from "./use-workspace";
 import type { CreateIntent } from "../../services/files/drafts";
 import type { DeleteStatus, DeleteOutcome } from "../../services/files/types";
+import { formatBytes, formatLatency } from "../../network-metrics";
 const MonacoEditor = lazy(() =>
   import("./monaco-editor").then((m) => ({ default: m.MonacoEditor })),
 );
@@ -120,7 +121,7 @@ export function WorkspaceSidebar({
                     disabled={
                       !controller.supportsRename ||
                       controller.renaming ||
-                      controller.connection !== "中转连接"
+                      !controller.fileReady
                     }
                     onClick={() => onRename(child)}
                   >
@@ -135,7 +136,7 @@ export function WorkspaceSidebar({
                     disabled={
                       !controller.supportsDelete ||
                       controller.renaming ||
-                      controller.connection !== "中转连接"
+                      !controller.fileReady
                     }
                     onClick={() => onDelete(child, folder)}
                   >
@@ -205,7 +206,7 @@ export function WorkspaceSidebar({
             disabled={
               !controller.supportsCreate ||
               !controller.workspace ||
-              controller.connection !== "中转连接" ||
+              !controller.fileReady ||
               !!controller.transfer
             }
             onClick={() => chooseUpload()}
@@ -223,7 +224,7 @@ export function WorkspaceSidebar({
             disabled={
               !controller.supportsCreate ||
               !controller.workspace ||
-              controller.connection !== "中转连接"
+              !controller.fileReady
             }
             onClick={onNewItem}
           >
@@ -289,7 +290,7 @@ export function WorkspaceSidebar({
               <button
                 disabled={
                   !controller.supportsCreate ||
-                  controller.connection !== "中转连接" ||
+                  !controller.fileReady ||
                   !!controller.transfer ||
                   controller.renaming ||
                   (intent.kind === "rename" && !controller.supportsRename) ||
@@ -318,10 +319,7 @@ export function WorkspaceSidebar({
               {intent.kind === "upload" && (
                 <>
                   <button
-                    disabled={
-                      controller.connection !== "中转连接" ||
-                      !!controller.transfer
-                    }
+                    disabled={!controller.fileReady || !!controller.transfer}
                     onClick={() =>
                       void controller
                         .checkUploadIntent(intent)
@@ -334,10 +332,7 @@ export function WorkspaceSidebar({
                     核对状态
                   </button>
                   <button
-                    disabled={
-                      controller.connection !== "中转连接" ||
-                      !!controller.transfer
-                    }
+                    disabled={!controller.fileReady || !!controller.transfer}
                     onClick={() =>
                       void controller
                         .checkUploadIntent(intent, true)
@@ -436,7 +431,33 @@ export function WorkspaceEditor({
             controller.workspace?.root_path ||
             "文件工作区"}
         </span>
-        <span className="workbench-route">文件 · {controller.connection}</span>
+        <span
+          className="workbench-route"
+          title={
+            controller.fileMetrics
+              ? `中转 ${formatLatency(controller.fileMetrics.relayLatency)}，直连 ${formatLatency(controller.fileMetrics.directLatency)}；文件数据上行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].sendRate)}/s，下行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].receiveRate)}/s`
+              : "文件链路状态"
+          }
+        >
+          文件 · {controller.connection}
+          {controller.fileMetrics && (
+            <>
+              {" "}
+              · 中转 {formatLatency(controller.fileMetrics.relayLatency)} / 直连{" "}
+              {formatLatency(controller.fileMetrics.directLatency)} · ↑
+              {formatBytes(
+                controller.fileMetrics.traffic[controller.fileMetrics.route]
+                  .sendRate,
+              )}
+              /s ↓
+              {formatBytes(
+                controller.fileMetrics.traffic[controller.fileMetrics.route]
+                  .receiveRate,
+              )}
+              /s
+            </>
+          )}
+        </span>
         {markdown && (
           <div className="markdown-modes" aria-label="Markdown 视图">
             <button
@@ -467,7 +488,7 @@ export function WorkspaceEditor({
               controller.renaming ||
               !!doc.warning ||
               doc.conflict ||
-              controller.connection !== "中转连接"
+              !controller.fileReady
             }
             onClick={() => void controller.save(doc)}
           >
@@ -490,9 +511,7 @@ export function WorkspaceEditor({
           {doc.deleted && (
             <button
               disabled={
-                doc.saving ||
-                controller.renaming ||
-                controller.connection !== "中转连接"
+                doc.saving || controller.renaming || !controller.fileReady
               }
               onClick={() => onSaveDeletedAs(doc)}
             >

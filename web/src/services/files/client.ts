@@ -1,5 +1,7 @@
 import { api } from "../api";
 import { checkTransferAbort, hashBlob } from "./transfer";
+import { FileDirect } from "./direct";
+import type { Route } from "../../transport-policy";
 import {
   decodeChunk,
   encodeChunk,
@@ -39,6 +41,18 @@ export class UncertainSaveError extends FileServiceError {
     this.name = "UncertainSaveError";
   }
 }
+export type FileTraffic = {
+  sent: number;
+  received: number;
+  sendRate: number;
+  receiveRate: number;
+};
+export type FileTransportMetrics = {
+  route: Route;
+  relayLatency?: number;
+  directLatency?: number;
+  traffic: Record<Route, FileTraffic>;
+};
 type WireResult = {
   result?: unknown;
   error?: { code?: string; message?: string };
@@ -51,6 +65,9 @@ type Pending = {
   expectedLength?: number;
   responseType: "result" | "file.write.progress";
   data?: Uint8Array;
+  route: Route;
+  epoch: number;
+  control?: { value: unknown; bytes: number };
 };
 
 export async function getWorkspace(terminalID: string): Promise<WorkspaceView> {
@@ -89,7 +106,26 @@ export class FileClient {
   private onReady?: () => void;
   private onReadyError?: (error: Error) => void;
   private closeListeners = new Set<(error: Error) => void>();
-  readonly route = "relay" as const;
+  private routeListeners = new Set<(route: Route) => void>();
+  private metricListeners = new Set<(metrics: FileTransportMetrics) => void>();
+  private traffic: Record<Route, FileTraffic> = {
+    relay: { sent: 0, received: 0, sendRate: 0, receiveRate: 0 },
+    direct: { sent: 0, received: 0, sendRate: 0, receiveRate: 0 },
+  };
+  private previousTraffic: Record<Route, { sent: number; received: number }> = {
+    relay: { sent: 0, received: 0 },
+    direct: { sent: 0, received: 0 },
+  };
+  private metricsTimer = 0;
+  private lastMeter = 0;
+  private relayLatency?: number;
+  private directLatency?: number;
+  private direct?: FileDirect;
+  private activeRoute: Route = "relay";
+  private epoch = 1;
+  get route(): Route {
+    return this.activeRoute;
+  }
   private constructor(readonly workspace: Workspace) {}
 
   static async connect(
@@ -112,7 +148,7 @@ export class FileClient {
       client.onReady = resolve;
       client.onReadyError = reject;
     });
-    socket.onmessage = (event) => client.receive(event.data);
+    socket.onmessage = (event) => client.receive("relay", "relay", event.data);
     socket.onerror = () =>
       client.fail(new FileServiceError("CONNECTION_LOST", "文件连接中断"));
     socket.onclose = () =>
@@ -140,12 +176,36 @@ export class FileClient {
     this.closeListeners.add(listener);
     return () => this.closeListeners.delete(listener);
   }
-  close(): void {
-    this.fail(new FileServiceError("CONNECTION_LOST", "文件连接已关闭"));
+  onRoute(listener: (route: Route) => void): () => void {
+    this.routeListeners.add(listener);
+    return () => this.routeListeners.delete(listener);
   }
-  private fail(error: Error): void {
+  onMetrics(listener: (metrics: FileTransportMetrics) => void): () => void {
+    this.metricListeners.add(listener);
+    this.publishMetrics();
+    return () => this.metricListeners.delete(listener);
+  }
+  private publishMetrics(): void {
+    const value: FileTransportMetrics = {
+      route: this.activeRoute,
+      relayLatency: this.relayLatency,
+      directLatency: this.directLatency,
+      traffic: {
+        relay: { ...this.traffic.relay },
+        direct: { ...this.traffic.direct },
+      },
+    };
+    for (const listener of this.metricListeners) listener(value);
+  }
+  close(): void {
+    this.fail(new FileServiceError("CONNECTION_LOST", "文件连接已关闭"), true);
+  }
+  private fail(error: Error, intentional = false): void {
     if (this.closed) return;
     this.closed = true;
+    if (!intentional && this.activeRoute === "direct") this.direct?.penalize();
+    this.direct?.close();
+    if (this.metricsTimer) clearInterval(this.metricsTimer);
     this.ready = false;
     this.onReadyError?.(error);
     this.onReady = undefined;
@@ -159,20 +219,40 @@ export class FileClient {
       this.socket.close();
     for (const listener of this.closeListeners) listener(error);
   }
-  private receive(data: unknown): void {
+  private receive(
+    route: Route,
+    channel: "relay" | "control" | "data",
+    data: unknown,
+  ): void {
     try {
+      if (
+        route === "direct" &&
+        ((channel === "control" && typeof data !== "string") ||
+          (channel === "data" && !(data instanceof ArrayBuffer)))
+      )
+        throw new Error("文件通道消息类型无效");
       if (data instanceof ArrayBuffer) {
+        this.traffic[route].received += data.byteLength;
         const chunk = decodeChunk(data),
           pending = this.pending.get(chunk.requestID);
+        if (chunk.epoch < this.epoch) return;
         if (
           !pending ||
           pending.expectedOffset === undefined ||
           pending.data ||
-          chunk.epoch !== 1 ||
+          chunk.epoch !== pending.epoch ||
+          pending.route !== route ||
           chunk.offset !== pending.expectedOffset
         )
           throw new Error("意外的文件数据块");
         pending.data = chunk.data;
+        if (pending.control) {
+          if (pending.control.bytes !== chunk.data.length)
+            throw new Error("文件块确认长度不一致");
+          this.pending.delete(chunk.requestID);
+          clearTimeout(pending.timer);
+          pending.resolve({ value: pending.control.value, data: chunk.data });
+        }
         return;
       }
       if (
@@ -185,21 +265,40 @@ export class FileClient {
         message.version !== 1 ||
         message.workspace_id !== this.workspace.id ||
         message.root_revision !== this.workspace.root_revision ||
-        message.route_epoch !== 1 ||
         !/^[0-9a-f]{48}$/.test(message.request_id)
       )
         throw new Error("文件消息不属于当前工作区");
       const payload = message.payload as WireResult;
       if (!payload || typeof payload !== "object")
         throw new Error("文件消息内容无效");
+      if (message.type === "file.rtc.answer" && route === "relay") {
+        this.direct?.answer((payload.result as { sdp?: unknown })?.sdp);
+        return;
+      }
+      if (message.type === "file.rtc.unavailable" && route === "relay") {
+        this.direct?.unavailable();
+        return;
+      }
+      if (message.type === "file.probe.reply") {
+        this.direct?.reply(route, message);
+        return;
+      }
+      if (message.route_epoch < this.epoch) return;
       if (message.type === "file.ready" && !this.ready) {
         const result = payload.result as
-          | { node_time_ms?: number; route?: string }
+          | {
+              node_time_ms?: number;
+              route?: string;
+              direct?: boolean;
+              ice_servers?: string[];
+            }
           | undefined;
         if (
           !Number.isSafeInteger(result?.node_time_ms) ||
           result!.node_time_ms! < 0 ||
-          result!.route !== "relay"
+          result!.route !== "relay" ||
+          route !== "relay" ||
+          message.route_epoch !== 1
         )
           throw new Error("节点连接信息无效");
         this.baseTime = result!.node_time_ms!;
@@ -208,10 +307,76 @@ export class FileClient {
         this.onReady?.();
         this.onReady = undefined;
         this.onReadyError = undefined;
+        this.lastMeter = performance.now();
+        this.metricsTimer = window.setInterval(() => {
+          const now = performance.now(),
+            elapsed = Math.max((now - this.lastMeter) / 1000, 0.001);
+          this.lastMeter = now;
+          for (const route of ["relay", "direct"] as const) {
+            const current = this.traffic[route],
+              previous = this.previousTraffic[route];
+            current.sendRate = Math.max(
+              0,
+              (current.sent - previous.sent) / elapsed,
+            );
+            current.receiveRate = Math.max(
+              0,
+              (current.received - previous.received) / elapsed,
+            );
+            previous.sent = current.sent;
+            previous.received = current.received;
+          }
+          this.publishMetrics();
+        }, 1000);
+        if (
+          result?.direct === true &&
+          Array.isArray(result.ice_servers) &&
+          result.ice_servers.length <= 4 &&
+          result.ice_servers.every(
+            (url) =>
+              typeof url === "string" &&
+              url.startsWith("stun:") &&
+              url.length < 256,
+          )
+        ) {
+          this.direct = new FileDirect({
+            workspace: this.workspace,
+            id: () => this.id(),
+            epoch: () => this.epoch,
+            route: () => this.activeRoute,
+            busy: () => this.pending.size > 0,
+            relay: (data) => this.sendWire("relay", "control", data),
+            switchRoute: (target) => this.switchRoute(target),
+            receive: (r, c, d) => this.receive(r, c, d),
+            unavailable: (active) => {
+              this.directLatency = undefined;
+              this.publishMetrics();
+              if (active)
+                this.fail(
+                  new FileServiceError(
+                    "CONNECTION_LOST",
+                    "文件直连中断，正在恢复中转",
+                  ),
+                );
+            },
+            metrics: (relay, direct) => {
+              this.relayLatency = relay ?? undefined;
+              this.directLatency = direct ?? undefined;
+              this.publishMetrics();
+            },
+          });
+          void this.direct.start(result.ice_servers);
+        }
         return;
       }
       const pending = this.pending.get(message.request_id);
-      if (!pending || message.type !== pending.responseType)
+      if (
+        !pending ||
+        message.type !== pending.responseType ||
+        pending.epoch !== message.route_epoch ||
+        pending.route !== route ||
+        pending.control
+      )
         throw new Error("意外的文件响应");
       if (payload.error) {
         this.pending.delete(message.request_id);
@@ -230,9 +395,13 @@ export class FileClient {
           !Number.isInteger(result?.bytes) ||
           result!.bytes! < 0 ||
           result!.bytes! > (pending.expectedLength ?? MAX_CHUNK) ||
-          result!.bytes! !== (pending.data?.length || 0)
+          (pending.data !== undefined && result!.bytes! !== pending.data.length)
         )
           throw new Error("文件块确认长度不一致");
+        if (result!.bytes! > 0 && !pending.data) {
+          pending.control = { value: payload.result, bytes: result!.bytes! };
+          return;
+        }
       }
       this.pending.delete(message.request_id);
       clearTimeout(pending.timer);
@@ -266,61 +435,116 @@ export class FileClient {
       expectedLength?: number;
     } = {},
   ): Promise<{ value: unknown; data?: Uint8Array }> {
-    return this.serial(
-      () =>
-        new Promise((resolve, reject) => {
-          if (
-            !this.ready ||
-            this.closed ||
-            this.socket.readyState !== WebSocket.OPEN
-          ) {
-            reject(new FileServiceError("CONNECTION_LOST", "文件连接未就绪"));
-            return;
-          }
-          const id = options.id || this.id();
-          if (this.pending.has(id)) {
-            reject(new FileServiceError("BUSY", "文件请求标识重复"));
-            return;
-          }
-          const timer = window.setTimeout(
-            () =>
-              this.fail(
-                new FileServiceError(
-                  "CONNECTION_LOST",
-                  "文件操作超时，连接已关闭",
-                ),
-              ),
-            30000,
+    return this.serial(() => this.dispatch(type, payload, options));
+  }
+  private dispatch(
+    type: string,
+    payload: unknown,
+    options: {
+      id?: string;
+      binary?: ArrayBuffer;
+      expectedOffset?: number;
+      expectedLength?: number;
+    } = {},
+  ): Promise<{ value: unknown; data?: Uint8Array }> {
+    return new Promise((resolve, reject) => {
+      if (
+        !this.ready ||
+        this.closed ||
+        this.socket.readyState !== WebSocket.OPEN
+      ) {
+        reject(new FileServiceError("CONNECTION_LOST", "文件连接未就绪"));
+        return;
+      }
+      const id = options.id || this.id();
+      if (this.pending.has(id)) {
+        reject(new FileServiceError("BUSY", "文件请求标识重复"));
+        return;
+      }
+      const timer = window.setTimeout(
+        () =>
+          this.fail(
+            new FileServiceError("CONNECTION_LOST", "文件操作超时，连接已关闭"),
+          ),
+        30000,
+      );
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        expectedOffset: options.expectedOffset,
+        expectedLength: options.expectedLength,
+        responseType: options.binary ? "file.write.progress" : "result",
+        route: this.activeRoute,
+        epoch: this.epoch,
+      });
+      try {
+        if (options.binary) {
+          new DataView(options.binary).setUint32(44, this.epoch);
+          this.sendWire(this.activeRoute, "data", options.binary);
+        } else
+          this.sendWire(
+            this.activeRoute,
+            "control",
+            encodeControl({
+              version: 1,
+              type,
+              request_id: id,
+              workspace_id: this.workspace.id,
+              root_revision: this.workspace.root_revision,
+              route_epoch: this.epoch,
+              payload,
+            }),
           );
-          this.pending.set(id, {
-            resolve,
-            reject,
-            timer,
-            expectedOffset: options.expectedOffset,
-            expectedLength: options.expectedLength,
-            responseType: options.binary ? "file.write.progress" : "result",
-          });
-          try {
-            if (options.binary) this.socket.send(options.binary);
-            else
-              this.socket.send(
-                encodeControl({
-                  version: 1,
-                  type,
-                  request_id: id,
-                  workspace_id: this.workspace.id,
-                  root_revision: this.workspace.root_revision,
-                  route_epoch: 1,
-                  payload,
-                }),
-              );
-          } catch {
-            this.fail(
-              new FileServiceError("CONNECTION_LOST", "发送文件请求失败"),
-            );
-          }
-        }),
-    );
+      } catch {
+        this.fail(new FileServiceError("CONNECTION_LOST", "发送文件请求失败"));
+      }
+    });
+  }
+  private sendWire(
+    route: Route,
+    kind: "control" | "data",
+    data: string | ArrayBuffer,
+  ): void {
+    if (route === "relay") {
+      if (this.socket.readyState !== WebSocket.OPEN)
+        throw new Error("relay closed");
+      this.socket.send(data);
+      if (data instanceof ArrayBuffer)
+        this.traffic[route].sent += data.byteLength;
+      return;
+    }
+    if (!this.direct) throw new Error("direct unavailable");
+    this.direct.send(kind, data);
+    if (data instanceof ArrayBuffer)
+      this.traffic[route].sent += data.byteLength;
+  }
+  private switchRoute(target: Route): Promise<void> {
+    return this.serial(async () => {
+      if (this.closed || target === this.activeRoute) return;
+      try {
+        const next = this.epoch + 1;
+        if (next > 0xffffffff) throw new Error("链路代次耗尽");
+        const reply = (
+          await this.dispatch("file.route", { route: target, epoch: next })
+        ).value as { route?: string; epoch?: number };
+        if (reply?.route !== target || reply.epoch !== next)
+          throw new FileServiceError("PROTOCOL_ERROR", "文件链路切换确认无效");
+        this.activeRoute = target;
+        this.epoch = next;
+        for (const listener of this.routeListeners) listener(target);
+        this.publishMetrics();
+      } catch (e) {
+        this.direct?.penalize();
+        this.fail(
+          new FileServiceError(
+            "CONNECTION_LOST",
+            "文件链路切换未确认，正在恢复中转",
+          ),
+        );
+        throw e;
+      }
+    });
   }
 
   async list(
