@@ -1,5 +1,7 @@
 # 架构与生命周期
 
+本文介绍当前已实现架构。保留现有终端模式并增加文件编辑工作区的后续方案见 [双模式工作区技术方案](workspace-design.md)。
+
 ## 组件与连接
 
 Workdeck 包含公网 Hub、各计算节点上的 Agent，以及浏览器工作台。Hub 使用 Go 和 SQLite；Agent 使用 Go、tmux、systemd；前端使用 React、TypeScript 和 xterm.js。

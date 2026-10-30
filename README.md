@@ -96,6 +96,7 @@ docs/                中文设计、部署、运维和验证文档
 ## 文档与许可
 
 - [架构与生命周期](docs/architecture.md)
+- [双模式工作区技术方案](docs/workspace-design.md)（规划中的文件编辑与预览功能，尚未实现）
 - [部署指南](docs/deployment.md) · [节点接入](docs/agent-setup.md)
 - [运维手册](docs/operations.md) · [验证指南](docs/verification.md)
 - [敏感信息与脱敏规则](docs/security.md) · [安全问题反馈](SECURITY.md)
