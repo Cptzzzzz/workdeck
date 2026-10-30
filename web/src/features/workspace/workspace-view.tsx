@@ -13,7 +13,7 @@ import {
   Trash2,
   Server,
   Settings2,
-  LogOut,
+  UserRound,
   TerminalSquare,
 } from "lucide-react";
 import type { WorkspaceController, Document } from "./use-workspace";
@@ -35,19 +35,19 @@ const PDFPreview = lazy(() =>
 
 export function WorkspaceSidebar({
   controller,
-  onJoin,
-  onCreate,
-  onPassword,
-  onLogout,
+  onSessions,
+  onNodes,
+  onAccount,
+  onSettings,
   onNewItem,
   onRename,
   onDelete,
 }: {
   controller: WorkspaceController;
-  onJoin: () => void;
-  onCreate: () => void;
-  onPassword: () => void;
-  onLogout: () => void;
+  onSessions: () => void;
+  onNodes: () => void;
+  onAccount: () => void;
+  onSettings: () => void;
   onNewItem: () => void;
   onRename: (path: string) => void;
   onDelete: (
@@ -351,18 +351,17 @@ export function WorkspaceSidebar({
         </div>
       )}
       <div className="workbench-management">
-        <button title="新建终端" aria-label="新建终端" onClick={onCreate}>
+        <button title="会话管理" aria-label="会话管理" onClick={onSessions}>
           <TerminalSquare size={17} />
         </button>
-        <button title="接入节点" aria-label="接入节点" onClick={onJoin}>
+        <button title="节点管理" aria-label="节点管理" onClick={onNodes}>
           <Server size={17} />
-          <Plus size={11} />
         </button>
-        <button title="修改密码" aria-label="修改密码" onClick={onPassword}>
+        <button title="账户管理" aria-label="账户管理" onClick={onAccount}>
+          <UserRound size={17} />
+        </button>
+        <button title="设置" aria-label="设置" onClick={onSettings}>
           <Settings2 size={17} />
-        </button>
-        <button title="退出此设备" aria-label="退出此设备" onClick={onLogout}>
-          <LogOut size={17} />
         </button>
       </div>
     </div>

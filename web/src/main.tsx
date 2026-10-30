@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
@@ -52,6 +52,12 @@ import {
   Password,
 } from "./features/management/forms";
 import {
+  SessionsPanel,
+  NodesPanel,
+  AccountPanel,
+  SettingsPanel,
+} from "./features/management/panels";
+import {
   FONT_SIZE_KEY,
   parseFontSize,
   readFontSize,
@@ -59,6 +65,10 @@ import {
 } from "./terminal-preferences";
 
 type Modal =
+  | "sessions"
+  | "nodes"
+  | "account"
+  | "settings"
   | "create"
   | "join"
   | "password"
@@ -128,6 +138,65 @@ function App() {
   const [modal, setModal] = useState<Modal>(null),
     [active, setActive] = useState<string | null>(null),
     [tabs, setTabs] = useState<string[]>([]);
+  const [modalParent, setModalParent] = useState<Modal>(null);
+  const closeModal = () => {
+    setModal(modalParent);
+    setModalParent(null);
+  };
+  const openChild = (child: Modal, parent: Modal) => {
+    setModalParent(parent);
+    setModal(child);
+  };
+  const modalElement = useRef<HTMLElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!modal) {
+      previousFocus.current?.focus();
+      previousFocus.current = null;
+      return;
+    }
+    if (!previousFocus.current && document.activeElement instanceof HTMLElement)
+      previousFocus.current = document.activeElement;
+    const frame = requestAnimationFrame(() => {
+      const root = modalElement.current;
+      const target =
+        root?.querySelector<HTMLElement>("[autofocus]") ||
+        root?.querySelector<HTMLElement>(
+          "button:not([disabled]), input:not([disabled]), select:not([disabled])",
+        );
+      target?.focus();
+    });
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setModal(modalParent);
+        setModalParent(null);
+      } else if (event.key === "Tab") {
+        const focusable = Array.from(
+          modalElement.current?.querySelectorAll<HTMLElement>(
+            "button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])",
+          ) || [],
+        ).filter((el) => el.getClientRects().length);
+        if (!focusable.length) return;
+        const index = focusable.indexOf(document.activeElement as HTMLElement);
+        if (event.shiftKey && index <= 0) {
+          event.preventDefault();
+          focusable.at(-1)?.focus();
+        } else if (
+          !event.shiftKey &&
+          (index === -1 || index === focusable.length - 1)
+        ) {
+          event.preventDefault();
+          focusable[0].focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", keyboard);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", keyboard);
+    };
+  }, [modal, modalParent]);
   const [mode, setMode] = useState<"terminal" | "workspace">(() => {
     try {
       return localStorage.getItem("workdeck.mode.v1") === "workspace"
@@ -448,18 +517,10 @@ function App() {
               setFileDeleteTarget({ path, directory, intent });
               setModal("file-delete");
             }}
-            onCreate={() => setModal("create")}
-            onJoin={() => setModal("join")}
-            onPassword={() => setModal("password")}
-            onLogout={() => {
-              void api("/logout", { method: "POST" })
-                .then(() => {
-                  setUser(null);
-                  setTabs([]);
-                  setActive(null);
-                })
-                .catch((e) => notify((e as Error).message));
-            }}
+            onSessions={() => setModal("sessions")}
+            onNodes={() => setModal("nodes")}
+            onAccount={() => setModal("account")}
+            onSettings={() => setModal("settings")}
           />
         )}
       </aside>
@@ -863,45 +924,101 @@ function App() {
         <div
           className="modal-shade"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setModal(null);
+            if (e.target === e.currentTarget) closeModal();
           }}
         >
           <section
+            ref={modalElement}
             className="modal"
             role="dialog"
             aria-modal="true"
             aria-label={
-              modal === "file-create"
-                ? "新建文件或文件夹"
-                : modal === "file-discard-draft"
-                  ? "移除本地草稿"
-                  : modal === "file-save-as"
-                    ? "另存已删除的草稿"
-                    : modal === "file-delete"
-                      ? "删除文件或文件夹"
-                      : modal === "file-rename"
-                        ? "重命名文件或文件夹"
-                        : modal === "create"
-                          ? "新建终端"
-                          : modal === "join"
-                            ? "接入节点"
-                            : modal === "rename"
-                              ? renameTarget?.kind === "node"
-                                ? "重命名节点"
-                                : "重命名终端"
-                              : modal === "terminate"
-                                ? "终止终端"
-                                : "修改密码"
+              modal === "sessions"
+                ? "会话管理"
+                : modal === "nodes"
+                  ? "节点管理"
+                  : modal === "account"
+                    ? "账户管理"
+                    : modal === "settings"
+                      ? "设置"
+                      : modal === "file-create"
+                        ? "新建文件或文件夹"
+                        : modal === "file-discard-draft"
+                          ? "移除本地草稿"
+                          : modal === "file-save-as"
+                            ? "另存已删除的草稿"
+                            : modal === "file-delete"
+                              ? "删除文件或文件夹"
+                              : modal === "file-rename"
+                                ? "重命名文件或文件夹"
+                                : modal === "create"
+                                  ? "新建终端"
+                                  : modal === "join"
+                                    ? "接入节点"
+                                    : modal === "rename"
+                                      ? renameTarget?.kind === "node"
+                                        ? "重命名节点"
+                                        : "重命名终端"
+                                      : modal === "terminate"
+                                        ? "终止终端"
+                                        : "修改密码"
             }
           >
             <button
               className="modal-close icon-button"
               aria-label="关闭对话框"
-              onClick={() => setModal(null)}
+              onClick={closeModal}
             >
               <X size={20} />
             </button>
-            {modal === "file-discard-draft" && deletedSaveTarget ? (
+            {modal === "sessions" ? (
+              <SessionsPanel
+                nodes={data.nodes}
+                terminals={data.terminals}
+                active={active}
+                onOpen={(id) => {
+                  open(id);
+                  setModal(null);
+                }}
+                onCreate={() => openChild("create", "sessions")}
+                onRename={(t) => {
+                  setRenameTarget({ kind: "terminal", id: t.id, name: t.name });
+                  openChild("rename", "sessions");
+                }}
+                onTerminate={(t) => {
+                  setTerminationTarget(t);
+                  openChild("terminate", "sessions");
+                }}
+              />
+            ) : modal === "nodes" ? (
+              <NodesPanel
+                nodes={data.nodes}
+                terminals={data.terminals}
+                onJoin={() => openChild("join", "nodes")}
+                onRename={(n) => {
+                  setRenameTarget({ kind: "node", id: n.id, name: n.name });
+                  openChild("rename", "nodes");
+                }}
+                onRevoke={(n) => void revoke(n)}
+              />
+            ) : modal === "account" ? (
+              <AccountPanel
+                username={user.username}
+                onPassword={() => openChild("password", "account")}
+                onLogout={() => {
+                  void api("/logout", { method: "POST" })
+                    .then(() => {
+                      setModal(null);
+                      setUser(null);
+                      setTabs([]);
+                      setActive(null);
+                    })
+                    .catch((e) => notify((e as Error).message));
+                }}
+              />
+            ) : modal === "settings" ? (
+              <SettingsPanel fontSize={fontSize} onFontSize={changeFontSize} />
+            ) : modal === "file-discard-draft" && deletedSaveTarget ? (
               <DiscardDeletedDraftForm
                 controller={workspace}
                 doc={deletedSaveTarget}
@@ -943,9 +1060,14 @@ function App() {
             ) : modal === "create" ? (
               <CreateTerminal
                 nodes={data.nodes}
-                selected={filter}
+                selected={
+                  modalParent === "sessions"
+                    ? current?.node_id || filter
+                    : filter
+                }
                 onCreated={async (id) => {
                   setModal(null);
+                  setModalParent(null);
                   await refresh();
                   open(id);
                 }}
@@ -955,7 +1077,7 @@ function App() {
             ) : modal === "rename" && renameTarget ? (
               <RenameForm
                 target={renameTarget}
-                onCancel={() => setModal(null)}
+                onCancel={closeModal}
                 onSaved={(name) => {
                   const target = renameTarget;
                   setData((previous) =>
@@ -975,7 +1097,7 @@ function App() {
                           ),
                         },
                   );
-                  setModal(null);
+                  closeModal();
                   setRenameTarget(null);
                   notify(
                     target.kind === "node"
@@ -991,7 +1113,7 @@ function App() {
                 node={data.nodes.find(
                   (node) => node.id === terminationTarget.node_id,
                 )}
-                onCancel={() => setModal(null)}
+                onCancel={closeModal}
                 onSubmitted={(terminal) => {
                   closeTab(terminal.id);
                   setData((previous) => ({
@@ -1000,7 +1122,7 @@ function App() {
                       item.id === terminal.id ? terminal : item,
                     ),
                   }));
-                  setModal(null);
+                  closeModal();
                   setTerminationTarget(null);
                   notify(
                     terminal.state === "closed"
@@ -1013,7 +1135,7 @@ function App() {
             ) : (
               <Password
                 onSaved={() => {
-                  setModal(null);
+                  closeModal();
                   notify("密码已更新，其他设备需要重新登录");
                 }}
               />

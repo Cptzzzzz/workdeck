@@ -2190,13 +2190,39 @@ main {
   font-size: 12px;
   color: #acbab0;
 }
-.file-tree-entry { display: flex; align-items: center; }
-.file-tree-entry .file-tree-row { min-width: 0; flex: 1; }
-.file-tree-download { flex: none; padding: 5px 8px; color: var(--muted); }
-.file-tree-download:hover { color: #eff3eb; }
-.delete-outcomes { max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
-.delete-outcomes > div { padding: 7px 10px; overflow-wrap: anywhere; border-bottom: 1px solid var(--line); }
-.delete-outcomes small { display: block; color: var(--muted); margin-top: 3px; }
+.file-tree-entry {
+  display: flex;
+  align-items: center;
+}
+.file-tree-entry .file-tree-row {
+  min-width: 0;
+  flex: 1;
+}
+.file-tree-download {
+  flex: none;
+  padding: 5px 8px;
+  color: var(--muted);
+}
+.file-tree-download:hover {
+  color: #eff3eb;
+}
+.delete-outcomes {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 12px 0;
+}
+.delete-outcomes > div {
+  padding: 7px 10px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--line);
+}
+.delete-outcomes small {
+  display: block;
+  color: var(--muted);
+  margin-top: 3px;
+}
 .file-tree-row:hover:not(:disabled) {
   background: #28352b;
   color: #eff3eb;
@@ -2234,6 +2260,104 @@ main {
 .workbench-management button:hover {
   background: #29372b;
   color: #e7e9e6;
+}
+.management-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+  color: #9bad98;
+  font-size: 12px;
+}
+.management-toolbar input {
+  flex: 1;
+  min-width: 0;
+}
+.management-toolbar > span {
+  flex: 1;
+}
+.management-toolbar button,
+.management-account-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.management-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #a5b4a3;
+  font-size: 12px;
+  margin: 14px 0 0;
+}
+.management-check input {
+  width: auto;
+  padding: 0;
+}
+.management-list {
+  margin-top: 12px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.management-item {
+  border: 1px solid #39483b;
+  border-radius: 7px;
+  padding: 12px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.management-item-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.management-item-text b,
+.management-item-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.management-item-text b {
+  font-size: 13px;
+  font-weight: 500;
+}
+.management-item-text small {
+  font-size: 11px;
+  color: #91a491;
+}
+.management-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.management-item-actions button {
+  color: #c2c9af;
+  font-size: 11px;
+}
+.management-item-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.management-empty {
+  padding: 18px 0;
+  color: #91a491;
+  font-size: 12px;
+}
+.management-account-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+}
+.management-setting {
+  display: grid;
+  gap: 8px;
+  margin-top: 24px;
+  font-size: 12px;
+  color: #a5b4a3;
 }
 .workbench-sidebar-grip {
   position: fixed;
