@@ -76,7 +76,7 @@ func (e *Engine) PrepareRootChange(ctx context.Context, workspace string, revisi
 		return RootChange{}, err
 	}
 	var conflictingID int
-	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM operations WHERE id=?`, id).Scan(&conflictingID); err != nil {
+	if err := e.db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM operations WHERE id=?) + (SELECT count(*) FROM mutations WHERE id=?)`, id, id).Scan(&conflictingID); err != nil {
 		return RootChange{}, err
 	}
 	if conflictingID != 0 {
@@ -171,11 +171,11 @@ func (e *Engine) CommitRootChange(ctx context.Context, workspace, id string) (Ro
 		return change, fail("STALE_WORKSPACE", "工作区根目录已改变")
 	}
 	var pending int
-	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM operations WHERE workspace_id=? AND revision=? AND state IN ('receiving','ready','committing','uncertain')`, workspace, change.OldRevision).Scan(&pending); err != nil {
+	if err := e.db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM operations WHERE workspace_id=? AND revision=? AND state IN ('receiving','ready','committing','uncertain')) + (SELECT count(*) FROM mutations WHERE workspace_id=? AND revision=? AND state IN ('prepared','uncertain'))`, workspace, change.OldRevision, workspace, change.OldRevision).Scan(&pending); err != nil {
 		return change, err
 	}
 	if pending != 0 {
-		return change, fail("WORKSPACE_BUSY", "请先完成或取消正在进行的文件保存")
+		return change, fail("WORKSPACE_BUSY", "请先完成或核对正在进行的文件操作")
 	}
 	newRoot, err := os.OpenRoot(change.Candidate.Root)
 	if err != nil {

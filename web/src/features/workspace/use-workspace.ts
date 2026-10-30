@@ -11,6 +11,10 @@ import {
   saveDraft,
   type Draft,
   type DraftIdentity,
+  type CreateIntent,
+  recordCreateIntent,
+  listCreateIntents,
+  removeCreateIntent,
 } from "../../services/files/drafts";
 import type {
   FileEntry,
@@ -60,6 +64,7 @@ export function useWorkspace(
   enabled: boolean,
   terminal: TerminalRecord | undefined,
   account: string,
+  supportsCreate: boolean,
 ) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [connection, setConnection] = useState("等待连接");
@@ -67,6 +72,8 @@ export function useWorkspace(
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["."]));
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedDirectory, setSelectedDirectory] = useState(".");
+  const [intents, setIntents] = useState<CreateIntent[]>([]);
   const [reconnect, setReconnect] = useState(0);
   const clientRef = useRef<FileClient | null>(null),
     generation = useRef(0);
@@ -75,6 +82,7 @@ export function useWorkspace(
     selections = useRef(new Map<string, string>()),
     timers = useRef(new Map<string, number>()),
     queues = useRef(new Map<string, Promise<void>>());
+  const activeIntents = useRef(new Set<string>());
   const [, render] = useReducer((n: number) => n + 1, 0);
   const update = useCallback(() => render(), []);
 
@@ -178,6 +186,8 @@ export function useWorkspace(
     setDirectories({});
     setExpanded(new Set(["."]));
     setSelected(null);
+    setSelectedDirectory(".");
+    setIntents([]);
     setError("");
     if (!enabled || !terminal || !account) {
       setConnection("未连接");
@@ -209,6 +219,24 @@ export function useWorkspace(
             retry = window.setTimeout(() => setReconnect((n) => n + 1), 3000);
           }
         });
+        try {
+          const pending = await listCreateIntents({
+            account,
+            nodeID: terminal.node_id,
+            workspaceID: view.workspace.id,
+            rootRevision: view.workspace.root_revision,
+          });
+          if (!stopped && gen === generation.current)
+            setIntents((old) => [
+              ...pending,
+              ...old.filter(
+                (item) => !pending.some((other) => other.opID === item.opID),
+              ),
+            ]);
+        } catch (e) {
+          if (!stopped && gen === generation.current)
+            setError("无法读取待确认的文件操作：" + (e as Error).message);
+        }
         await loadDirectory(connected, ".", gen);
       } catch (e) {
         if (!stopped && gen === generation.current) {
@@ -254,6 +282,7 @@ export function useWorkspace(
   }, [enabled, workspace, refresh]);
   const toggle = useCallback(
     async (path: string) => {
+      setSelectedDirectory(path);
       if (expanded.has(path)) {
         setExpanded((old) => {
           const next = new Set(old);
@@ -472,12 +501,154 @@ export function useWorkspace(
     [persist, refresh, update],
   );
   const retry = useCallback(() => setReconnect((n) => n + 1), []);
+  const runCreateIntent = useCallback(
+    async (intent: CreateIntent) => {
+      const client = clientRef.current;
+      if (
+        !client ||
+        client.workspace.id !== intent.workspaceID ||
+        client.workspace.root_revision !== intent.rootRevision
+      )
+        throw new Error("工作区已断开或目录已改变");
+      if (activeIntents.current.has(intent.opID))
+        throw new Error("此操作正在进行");
+      activeIntents.current.add(intent.opID);
+      try {
+        let prior;
+        try {
+          prior = await client.operationStatus(
+            intent.opID,
+            intent.kind === "directory" ? "directory.create" : "write",
+          );
+        } catch (e) {
+          if (
+            !(e instanceof FileServiceError) ||
+            e.code !== "OPERATION_NOT_FOUND"
+          )
+            throw e;
+        }
+        if (prior?.state === "committed") {
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((item) => item.opID !== intent.opID));
+          if (clientRef.current === client) await refresh();
+          return;
+        }
+        if (
+          prior?.state === "conflict" ||
+          prior?.state === "failed" ||
+          prior?.state === "aborted"
+        ) {
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((item) => item.opID !== intent.opID));
+          throw new Error(
+            prior.error?.message || "文件操作已终止，请检查目标后重试",
+          );
+        }
+        if (prior?.state === "uncertain" || prior?.state === "committing")
+          throw new Error("节点尚无法确认创建结果，请检查目标后再处理");
+        if (intent.kind === "directory") {
+          const result = await client.createDirectory(intent.opID, intent.path);
+          if (result.state !== "committed")
+            throw new Error("目录创建尚未确认，请稍后核对");
+        } else {
+          const result = await client.save({
+            opID: intent.opID,
+            spec: {
+              path: intent.path,
+              create: true,
+              size: 0,
+              sha256:
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            },
+            content: new Uint8Array(),
+          });
+          if (result.state !== "committed")
+            throw new Error("文件创建尚未确认，请稍后核对");
+        }
+        await removeCreateIntent(intent.opID);
+        setIntents((old) => old.filter((item) => item.opID !== intent.opID));
+        if (clientRef.current === client) await refresh();
+      } catch (e) {
+        if (
+          e instanceof FileServiceError &&
+          [
+            "ALREADY_EXISTS",
+            "CONFLICT",
+            "ID_REUSED",
+            "OPERATION_EXPIRED",
+          ].includes(e.code)
+        ) {
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((item) => item.opID !== intent.opID));
+        }
+        throw e;
+      } finally {
+        activeIntents.current.delete(intent.opID);
+      }
+    },
+    [refresh],
+  );
+  const createItem = useCallback(
+    async (
+      name: string,
+      kind: "file" | "directory",
+      parent: string,
+      expectedWorkspace: string,
+      expectedRevision: number,
+    ) => {
+      const client = clientRef.current,
+        w = workspace,
+        gen = generation.current;
+      if (!client || !w || !terminal) throw new Error("文件连接未就绪");
+      if (w.id !== expectedWorkspace || w.root_revision !== expectedRevision)
+        throw new Error("工作区已改变，请关闭对话框后重新选择目录");
+      if (!supportsCreate) throw new Error("请先升级节点以启用文件创建");
+      if (
+        !name ||
+        name === "." ||
+        name === ".." ||
+        /[\/\\\u0000-\u001f]/.test(name) ||
+        new TextEncoder().encode(name).length > 255
+      )
+        throw new Error("名称无效，请输入单个文件名或文件夹名");
+      const intent: CreateIntent = {
+        account,
+        nodeID: terminal.node_id,
+        workspaceID: w.id,
+        rootRevision: w.root_revision,
+        opID: client.newOperationID(),
+        kind,
+        path: childPath(parent, name),
+        createdAt: Date.now(),
+      };
+      await recordCreateIntent(intent); // durable before the node sees the request
+      if (gen !== generation.current || clientRef.current !== client)
+        throw new Error("工作区已切换，操作已保存，请返回原工作区核对");
+      setIntents((old) => [...old, intent]);
+      await runCreateIntent(intent);
+    },
+    [
+      account,
+      workspace,
+      terminal?.id,
+      terminal?.node_id,
+      runCreateIntent,
+      supportsCreate,
+    ],
+  );
   return {
     workspace,
     connection,
     error,
     directories,
     expanded,
+    selectedDirectory,
+    selectDirectory: setSelectedDirectory,
+    intents,
+    createItem,
+    supportsCreate,
+    retryCreate: runCreateIntent,
+    reportError: setError,
     selected,
     document,
     preview,

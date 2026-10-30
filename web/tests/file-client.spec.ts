@@ -382,3 +382,111 @@ test("malformed file acknowledgements reject the pending request", async ({
     rmSync(bundleDir, { recursive: true, force: true });
   }
 });
+
+test("pending create intents survive migration and prevent duplicate targets", async ({
+  page,
+}) => {
+  const bundleDir = mkdtempSync(
+      path.join(os.tmpdir(), "workdeck-intent-test-"),
+    ),
+    bundle = path.join(bundleDir, "client.js");
+  try {
+    await build({
+      entryPoints: [path.resolve("tests/fixtures/file-client-harness.ts")],
+      bundle: true,
+      format: "iife",
+      platform: "browser",
+      outfile: bundle,
+    });
+    await page.goto("/");
+    await page.route("**/__file-client-harness.js", (route) =>
+      route.fulfill({ path: bundle, contentType: "text/javascript" }),
+    );
+    await page.addScriptTag({ url: "/__file-client-harness.js" });
+    const result = await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("workdeck-workspace-drafts", 1);
+        request.onupgradeneeded = () =>
+          request.result.createObjectStore("drafts");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const identity = {
+        account: "fixture",
+        nodeID: "node",
+        workspaceID: "workspace",
+        rootRevision: 1,
+        path: "old.txt",
+      };
+      const key = JSON.stringify([
+        identity.account,
+        identity.nodeID,
+        identity.workspaceID,
+        identity.rootRevision,
+        identity.path,
+      ]);
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("drafts", "readwrite");
+        tx.objectStore("drafts").put(
+          {
+            identity,
+            baseVersion: "old",
+            baseText: "base",
+            text: "unsaved",
+            sequence: 1,
+            encoding: "utf8",
+            newline: "lf",
+            token: "old-token",
+            updatedAt: 1,
+          },
+          key,
+        );
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+      });
+      db.close();
+      const drafts = (window as any).workdeckFileTest.drafts,
+        scope = {
+          account: "fixture",
+          nodeID: "node",
+          workspaceID: "workspace",
+          rootRevision: 1,
+        };
+      const old = await drafts.loadDraft(identity);
+      const intent = {
+        ...scope,
+        opID: "first",
+        kind: "directory",
+        path: "same",
+        createdAt: 1,
+      };
+      await drafts.recordCreateIntent(intent);
+      let duplicate = false;
+      try {
+        await drafts.recordCreateIntent({
+          ...intent,
+          opID: "second",
+          kind: "file",
+        });
+      } catch {
+        duplicate = true;
+      }
+      const listed = await drafts.listCreateIntents(scope);
+      await drafts.removeCreateIntent("first");
+      return {
+        old: old.text,
+        duplicate,
+        count: listed.length,
+        remaining: (await drafts.listCreateIntents(scope)).length,
+      };
+    });
+    expect(result).toEqual({
+      old: "unsaved",
+      duplicate: true,
+      count: 1,
+      remaining: 0,
+    });
+  } finally {
+    rmSync(bundleDir, { recursive: true, force: true });
+  }
+});

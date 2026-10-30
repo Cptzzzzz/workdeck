@@ -34,6 +34,7 @@ import { useWorkspace } from "./features/workspace/use-workspace";
 import {
   WorkspaceEditor,
   WorkspaceSidebar,
+  CreateItemForm,
 } from "./features/workspace/workspace-view";
 import {
   RenameForm,
@@ -49,7 +50,14 @@ import {
   saveFontSize,
 } from "./terminal-preferences";
 
-type Modal = "create" | "join" | "password" | "rename" | "terminate" | null;
+type Modal =
+  | "create"
+  | "join"
+  | "password"
+  | "rename"
+  | "terminate"
+  | "file-create"
+  | null;
 function layoutNumber(key: string, fallback: number, min: number, max: number) {
   try {
     const value = Number(localStorage.getItem(key));
@@ -139,6 +147,11 @@ function App() {
     mode === "workspace",
     data.terminals.find((t) => t.id === active),
     user?.username || "",
+    !!data.nodes
+      .find(
+        (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
+      )
+      ?.capabilities?.includes("workspace-create-v1"),
   );
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [terminationTarget, setTerminationTarget] = useState<Term | null>(null);
@@ -396,6 +409,7 @@ function App() {
         {mode === "workspace" && (
           <WorkspaceSidebar
             controller={workspace}
+            onNewItem={() => setModal("file-create")}
             onCreate={() => setModal("create")}
             onJoin={() => setModal("join")}
             onPassword={() => setModal("password")}
@@ -809,17 +823,19 @@ function App() {
             role="dialog"
             aria-modal="true"
             aria-label={
-              modal === "create"
-                ? "新建终端"
-                : modal === "join"
-                  ? "接入节点"
-                  : modal === "rename"
-                    ? renameTarget?.kind === "node"
-                      ? "重命名节点"
-                      : "重命名终端"
-                    : modal === "terminate"
-                      ? "终止终端"
-                      : "修改密码"
+              modal === "file-create"
+                ? "新建文件或文件夹"
+                : modal === "create"
+                  ? "新建终端"
+                  : modal === "join"
+                    ? "接入节点"
+                    : modal === "rename"
+                      ? renameTarget?.kind === "node"
+                        ? "重命名节点"
+                        : "重命名终端"
+                      : modal === "terminate"
+                        ? "终止终端"
+                        : "修改密码"
             }
           >
             <button
@@ -829,7 +845,16 @@ function App() {
             >
               <X size={20} />
             </button>
-            {modal === "create" ? (
+            {modal === "file-create" ? (
+              <CreateItemForm
+                controller={workspace}
+                onCancel={() => setModal(null)}
+                onCreated={() => {
+                  setModal(null);
+                  notify("创建成功");
+                }}
+              />
+            ) : modal === "create" ? (
               <CreateTerminal
                 nodes={data.nodes}
                 selected={filter}

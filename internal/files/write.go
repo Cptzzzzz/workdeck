@@ -119,7 +119,7 @@ func (e *Engine) BeginWrite(ctx context.Context, workspace string, revision int6
 		return Operation{}, err
 	}
 	var conflictingID int
-	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM root_changes WHERE id=?`, id).Scan(&conflictingID); err != nil {
+	if err := e.db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM root_changes WHERE id=?) + (SELECT count(*) FROM mutations WHERE id=?)`, id, id).Scan(&conflictingID); err != nil {
 		return Operation{}, err
 	}
 	if conflictingID != 0 {
@@ -358,6 +358,9 @@ func (e *Engine) Append(ctx context.Context, workspace string, revision int64, i
 }
 
 func (e *Engine) Status(ctx context.Context, workspace string, revision int64, id string) (Operation, error) {
+	if !validID(id) {
+		return Operation{}, fail("INVALID_ID", "操作标识无效")
+	}
 	e.commit.Lock()
 	defer e.commit.Unlock()
 	rec, err := e.loadOperation(ctx, id)

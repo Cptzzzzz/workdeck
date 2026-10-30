@@ -431,20 +431,38 @@ export class FileClient {
       content: snapshot,
     };
   }
-  async operationStatus(opID: string): Promise<FileOperation> {
+  newOperationID(): string {
+    return this.id();
+  }
+  async operationStatus(
+    opID: string,
+    kind: "write" | "directory.create" = "write",
+  ): Promise<FileOperation> {
     return this.checkOperation(
       (await this.request("operation.status", { op_id: opID })).value,
       opID,
+      kind,
     );
   }
-  private checkOperation(value: unknown, opID: string): FileOperation {
+  async createDirectory(opID: string, path: string): Promise<FileOperation> {
+    return this.checkOperation(
+      (await this.request("directory.create", { op_id: opID, path })).value,
+      opID,
+      "directory.create",
+    );
+  }
+  private checkOperation(
+    value: unknown,
+    opID: string,
+    kind: "write" | "directory.create" = "write",
+  ): FileOperation {
     const op = value as FileOperation | undefined;
     if (
       !op ||
       op.id !== opID ||
       op.workspace_id !== this.workspace.id ||
       op.root_revision !== this.workspace.root_revision ||
-      op.kind !== "write" ||
+      op.kind !== kind ||
       !Number.isSafeInteger(op.offset) ||
       op.offset < 0 ||
       typeof op.state !== "string"

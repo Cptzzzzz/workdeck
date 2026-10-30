@@ -262,6 +262,27 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			return nil, err
 		}
 		return s.listPage(ctx, r, directoryQuery{Path: p.Path, Hidden: p.Hidden, Filter: p.Filter, Snapshot: p.Snapshot, Offset: p.Offset})
+	case "directory.create":
+		var p struct {
+			OpID string `json:"op_id"`
+			Path string `json:"path"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.CreateDirectory(ctx, r.WorkspaceID, r.Revision, p.OpID, p.Path)
+	case "operation.status":
+		var p struct {
+			OpID string `json:"op_id"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		result, err := s.engine.Status(ctx, r.WorkspaceID, r.Revision, p.OpID)
+		if files.ErrorCode(err) == "OPERATION_NOT_FOUND" {
+			return s.engine.MutationStatus(ctx, r.WorkspaceID, r.Revision, p.OpID)
+		}
+		return result, err
 	case "file.stat":
 		var p struct {
 			Path string `json:"path"`

@@ -33,12 +33,14 @@ export function WorkspaceSidebar({
   onCreate,
   onPassword,
   onLogout,
+  onNewItem,
 }: {
   controller: WorkspaceController;
   onJoin: () => void;
   onCreate: () => void;
   onPassword: () => void;
   onLogout: () => void;
+  onNewItem: () => void;
 }) {
   const renderDirectory = (path: string, depth: number): React.ReactNode => {
     const listing = controller.directories[path];
@@ -52,7 +54,12 @@ export function WorkspaceSidebar({
           return (
             <div key={child}>
               <button
-                className="file-tree-row"
+                className={
+                  "file-tree-row " +
+                  (folder && controller.selectedDirectory === child
+                    ? "selected-directory"
+                    : "")
+                }
                 style={{ paddingLeft: 12 + depth * 15 }}
                 disabled={entry.restricted}
                 title={entry.restricted ? "此文件类型暂不可操作" : child}
@@ -88,24 +95,73 @@ export function WorkspaceSidebar({
     <div className="workbench-sidebar">
       <div className="workbench-sidebar-title">
         <span>资源管理器</span>
-        <button
-          className="icon-button"
-          title="刷新文件树"
-          aria-label="刷新文件树"
-          onClick={() => void controller.refresh()}
-        >
-          <RefreshCw size={15} />
-        </button>
+        <div className="workbench-tree-actions">
+          <button
+            className="icon-button"
+            title={
+              controller.supportsCreate
+                ? "新建文件或文件夹"
+                : "请先升级节点以启用文件创建"
+            }
+            aria-label="新建文件或文件夹"
+            disabled={
+              !controller.supportsCreate ||
+              !controller.workspace ||
+              controller.connection !== "中转连接"
+            }
+            onClick={onNewItem}
+          >
+            <Plus size={16} />
+          </button>
+          <button
+            className="icon-button"
+            title="刷新文件树"
+            aria-label="刷新文件树"
+            onClick={() => void controller.refresh()}
+          >
+            <RefreshCw size={15} />
+          </button>
+        </div>
       </div>
       {controller.workspace ? (
-        <div className="workbench-root" title={controller.workspace.root_path}>
+        <button
+          className={
+            "workbench-root " +
+            (controller.selectedDirectory === "." ? "selected-directory" : "")
+          }
+          title={controller.workspace.root_path}
+          onClick={() => controller.selectDirectory(".")}
+        >
           <Folder size={15} />
           <span>{controller.workspace.root_path}</span>
-        </div>
+        </button>
       ) : (
         <div className="workbench-hint">选择一个终端以浏览其工作目录</div>
       )}
       <div className="file-tree">{renderDirectory(".", 0)}</div>
+      {controller.intents.length > 0 && (
+        <div className="workbench-intents">
+          <b>待确认的创建操作</b>
+          {controller.intents.map((intent) => (
+            <div key={intent.opID}>
+              <span title={intent.path}>{intent.path}</span>
+              <button
+                disabled={
+                  !controller.supportsCreate ||
+                  controller.connection !== "中转连接"
+                }
+                onClick={() =>
+                  void controller
+                    .retryCreate(intent)
+                    .catch((e) => controller.reportError((e as Error).message))
+                }
+              >
+                核对并继续
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="workbench-management">
         <button title="新建终端" aria-label="新建终端" onClick={onCreate}>
           <TerminalSquare size={17} />
@@ -311,5 +367,97 @@ export function WorkspaceEditor({
         </div>
       )}
     </section>
+  );
+}
+
+export function CreateItemForm({
+  controller,
+  onCancel,
+  onCreated,
+}: {
+  controller: WorkspaceController;
+  onCancel: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState(""),
+    [kind, setKind] = useState<"file" | "directory">("file"),
+    [target] = useState(() => ({
+      parent: controller.selectedDirectory,
+      id: controller.workspace?.id || "",
+      revision: controller.workspace?.root_revision || 0,
+    })),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+          await controller.createItem(
+            name,
+            kind,
+            target.parent,
+            target.id,
+            target.revision,
+          );
+          onCreated();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        <Plus size={24} />
+      </div>
+      <h2>新建文件或文件夹</h2>
+      <p className="modal-description">
+        将在工作区目录 {target.parent === "." ? "根目录" : target.parent}{" "}
+        中创建。
+      </p>
+      <label>
+        类型
+        <select
+          aria-label="创建类型"
+          value={kind}
+          onChange={(e) => setKind(e.target.value as "file" | "directory")}
+        >
+          <option value="file">文件</option>
+          <option value="directory">文件夹</option>
+        </select>
+      </label>
+      <label>
+        名称
+        <input
+          aria-label="文件名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+          maxLength={255}
+        />
+      </label>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}。若结果尚未确认，可关闭后在文件树下方核对并继续。
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={onCancel}
+          disabled={busy}
+        >
+          取消
+        </button>
+        <button className="primary" disabled={busy || !name}>
+          {busy ? "正在创建…" : "创建"}
+        </button>
+      </div>
+    </form>
   );
 }

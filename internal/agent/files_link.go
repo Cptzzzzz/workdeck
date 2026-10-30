@@ -174,7 +174,7 @@ func (l *fileLink) send(id, kind string, value any, err error) error {
 func (l *fileLink) control(request fileprotocol.Envelope) error {
 	id := request.RequestID
 	switch request.Type {
-	case "directory.list", "file.stat":
+	case "directory.list", "directory.create", "file.stat":
 		var result json.RawMessage
 		err := l.call(request.Type, request.Payload, &result)
 		return l.send(id, "result", result, err)
@@ -267,7 +267,7 @@ func (l *fileLink) control(request fileprotocol.Envelope) error {
 		if err := fileParams(request.Payload, &p); err != nil {
 			return l.send(id, "result", nil, err)
 		}
-		method := "write.status"
+		method := "operation.status"
 		if request.Type == "file.write.commit" {
 			method = "write.commit"
 		}

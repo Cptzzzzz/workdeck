@@ -2520,3 +2520,46 @@ main {
   max-width: none;
   box-shadow: 0 3px 18px #0008;
 }
+.workbench-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.workbench-root {
+  width: 100%;
+  text-align: left;
+}
+.workbench-root.selected-directory,
+.file-tree-row.selected-directory {
+  background: #27352b;
+  color: #e2ebdf;
+}
+.workbench-intents {
+  max-height: 150px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  padding: 9px 12px;
+  color: #d0b491;
+  font-size: 11px;
+}
+.workbench-intents > b {
+  font-weight: 500;
+}
+.workbench-intents > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+}
+.workbench-intents > div > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.workbench-intents button {
+  color: #e7ad7a;
+  white-space: nowrap;
+  font-size: 10px;
+}

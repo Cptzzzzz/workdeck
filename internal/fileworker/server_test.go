@@ -69,6 +69,22 @@ func TestWorkerRPCFileLifecycleAndScope(t *testing.T) {
 	if errResp != nil {
 		t.Fatal(errResp)
 	}
+	dirID := files.NewID(time.Now())
+	result, errResp := c.call(t, "directory.create", workspace.ID, 1, map[string]any{"op_id": dirID, "path": "new-directory"})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	var directoryOperation files.Operation
+	if err := json.Unmarshal(result, &directoryOperation); err != nil || directoryOperation.State != "committed" || directoryOperation.Kind != "directory.create" {
+		t.Fatal(directoryOperation, err)
+	}
+	result, errResp = c.call(t, "operation.status", workspace.ID, 1, map[string]any{"op_id": dirID})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	if err := json.Unmarshal(result, &directoryOperation); err != nil || directoryOperation.State != "committed" {
+		t.Fatal(directoryOperation, err)
+	}
 	body := []byte("hello workspace\n")
 	sum := sha256.Sum256(body)
 	id := files.NewID(time.Now())
@@ -81,7 +97,7 @@ func TestWorkerRPCFileLifecycleAndScope(t *testing.T) {
 	if errResp != nil {
 		t.Fatal(errResp)
 	}
-	result, errResp := c.call(t, "write.commit", workspace.ID, 1, map[string]any{"op_id": id})
+	result, errResp = c.call(t, "write.commit", workspace.ID, 1, map[string]any{"op_id": id})
 	if errResp != nil {
 		t.Fatal(errResp)
 	}
