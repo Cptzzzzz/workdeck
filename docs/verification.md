@@ -93,3 +93,9 @@ Six relevant browser cases passed: dedicated scrollback cases on both relay and 
 Agent race tests and the Go suite pass. Deployment-host compatibility tests run under root against a different session owner on the older tmux release, verifying existing servers receive mouse and both copy-table arrow bindings without changing their pane PID, including repeated reconnects. Configuration is applied as command arguments, avoiding any need for the previous account to read root-only configuration files.
 
 Positive direct-path acceptance adds a small test-only delay to relay probe replies so localhost scheduling noise cannot unexpectedly choose the relay instead of the path the test needs to exercise. Actual terminal data is not delayed; production path selection is unchanged.
+
+## Terminal bottom-row visibility
+
+FitAddon now measures an inner mount with no padding; visual padding belongs to its outer flex item. This prevents the measured terminal grid from extending into the footer or being clipped horizontally. Header/notice controls retain their height, and expanded network details reserve room for terminal rows on short screens.
+
+A real curses program continuously paints the node terminal's final row while browser acceptance cycles through desktop, narrow, mobile and landscape viewports, toggles network details, and enters/exits fullscreen. The complete rendered last row is checked against the clipping container and footer; hit testing verifies its bottom pixels belong to the terminal. Mobile/fullscreen screenshots were inspected. The existing desktop/mobile terminal lifecycle test also passed. No Agent protocol or terminal-process changes are needed.

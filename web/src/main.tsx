@@ -1798,7 +1798,9 @@ function TerminalView({
               : "节点当前离线，正在等待重新连接。")}
         </div>
       )}
-      <div className="terminal-screen" ref={container} />
+      <div className="terminal-screen">
+        <div className="terminal-mount" ref={container} />
+      </div>
       <div className="mobile-keys">
         <button
           className={ctrl ? "pressed" : ""}

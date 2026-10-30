@@ -888,6 +888,7 @@ main {
 }
 .terminal-heading {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -928,8 +929,17 @@ main {
 .terminal-screen {
   flex: 1;
   min-height: 0;
-  padding: 15px 10px 4px 17px;
+  min-width: 0;
+  padding: 15px 10px 8px 17px;
   overflow: hidden;
+}
+.terminal-mount {
+  /* FitAddon measures its direct parent's height/width. Keep this box free
+     of padding so every proposed row and column actually fits on screen. */
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
 }
 .terminal-screen .xterm {
   height: 100%;
@@ -985,6 +995,7 @@ main {
   white-space: nowrap;
 }
 .terminal-notice {
+  flex-shrink: 0;
   background: #4a302355;
   color: #d3ae8c;
   font-size: 12px;
@@ -1540,7 +1551,7 @@ main {
     width: 28px;
   }
   .terminal-screen {
-    padding: 9px 5px 0 7px;
+    padding: 9px 5px 6px 7px;
   }
   .terminal-statusbar {
     gap: 10px;
@@ -1860,7 +1871,8 @@ main {
 .network-details {
   padding: 14px;
   border-top: 1px solid #2b362d;
-  max-height: 45dvh;
+  /* Reserve room for terminal rows and controls on short/landscape screens. */
+  max-height: min(45dvh, max(0px, calc(100dvh - 360px)));
   overflow: auto;
 }
 .network-current-route {
@@ -2007,7 +2019,6 @@ main {
   }
   .network-details {
     padding: 10px;
-    max-height: 45dvh;
   }
   .network-path-card {
     padding: 9px;
