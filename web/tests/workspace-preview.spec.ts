@@ -183,8 +183,8 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
       "relative link target",
     );
     await page
-      .locator(".workbench-tabs")
-      .getByRole("button", { name: "guide.md" })
+      .locator(".workbench-tabs .workbench-tab-select")
+      .filter({ hasText: "guide.md" })
       .click();
     await page.getByRole("button", { name: "pixel.png", exact: true }).click();
     const standalone = page.getByRole("img", { name: "pixel.png" });
@@ -202,10 +202,53 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
       .toBeGreaterThan(100);
     await page.getByRole("button", { name: "下一页" }).click();
     await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "放大 PDF" }).click();
+    await page.getByRole("button", { name: "放大 PDF" }).click();
+    await expect(page.getByText("156%", { exact: true })).toBeVisible();
     await page.screenshot({
       path: "../test-results/workspace-pdf-preview.png",
     });
     expect(fileBytes).toBeLessThan(fixturePDF().length / 2);
+    const pdfViewport = page.locator(".pdf-viewport");
+    await expect
+      .poll(() =>
+        pdfViewport.evaluate((el) => el.scrollHeight - el.clientHeight),
+      )
+      .toBeGreaterThan(50);
+    await pdfViewport.evaluate((el) => {
+      el.scrollTop = 50;
+      el.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(() => pdfViewport.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
+    await page
+      .locator(".workbench-tabs .workbench-tab-select")
+      .filter({ hasText: "guide.md" })
+      .click();
+    await page
+      .locator(".workbench-tabs .workbench-tab-select")
+      .filter({ hasText: "document.pdf" })
+      .click();
+    await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+    await expect(page.getByText("156%", { exact: true })).toBeVisible();
+    await expect
+      .poll(() => pdfViewport.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() => page.evaluate(() => (window as any).previewRevokes))
+      .toBeGreaterThan(0);
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await page
+      .getByRole("button", { name: "document.pdf", exact: true })
+      .click();
+    await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
+    await expect(page.getByText("156%", { exact: true })).toBeVisible();
+    await expect
+      .poll(() => pdfViewport.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
     const resourceStatuses = await page.evaluate(async () =>
       Promise.all([
         fetch("/assets/pdfjs/standard_fonts/LiberationSans-Regular.ttf").then(
@@ -215,9 +258,6 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
       ]),
     );
     expect(resourceStatuses).toEqual([200, 200]);
-    await expect
-      .poll(() => page.evaluate(() => (window as any).previewRevokes))
-      .toBeGreaterThan(0);
     expect(external).toEqual([]);
     expect(directFiles).toEqual([]);
     expect(pageErrors).toEqual([]);

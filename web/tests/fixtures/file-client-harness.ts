@@ -1,4 +1,5 @@
 import * as drafts from "../../src/services/files/drafts";
+import * as viewState from "../../src/services/files/view-state";
 import {
   FileClient,
   UncertainSaveError,
@@ -11,6 +12,7 @@ Object.assign(window, {
     UncertainSaveError,
     setCSRF,
     drafts,
+    viewState,
     downloadFile,
   },
 });

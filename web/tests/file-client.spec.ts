@@ -522,6 +522,58 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       return { staleDelete, deleted: !(await drafts.loadDraft(identity)) };
     });
     expect(result).toEqual({ staleDelete: true, deleted: true });
+    const viewState = await page.evaluate(async () => {
+      const views = (window as any).workdeckFileTest.viewState;
+      const id = {
+        account: "a",
+        nodeID: crypto.randomUUID(),
+        workspaceID: "workspace",
+        rootRevision: 1,
+        path: "document.pdf",
+      };
+      const other = { ...id, rootRevision: 2 };
+      await Promise.all([
+        views.writePDFView(id, {
+          page: 2,
+          zoom: 1.25,
+          scrollTop: 20,
+          scrollLeft: 0,
+        }),
+        views.writePDFView(id, {
+          page: 3,
+          zoom: 1.5,
+          scrollTop: 40,
+          scrollLeft: 5,
+        }),
+        views.writePDFView(other, {
+          page: 1,
+          zoom: 1,
+          scrollTop: 0,
+          scrollLeft: 0,
+        }),
+      ]);
+      let rejected = false;
+      try {
+        await views.writePDFView(id, {
+          page: 0,
+          zoom: 1,
+          scrollTop: 0,
+          scrollLeft: 0,
+        });
+      } catch {
+        rejected = true;
+      }
+      return {
+        a: await views.readPDFView(id),
+        b: await views.readPDFView(other),
+        rejected,
+      };
+    });
+    expect(viewState).toEqual({
+      a: { page: 3, zoom: 1.5, scrollTop: 40, scrollLeft: 5 },
+      b: { page: 1, zoom: 1, scrollTop: 0, scrollLeft: 0 },
+      rejected: true,
+    });
     const migration = await page.evaluate(async () => {
       const drafts = (window as any).workdeckFileTest.drafts;
       const scope = {

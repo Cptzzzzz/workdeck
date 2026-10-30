@@ -5,6 +5,11 @@ import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
 import type { FileClient } from "../../services/files/client";
 import { MAX_CHUNK } from "../../services/files/protocol";
 import type { BinaryPreview } from "./use-workspace";
+import {
+  readPDFView,
+  writePDFView,
+  type PDFViewState,
+} from "../../services/files/view-state";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerURL;
 const MAX_PDF = 100 * 1024 * 1024,
@@ -72,9 +77,37 @@ export function PDFPreview({
     [page, setPage] = useState(1),
     [zoom, setZoom] = useState(1),
     [error, setError] = useState(""),
+    [viewError, setViewError] = useState(""),
     [width, setWidth] = useState(600);
   const viewport = useRef<HTMLDivElement>(null),
     canvas = useRef<HTMLCanvasElement>(null);
+  const view = useRef<PDFViewState>({
+    page: 1,
+    zoom: 1,
+    scrollTop: 0,
+    scrollLeft: 0,
+  });
+  const viewReady = useRef(false),
+    scrollRestored = useRef(false),
+    mounted = useRef(true),
+    scrollTimer = useRef(0);
+  const persistView = () => {
+    if (!viewReady.current) return;
+    void writePDFView(preview.identity, view.current)
+      .then(() => {
+        if (mounted.current) setViewError("");
+      })
+      .catch((e) => {
+        if (mounted.current) setViewError((e as Error).message);
+      });
+  };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    };
+  }, []);
   useEffect(() => {
     let canceled = false,
       readID = "",
@@ -84,6 +117,8 @@ export function PDFPreview({
     setPage(1);
     setZoom(1);
     setError("");
+    viewReady.current = false;
+    scrollRestored.current = false;
     const fail = (error: Error) => {
       if (canceled) return;
       setError(error.message || "无法读取 PDF");
@@ -97,6 +132,21 @@ export function PDFPreview({
     };
     void (async () => {
       try {
+        let restored: PDFViewState | undefined;
+        try {
+          restored = await readPDFView(preview.identity);
+        } catch (e) {
+          if (!canceled) setViewError((e as Error).message);
+        }
+        if (canceled) return;
+        view.current = restored || {
+          page: 1,
+          zoom: 1,
+          scrollTop: 0,
+          scrollLeft: 0,
+        };
+        setPage(view.current.page);
+        setZoom(view.current.zoom);
         if (
           !Number.isSafeInteger(preview.size) ||
           preview.size < 1 ||
@@ -131,14 +181,23 @@ export function PDFPreview({
           cMapPacked: true,
         });
         const loaded = await task.promise;
-        if (!canceled) setPDF(loaded);
-        else void loaded.destroy().catch(() => {});
+        if (!canceled) {
+          view.current.page = Math.min(view.current.page, loaded.numPages);
+          setPage(view.current.page);
+          setPDF(loaded);
+        } else void loaded.destroy().catch(() => {});
       } catch (e) {
         fail(e as Error);
       }
     })();
     return () => {
       canceled = true;
+      if (scrollTimer.current) {
+        clearTimeout(scrollTimer.current);
+        scrollTimer.current = 0;
+      }
+      persistView();
+      viewReady.current = false;
       range?.abort();
       void task?.destroy().catch(() => {});
       if (readID) void client.closeRead(readID).catch(() => {});
@@ -165,15 +224,22 @@ export function PDFPreview({
         let scale = fit * zoom;
         if (base.width * base.height * scale * scale > 16 * 1024 * 1024)
           scale = Math.sqrt((16 * 1024 * 1024) / (base.width * base.height));
-        const view = item.getViewport({ scale }),
+        const renderView = item.getViewport({ scale }),
           target = canvas.current;
         if (!target) return;
-        target.width = Math.ceil(view.width);
-        target.height = Math.ceil(view.height);
+        target.width = Math.ceil(renderView.width);
+        target.height = Math.ceil(renderView.height);
         const context = target.getContext("2d");
         if (!context) throw new Error("浏览器无法渲染 PDF");
-        render = item.render({ canvasContext: context, viewport: view });
+        render = item.render({ canvasContext: context, viewport: renderView });
         await render.promise;
+        if (!canceled && !scrollRestored.current && viewport.current) {
+          viewport.current.scrollTop = view.current.scrollTop;
+          viewport.current.scrollLeft = view.current.scrollLeft;
+          scrollRestored.current = true;
+          viewReady.current = true;
+          persistView();
+        }
       } catch (e) {
         if (!canceled && (e as Error).name !== "RenderingCancelledException")
           setError((e as Error).message || "PDF 页面渲染失败");
@@ -184,6 +250,16 @@ export function PDFPreview({
       render?.cancel();
     };
   }, [pdf, page, zoom, width]);
+  const changePage = (next: number) => {
+    view.current.page = next;
+    setPage(next);
+    persistView();
+  };
+  const changeZoom = (next: number) => {
+    view.current.zoom = next;
+    setZoom(next);
+    persistView();
+  };
   return (
     <div className="media-viewer">
       <div className="media-toolbar">
@@ -191,7 +267,7 @@ export function PDFPreview({
         <button
           aria-label="上一页"
           disabled={!pdf || page <= 1}
-          onClick={() => setPage((n) => n - 1)}
+          onClick={() => changePage(page - 1)}
         >
           <ChevronLeft size={14} />
         </button>
@@ -199,25 +275,45 @@ export function PDFPreview({
         <button
           aria-label="下一页"
           disabled={!pdf || page >= pdf.numPages}
-          onClick={() => setPage((n) => n + 1)}
+          onClick={() => changePage(page + 1)}
         >
           <ChevronRight size={14} />
         </button>
         <button
           aria-label="缩小 PDF"
-          onClick={() => setZoom((n) => Math.max(0.5, n / 1.25))}
+          disabled={!pdf}
+          onClick={() => changeZoom(Math.max(0.5, zoom / 1.25))}
         >
           <Minus size={14} />
         </button>
         <span>{Math.round(zoom * 100)}%</span>
         <button
           aria-label="放大 PDF"
-          onClick={() => setZoom((n) => Math.min(3, n * 1.25))}
+          disabled={!pdf}
+          onClick={() => changeZoom(Math.min(3, zoom * 1.25))}
         >
           <Plus size={14} />
         </button>
       </div>
-      <div className="pdf-viewport" ref={viewport}>
+      {viewError && (
+        <div className="workbench-notice">
+          PDF 视图无法持久保存：{viewError}
+        </div>
+      )}
+      <div
+        className="pdf-viewport"
+        ref={viewport}
+        onScroll={() => {
+          if (!viewReady.current || !viewport.current) return;
+          view.current.scrollTop = viewport.current.scrollTop;
+          view.current.scrollLeft = viewport.current.scrollLeft;
+          if (scrollTimer.current) clearTimeout(scrollTimer.current);
+          scrollTimer.current = window.setTimeout(() => {
+            scrollTimer.current = 0;
+            persistView();
+          }, 200);
+        }}
+      >
         {error ? (
           <div className="workbench-empty">{error}</div>
         ) : (

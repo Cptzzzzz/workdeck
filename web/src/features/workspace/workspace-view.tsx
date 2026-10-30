@@ -782,7 +782,11 @@ export function WorkspaceEditor({
           {preview.kind === "image" ? (
             <ImagePreview client={controller.client} preview={preview} />
           ) : (
-            <PDFPreview client={controller.client} preview={preview} />
+            <PDFPreview
+              key={JSON.stringify(preview.identity)}
+              client={controller.client}
+              preview={preview}
+            />
           )}
         </Suspense>
       ) : preview ? (
