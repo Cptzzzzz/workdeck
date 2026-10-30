@@ -117,6 +117,19 @@ function status(t: Term, node?: Node) {
 }
 function App() {
   const [fontSize, setFontSize] = useState(readFontSize);
+  const [autoSave, setAutoSave] = useState(() => {
+    try {
+      return localStorage.getItem("workdeck.editor.autoSave.v1") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const changeAutoSave = useCallback((enabled: boolean) => {
+    setAutoSave(enabled);
+    try {
+      localStorage.setItem("workdeck.editor.autoSave.v1", String(enabled));
+    } catch {}
+  }, []);
   const changeFontSize = useCallback((size: number) => {
     setFontSize(size);
     saveFontSize(size);
@@ -125,6 +138,8 @@ function App() {
     const sync = (event: StorageEvent) => {
       if (event.key === FONT_SIZE_KEY || event.key === null)
         setFontSize(parseFontSize(event.key === null ? null : event.newValue));
+      if (event.key === "workdeck.editor.autoSave.v1" || event.key === null)
+        setAutoSave(event.key !== null && event.newValue === "true");
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
@@ -228,6 +243,7 @@ function App() {
     mode === "workspace",
     data.terminals.find((t) => t.id === active),
     user?.username || "",
+    autoSave,
     !!data.nodes
       .find(
         (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
@@ -1017,7 +1033,12 @@ function App() {
                 }}
               />
             ) : modal === "settings" ? (
-              <SettingsPanel fontSize={fontSize} onFontSize={changeFontSize} />
+              <SettingsPanel
+                fontSize={fontSize}
+                onFontSize={changeFontSize}
+                autoSave={autoSave}
+                onAutoSave={changeAutoSave}
+              />
             ) : modal === "file-discard-draft" && deletedSaveTarget ? (
               <DiscardDeletedDraftForm
                 controller={workspace}

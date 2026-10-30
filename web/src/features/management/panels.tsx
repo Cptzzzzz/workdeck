@@ -219,9 +219,13 @@ export function AccountPanel({
 export function SettingsPanel({
   fontSize,
   onFontSize,
+  autoSave,
+  onAutoSave,
 }: {
   fontSize: number;
   onFontSize: (size: number) => void;
+  autoSave: boolean;
+  onAutoSave: (enabled: boolean) => void;
 }) {
   return (
     <div className="management-panel">
@@ -246,6 +250,17 @@ export function SettingsPanel({
           ))}
         </select>
       </label>
+      <label className="management-check">
+        <input
+          type="checkbox"
+          checked={autoSave}
+          onChange={(e) => onAutoSave(e.target.checked)}
+        />
+        停止输入后自动保存文件
+      </label>
+      <p className="modal-description">
+        默认关闭；遇到冲突、连接中断或保存结果待确认时暂停。
+      </p>
     </div>
   );
 }

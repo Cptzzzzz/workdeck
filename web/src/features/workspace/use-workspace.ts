@@ -76,6 +76,7 @@ export function useWorkspace(
   enabled: boolean,
   terminal: TerminalRecord | undefined,
   account: string,
+  autoSave: boolean,
   supportsCreate: boolean,
   supportsRename: boolean,
   supportsDelete: boolean,
@@ -105,7 +106,7 @@ export function useWorkspace(
   const activeIntents = useRef(new Set<string>());
   const transferAbort = useRef<AbortController | null>(null);
   const renameLock = useRef(false);
-  const [, render] = useReducer((n: number) => n + 1, 0);
+  const [revision, render] = useReducer((n: number) => n + 1, 0);
   const update = useCallback(() => render(), []);
 
   const persist = useCallback(
@@ -719,6 +720,80 @@ export function useWorkspace(
       }
     },
     [persist, refresh, update],
+  );
+  const autoTimers = useRef(
+    new Map<string, { sequence: number; timer: number }>(),
+  );
+  const autoEnabled = useRef(false);
+  autoEnabled.current = enabled && autoSave && !!account && !!workspace;
+  useEffect(() => {
+    const timers = autoTimers.current;
+    const eligible = new Set<string>();
+    if (enabled && autoSave && workspace && clientRef.current) {
+      for (const [id, doc] of docs.current) {
+        if (
+          doc.identity.account !== account ||
+          doc.identity.workspaceID !== workspace.id ||
+          doc.identity.rootRevision !== workspace.root_revision ||
+          doc.text === doc.base ||
+          doc.saving ||
+          doc.pending ||
+          doc.conflict ||
+          doc.deleted ||
+          doc.warning ||
+          doc.message ||
+          doc.persistenceError ||
+          renameLock.current
+        )
+          continue;
+        eligible.add(id);
+        const current = timers.get(id);
+        if (current?.sequence === doc.sequence) continue;
+        if (current) clearTimeout(current.timer);
+        const sequence = doc.sequence;
+        const timer = window.setTimeout(() => {
+          timers.delete(id);
+          if (
+            autoEnabled.current &&
+            doc.sequence === sequence &&
+            docs.current.get(id) === doc &&
+            doc.text !== doc.base &&
+            !doc.saving &&
+            !doc.pending &&
+            !doc.conflict &&
+            !doc.deleted &&
+            !doc.warning &&
+            !doc.message &&
+            !doc.persistenceError &&
+            !renameLock.current
+          )
+            void save(doc);
+        }, 1500);
+        timers.set(id, { sequence, timer });
+      }
+    }
+    for (const [id, entry] of timers)
+      if (!eligible.has(id)) {
+        clearTimeout(entry.timer);
+        timers.delete(id);
+      }
+  }, [
+    account,
+    autoSave,
+    enabled,
+    workspace,
+    connection,
+    renaming,
+    revision,
+    save,
+  ]);
+  useEffect(
+    () => () => {
+      for (const entry of autoTimers.current.values())
+        clearTimeout(entry.timer);
+      autoTimers.current.clear();
+    },
+    [],
   );
   const retry = useCallback(() => setReconnect((n) => n + 1), []);
   const runCreateIntent = useCallback(
