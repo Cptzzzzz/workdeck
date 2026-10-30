@@ -30,6 +30,11 @@ import type {
 } from "./types";
 import { api, setCSRF } from "./services/api";
 import { TerminalView } from "./features/terminal/terminal-view";
+import { useWorkspace } from "./features/workspace/use-workspace";
+import {
+  WorkspaceEditor,
+  WorkspaceSidebar,
+} from "./features/workspace/workspace-view";
 import {
   RenameForm,
   TerminateForm,
@@ -45,6 +50,16 @@ import {
 } from "./terminal-preferences";
 
 type Modal = "create" | "join" | "password" | "rename" | "terminate" | null;
+function layoutNumber(key: string, fallback: number, min: number, max: number) {
+  try {
+    const value = Number(localStorage.getItem(key));
+    return Number.isFinite(value) && value >= min && value <= max
+      ? value
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
 function timeAgo(raw: string) {
   if (!raw) return "尚未连接";
   const m = Math.max(
@@ -93,6 +108,38 @@ function App() {
   const [modal, setModal] = useState<Modal>(null),
     [active, setActive] = useState<string | null>(null),
     [tabs, setTabs] = useState<string[]>([]);
+  const [mode, setMode] = useState<"terminal" | "workspace">(() => {
+    try {
+      return localStorage.getItem("workdeck.mode.v1") === "workspace"
+        ? "workspace"
+        : "terminal";
+    } catch {
+      return "terminal";
+    }
+  });
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    layoutNumber("workdeck.sidebar.v1", 280, 180, 600),
+  );
+  const [editorHeight, setEditorHeight] = useState(() =>
+    layoutNumber("workdeck.editor-height.v1", 55, 20, 80),
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem("workdeck.mode.v1", mode);
+      localStorage.setItem("workdeck.sidebar.v1", String(sidebarWidth));
+      localStorage.setItem("workdeck.editor-height.v1", String(editorHeight));
+    } catch {}
+  }, [mode, sidebarWidth, editorHeight]);
+  const changeMode = async (next: "terminal" | "workspace") => {
+    if (document.fullscreenElement)
+      await document.exitFullscreen().catch(() => {});
+    setMode(next);
+  };
+  const workspace = useWorkspace(
+    mode === "workspace",
+    data.terminals.find((t) => t.id === active),
+    user?.username || "",
+  );
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [terminationTarget, setTerminationTarget] = useState<Term | null>(null);
   const [menu, setMenu] = useState(false),
@@ -238,105 +285,146 @@ function App() {
         .includes(query.toLowerCase()),
   );
   return (
-    <div className="app">
+    <div
+      className={"app " + (mode === "workspace" ? "workbench-mode" : "")}
+      style={
+        {
+          "--workbench-sidebar-width": `${sidebarWidth}px`,
+          "--workbench-editor-height": `${editorHeight}%`,
+        } as React.CSSProperties
+      }
+    >
       {menu && <div className="scrim" onClick={() => setMenu(false)} />}
       <aside className={"sidebar " + (menu ? "shown" : "")}>
-        <Brand />
-        <div className="workspace-label">PERSONAL WORKSPACE</div>
-        <button
-          className={"nav-item " + (filter === "all" ? "selected" : "")}
-          onClick={() => {
-            setFilter("all");
-            setActive(null);
-            setMenu(false);
-          }}
-        >
-          <LayoutGrid size={18} />
-          全部终端<span className="count">{live.length}</span>
-        </button>
-        <div className="nav-section">
-          <span>计算节点</span>
+        <div className={mode === "workspace" ? "hidden" : "legacy-sidebar"}>
+          <Brand />
+          <div className="workspace-label">PERSONAL WORKSPACE</div>
           <button
-            title="接入节点"
-            aria-label="接入节点"
-            onClick={() => setModal("join")}
+            className={"nav-item " + (filter === "all" ? "selected" : "")}
+            onClick={() => {
+              setFilter("all");
+              setActive(null);
+              setMenu(false);
+            }}
           >
-            <Plus size={16} />
+            <LayoutGrid size={18} />
+            全部终端<span className="count">{live.length}</span>
           </button>
-        </div>
-        <div className="node-list">
-          {data.nodes.map((n) => (
+          <div className="nav-section">
+            <span>计算节点</span>
             <button
-              key={n.id}
-              className={
-                "nav-item node-item " + (filter === n.id ? "selected" : "")
-              }
-              onClick={() => {
-                setFilter(n.id);
-                setActive(null);
-                setMenu(false);
-              }}
+              title="接入节点"
+              aria-label="接入节点"
+              onClick={() => setModal("join")}
             >
-              <Server size={17} />
-              <span className="node-name">
-                {n.name}
-                <small>
-                  {n.platform || "等待首次连接"}
-                  {n.run_user ? " · " + n.run_user : ""}
-                </small>
-              </span>
-              <i className={"dot " + (n.online ? "online" : "")} />
+              <Plus size={16} />
             </button>
-          ))}
-          {!data.nodes.length && (
-            <div className="sidebar-empty">
-              接入第一台机器，
-              <br />
-              随时回到你的工作现场。
-            </div>
-          )}
-        </div>
-        <button className="add-node" onClick={() => setModal("join")}>
-          <Plus size={16} />
-          接入新节点
-        </button>
-        <div className="sidebar-bottom">
-          <div className="secure-note">
-            <ShieldCheck size={16} />
-            <span>加密连接 · 会话独立运行</span>
           </div>
-          <div className="profile">
-            <div className="avatar">{user.username[0]?.toUpperCase()}</div>
-            <div>
-              <b>{user.username}</b>
-              <small>个人工作台</small>
+          <div className="node-list">
+            {data.nodes.map((n) => (
+              <button
+                key={n.id}
+                className={
+                  "nav-item node-item " + (filter === n.id ? "selected" : "")
+                }
+                onClick={() => {
+                  setFilter(n.id);
+                  setActive(null);
+                  setMenu(false);
+                }}
+              >
+                <Server size={17} />
+                <span className="node-name">
+                  {n.name}
+                  <small>
+                    {n.platform || "等待首次连接"}
+                    {n.run_user ? " · " + n.run_user : ""}
+                  </small>
+                </span>
+                <i className={"dot " + (n.online ? "online" : "")} />
+              </button>
+            ))}
+            {!data.nodes.length && (
+              <div className="sidebar-empty">
+                接入第一台机器，
+                <br />
+                随时回到你的工作现场。
+              </div>
+            )}
+          </div>
+          <button className="add-node" onClick={() => setModal("join")}>
+            <Plus size={16} />
+            接入新节点
+          </button>
+          <div className="sidebar-bottom">
+            <div className="secure-note">
+              <ShieldCheck size={16} />
+              <span>加密连接 · 会话独立运行</span>
             </div>
-            <button
-              title="修改密码"
-              aria-label="修改密码"
-              onClick={() => setModal("password")}
-            >
-              <Settings2 size={17} />
-            </button>
-            <button
-              title="退出此设备"
-              aria-label="退出此设备"
-              onClick={async () => {
-                try {
-                  await api("/logout", { method: "POST" });
+            <div className="profile">
+              <div className="avatar">{user.username[0]?.toUpperCase()}</div>
+              <div>
+                <b>{user.username}</b>
+                <small>个人工作台</small>
+              </div>
+              <button
+                title="修改密码"
+                aria-label="修改密码"
+                onClick={() => setModal("password")}
+              >
+                <Settings2 size={17} />
+              </button>
+              <button
+                title="退出此设备"
+                aria-label="退出此设备"
+                onClick={async () => {
+                  try {
+                    await api("/logout", { method: "POST" });
+                    setUser(null);
+                    setTabs([]);
+                    setActive(null);
+                  } catch (e) {
+                    notify((e as Error).message);
+                  }
+                }}
+              >
+                <LogOut size={17} />
+              </button>
+            </div>
+          </div>
+        </div>
+        {mode === "workspace" && (
+          <WorkspaceSidebar
+            controller={workspace}
+            onCreate={() => setModal("create")}
+            onJoin={() => setModal("join")}
+            onPassword={() => setModal("password")}
+            onLogout={() => {
+              void api("/logout", { method: "POST" })
+                .then(() => {
                   setUser(null);
                   setTabs([]);
                   setActive(null);
-                } catch (e) {
-                  notify((e as Error).message);
-                }
-              }}
-            >
-              <LogOut size={17} />
-            </button>
-          </div>
-        </div>
+                })
+                .catch((e) => notify((e as Error).message));
+            }}
+          />
+        )}
       </aside>
+      {mode === "workspace" && (
+        <div
+          className="workbench-sidebar-grip"
+          role="separator"
+          aria-label="调整文件树宽度"
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId))
+              setSidebarWidth(Math.max(180, Math.min(600, event.clientX)));
+          }}
+        />
+      )}
       <main>
         <header className="topbar">
           <button
@@ -352,6 +440,20 @@ function App() {
             <b>{active ? "终端" : selected?.name || "全部终端"}</b>
           </div>
           <div className="topbar-right">
+            <div className="mode-switch" aria-label="视图模式">
+              <button
+                className={mode === "terminal" ? "active" : ""}
+                onClick={() => void changeMode("terminal")}
+              >
+                终端模式
+              </button>
+              <button
+                className={mode === "workspace" ? "active" : ""}
+                onClick={() => void changeMode("workspace")}
+              >
+                工作区模式
+              </button>
+            </div>
             <span className="connection-status">
               <i className={"dot " + (!refreshError ? "online" : "")} />
               {refreshError ? "连接中断" : "工作台已连接"}
@@ -635,23 +737,56 @@ function App() {
             <span>v0.1</span>
           </footer>
         </div>
-        {tabs.map((id) => {
-          const t = data.terminals.find((t) => t.id === id);
-          if (!t) return null;
-          return (
-            <TerminalView
-              key={id}
-              terminal={t}
-              node={data.nodes.find((n) => n.id === t.node_id)}
-              visible={active === id}
-              fontSize={fontSize}
-              onFontSizeChange={changeFontSize}
-              onBack={() => setActive(null)}
-              onStop={() => void stop(t)}
-              notify={notify}
+        <div className={"sessions-host " + (!active ? "hidden" : "")}>
+          {mode === "workspace" && active && (
+            <WorkspaceEditor controller={workspace} />
+          )}
+          {mode === "workspace" && active && (
+            <div
+              className="workbench-height-grip"
+              role="separator"
+              aria-label="调整编辑器和终端高度"
+              onPointerDown={(event) =>
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }
+              onPointerMove={(event) => {
+                if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                  return;
+                const box =
+                  event.currentTarget.parentElement?.getBoundingClientRect();
+                if (box)
+                  setEditorHeight(
+                    Math.max(
+                      20,
+                      Math.min(
+                        80,
+                        (100 * (event.clientY - box.top)) / box.height,
+                      ),
+                    ),
+                  );
+              }}
             />
-          );
-        })}
+          )}
+          <div className="terminal-sessions">
+            {tabs.map((id) => {
+              const t = data.terminals.find((t) => t.id === id);
+              if (!t) return null;
+              return (
+                <TerminalView
+                  key={id}
+                  terminal={t}
+                  node={data.nodes.find((n) => n.id === t.node_id)}
+                  visible={active === id}
+                  fontSize={fontSize}
+                  onFontSizeChange={changeFontSize}
+                  onBack={() => setActive(null)}
+                  onStop={() => void stop(t)}
+                  notify={notify}
+                />
+              );
+            })}
+          </div>
+        </div>
       </main>
       {toast && (
         <div className="toast" role="status">

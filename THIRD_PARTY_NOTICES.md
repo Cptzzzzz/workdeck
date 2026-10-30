@@ -43,6 +43,7 @@ xterm.js 5.5.0 包含本项目的字宽测量与逻辑列定位补丁，见 `scr
 | @xterm/addon-fit | 0.10.0 | [LICENSE](third_party/licenses/_xterm_addon-fit--LICENSE.txt) |
 | @xterm/xterm | 5.5.0 | [LICENSE](third_party/licenses/_xterm_xterm--LICENSE.txt) |
 | lucide-react | 0.468.0 | [LICENSE](third_party/licenses/lucide-react--LICENSE.txt) |
+| monaco-editor | 0.52.2 | [LICENSE](third_party/licenses/monaco-editor--LICENSE.txt) |
 | react-dom | 19.3.1 | [LICENSE](third_party/licenses/react-dom--LICENSE.txt) |
 | react | 19.3.1 | [LICENSE](third_party/licenses/react--LICENSE.txt) |
 | scheduler | 0.28.0 | [LICENSE](third_party/licenses/scheduler--LICENSE.txt) |
