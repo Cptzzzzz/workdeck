@@ -45,7 +45,7 @@ case "$version" in ''|*[!a-zA-Z0-9_.-]*) echo 'Invalid build version' >&2; exit 
 cp /etc/ssl/certs/ca-certificates.crt deploy/ca-certificates.crt
 archive="$(mktemp)"
 trap 'rm -f "$archive"' EXIT HUP INT TERM
-tar -czf "$archive" bin/workdeck-linux-amd64 web/dist deploy/Dockerfile deploy/ca-certificates.crt deploy/compose.yml deploy/Caddyfile.snippet
+tar -czf "$archive" bin/workdeck-linux-amd64 web/dist deploy/Dockerfile deploy/ca-certificates.crt deploy/compose.yml deploy/Caddyfile.snippet LICENSE THIRD_PARTY_NOTICES.md third_party
 ssh "$server" sh -s -- "$deploy_dir" <<'REMOTE'
 set -eu
 root="$1"

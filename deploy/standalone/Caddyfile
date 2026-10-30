@@ -1,0 +1,4 @@
+{$WORKDECK_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy hub:8090
+}

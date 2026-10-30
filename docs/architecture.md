@@ -1,66 +1,76 @@
-# Architecture and lifecycle
+# 架构与生命周期
 
-## Connection model
+## 组件与连接
 
-The Agent initiates a signed WSS control connection to the Hub. Heartbeat inventories report node identity, platform, working-user home, and observed terminal state. The Hub never dials a private node address.
+Workdeck 包含公网 Hub、各计算节点上的 Agent，以及浏览器工作台。Hub 使用 Go 和 SQLite；Agent 使用 Go、tmux、systemd；前端使用 React、TypeScript 和 xterm.js。
 
-For each browser attachment, the Hub issues a 15-second one-time ticket. The Agent initiates a separate authenticated data WSS connection carrying that ticket. The Hub pairs the two sockets. Binary frames transport PTY bytes; text frames transport resize events and processed-output acknowledgments. The control socket is independent of noisy terminal output.
+Agent 主动建立带签名的 WSS 控制连接，定期上报节点身份、平台、实际运行账户、主目录与完整终端清单。Hub 不主动拨号到内网节点，因此节点无需公网 IP 或固定入站端口。
 
-The relay is immediately usable. New browsers and Agents optionally negotiate a reliable, ordered WebRTC DataChannel over that same authenticated attachment. Six paired, small end-to-end probes compare relay/direct median RTT, tail latency, and failures. A materially faster direct path wins; nearly equivalent paths prefer direct to save relay bandwidth. A slower or inconsistent direct path leaves terminal traffic on the relay. This is an interactive-latency heuristic, not a throughput benchmark or a guarantee of a globally optimal route.
+浏览器连接终端时，Hub 发出 15 秒有效的一次性连接票据。Agent 使用该票据主动建立另一条数据 WSS，Hub 将其与浏览器连接配对。二进制消息传送 PTY 字节，文本消息传送尺寸、输出确认和控制信息。控制连接与终端输出分开，避免大量输出阻塞节点管理。
 
-The browser repeats route comparisons approximately once a minute while visible. Lightweight end-to-end probes refresh the relay and any open direct channel every five seconds, including the currently unused candidate. Hysteresis and a minimum switch interval prevent small fluctuations from continually changing routes. Failed direct attempts have a two-minute browser cooldown; unsupported browsers and older Agents keep using the original relay. Returning a backgrounded page to the foreground requests another comparison when a peer is available.
+## 可选 WebRTC 直连
 
-The terminal network strip displays both paths' RTT and the committed active route. Its expandable panel shows rolling median RTT over at most twelve probes, mean absolute changes between adjacent valid RTTs as jitter, and probe timeout counts. Timeouts are not interpreted as IP packet loss. Measurement timestamps distinguish stale/unknown values from a measured zero. Terminal payload bytes are counted separately for each path and direction; one-second byte deltas use actual monotonic elapsed time for transfer rates. Counters describe this browser attachment only, exclude signaling/probe/framing traffic, and are not a measurement of link capacity or the host network interface.
+终端先使用 WebSocket 中转，随后通过同一个已认证连接协商可靠、有序的 WebRTC DataChannel。六组成对探测比较中转与直连的 RTT 中位数、尾部延迟和失败情况：直连更快，或表现接近且稳定时优先直连；较慢或不稳定时继续中转。
 
-Path changes preserve the same PTY. The Agent fences output on the old ordered channel, pauses output, and waits for a matching commit on the target channel before resuming. The browser buffers a bounded amount of input only during this live handshake; it never replays unconfirmed input after a connection failure. A broken direct connection reattaches through the relay and redraws the existing tmux session. Backpressure and controller/readonly rules apply to both transports.
+页面可见时约每分钟重新比较，路径每五秒进行轻量端到端探测。迟滞、最短切换间隔和失败后两分钟冷却避免频繁切换。这是交互延迟策略，不是吞吐量压测，也不保证全局最优路径。
 
-The browser↔Hub and Agent↔Hub WebSockets remain open as the authorization lease and signaling path. Logout, node revocation, terminal closure, Hub/Agent reconnection, or takeover closes the corresponding direct attachment too. The Agent independently checks the current per-terminal controller ticket for direct input and canonical resizing. No TURN service is required: direct candidates are attempted, and WebSocket remains the fallback. No stable inbound terminal port or manual router mapping is required; successful direct traffic requires suitable UDP/NAT/firewall conditions.
+切换时，Agent 在旧的有序通道建立输出边界，暂停输出，收到目标通道的匹配提交后继续。浏览器只在这段在线握手中短暂缓存有上限的输入；连接失败后不重放未确认输入。直连断开会通过中转重新附着同一个 tmux 并重绘画面，不重新启动终端程序。
 
-The creating service account is recorded with each terminal; root Agents can retain access to migrated sessions owned by an earlier account. Each attachment launches `tmux attach-session` inside its own PTY. The actual shell belongs to a separate, per-terminal tmux server supervised by a separate systemd unit (system scope for root, user scope for ordinary accounts). Disconnecting or upgrading the Agent destroys attachments but not session units.
+原有浏览器 / Agent 到 Hub 的 WebSocket 始终承担授权租约和信令。退出登录、撤销节点、接管控制权、终止终端或管理连接重建，会关闭对应直连。Agent 独立校验控制者票据。未配置 TURN；浏览器不会把中继候选当作直连。UDP、NAT 或防火墙不满足条件时，继续中转即可。
 
-## Ownership and size
+网络面板显示实际提交完成的链路，并同时展示两条路径的延迟。延迟使用最近至多 12 个有效样本的中位数，抖动为相邻有效 RTT 的平均绝对变化。探测超时不等同于 IP 丢包。带宽数字来自当前浏览器连接中终端字节的实际增量，按单调时钟计算速率，不含信令、探测和协议开销，也不是接口带宽容量。
 
-The Hub tracks one controller per terminal. Other attachments use tmux readonly clients. The Agent explicitly applies canonical window dimensions only for the current controller; viewer PTY dimensions affect only their viewport. This also supports older tmux releases without latest/ignore-size behavior. Input is checked by the Hub and Agent. A readonly viewer can resize its own viewport without changing the running program's canonical dimensions. Takeover reserves ownership for the new attachment before disconnecting the old controller; the old browser reconnects readonly.
+## 终端持久化与服务账户
 
-The browser sends cols/rows on layout changes; the Agent applies those to the attachment PTY. tmux relays appropriate size changes to its pane. The browser never queues/replays input across reconnections.
+每个终端都有独立的 tmux 服务和 systemd 单元。Shell 属于这个独立单元；浏览器连接只创建 `tmux attach-session` 的临时 PTY。关闭页面、网络断线或重启 Hub / Agent 只会断开附着连接，终端进程继续运行。
 
-## Persistence and reconciliation
+Agent 的安装账户决定新终端的运行账户：root 使用系统级 systemd 单元，普通用户使用用户级单元。每个会话记录原始账户与服务作用域。迁移到 root 后，仍可通过原账户连接旧会话；新会话使用 root。Hub 容器本身保持非 root 运行，计算任务由宿主机 Agent 承担。
 
-Hub SQLite stores administrator password hashes, hashed browser sessions, hashed enrollment tokens, node public keys, terminal metadata, desired state, and last observed state/time. It does not contain live process state, terminal keystrokes, or default output recordings.
+每个终端只有一个控制者，其他连接为只读。Agent 只接受当前控制者修改程序的标准行列尺寸，只读客户端仅调整自身视口。接管时先预留新控制者，再断开旧控制者；旧页面重新连接后变成只读。浏览器不会在断线后排队重放按键。
 
-Agent JSON records are atomically replaced and fsynced. A stable terminal ID is the idempotency key for node creation. A record is saved before process creation, so retrying a delayed request never starts a second shell. An interrupted creation may become `lost` rather than rerunning an unknown task.
+## 状态同步与重启恢复
 
-- `creating`: request saved, actual node result not yet observed.
-- `running`: live shell observed on the node.
-- `exited`: shell exited; tmux retains its last screen.
-- `closed`: explicit termination completed.
-- `lost`: the recorded process no longer exists, for example after node reboot.
-- `error`: creation failed.
+Hub 数据库存储密码哈希、登录会话哈希、接入令牌哈希、节点公钥、终端元数据、期望状态和最近观测状态。默认不存储按键、终端输出录像或进程内存。
 
-Node connectivity is independent of terminal state. Offline observations are stale, not proof that a task ended. A durable `desired_state=closed` is reconciled when an offline Agent returns. The UI makes this deferred termination visible.
+Agent 以原子替换和同步写入保存 JSON 记录，稳定的终端 ID 是创建操作的幂等键。先保存记录再创建进程，重复请求不会产生第二个 Shell。无法确定是否执行过的中断创建请求可以标记丢失，不会自动重跑任务。
 
-Terminating a terminal stops its dedicated systemd unit/cgroup, including ordinary background descendants. Processes deliberately moved into other services/cgroups are outside this lifecycle. Revoking a node disconnects management access but deliberately leaves its work running.
+| 状态 | 含义 |
+| --- | --- |
+| `creating` | 创建请求已保存，尚未确认实际结果 |
+| `running` | 节点观察到运行中的 Shell |
+| `exited` | Shell 已退出，tmux 保留最后画面 |
+| `closed` | 明确终止已完成 |
+| `lost` | 原进程不存在，例如节点重启之后 |
+| `error` | 创建失败 |
 
-## Output and history
+节点在线状态独立于终端状态。离线只意味着观测结果可能过期，不能据此断定任务已结束。离线终止会持久化 `desired_state=closed`，等待节点上线后执行。完整清单会将节点上已不存在的运行会话标记为丢失；不完整清单不会据此删除或标记缺失会话。
 
-The running tmux server preserves the current screen and up to 10,000 history lines per pane in memory. Browser scrollback is per attachment. Reconnection attaches and redraws the current screen; it does not reconstruct all historical terminal output in the browser scrollback. tmux copy mode can inspect retained pane history.
+终止操作停止专属 systemd 单元及其通常的后台子进程。主动移到其他服务或控制组的进程不属于该终端生命周期。撤销节点身份仅中断管理访问，保留本地任务。
 
-tmux mouse reporting routes the wheel to pane history rather than letting xterm synthesize cursor keys in an alternate screen. Mouse-aware TUIs continue to receive their own wheel reports. The next keyboard/paste/mobile-key input from the controller first leaves history mode on the same ordered transport; Up/Down then reach the Shell/application unchanged. Both tmux copy key tables also bind plain Up/Down to leave copy mode and forward the key. Readonly attachments gain no input permission. Scrolling options are applied idempotently on attachment, including pre-upgrade sessions and sessions owned by a different account, without recreating their processes. A browser wheel guard suppresses cursor-key synthesis if mouse reporting is not yet active.
+Hub 服务重启后读取数据库，Agent 重新连接并同步状态。节点操作系统重启会结束本机进程；保留记录随后同步为 `lost`。页面中的重新创建会打开新的 Shell，并保留旧记录，不重放旧命令。
 
-Data uses a bounded output acknowledgment window (256 KiB plus one chunk). A slow attachment is disconnected after its timeout, freeing the task from a stalled browser. Full recording/export and task-specific completion detection are not implemented.
+## 输出、滚轮和历史
 
-## Trust and authentication
+tmux 在内存中保存当前画面和最多 10,000 行历史，浏览器滚动缓冲属于每次附着连接。重新连接会重绘当前画面，不会把所有历史重新注入浏览器；tmux 复制模式可以访问仍保留的历史。
 
-The Hub remains trusted for authentication, signaling, and serving browser code. HTTPS/WSS encrypt the relayed hops. Selected direct terminal data travels over WebRTC DTLS without being relayed by the Hub, but this does not provide protection against a malicious Hub supplying browser code or signaling. ICE/SDP may reveal endpoint addresses and is not stored in the database or ordinary logs.
+启用 tmux 鼠标报告，使滚轮用于历史滚动；支持鼠标的 TUI 继续收到其原生鼠标事件。控制者下一次键盘、粘贴或移动端按键输入，会先在同一有序链路上退出历史模式，然后发送按键。键盘上下键保留 Shell 历史命令行为。浏览器在重连或旧 Agent 未启用鼠标时，也会阻止备用屏幕中的滚轮被合成为上下键。
 
-Initial join uses a short-lived token that can enroll one node identity, with Ed25519 proof of key possession. The same key can retry a lost enrollment response during the token validity window; a different key cannot reuse it. Subsequent Agent handshakes sign method, request URI, timestamp, and nonce. Timestamp windows and a nonce cache reject replay. Nodes can be revoked independently.
+历史配置在每次附着时以原会话账户幂等应用，兼容升级前的会话，无需重建进程。输出确认窗口有界，慢连接超时后会断开，避免卡住节点任务。完整输出录像和导出尚未实现。
 
-New passwords use salted PBKDF2-HMAC-SHA256 (600,000 iterations) and retain compatibility with existing bcrypt hashes. New passwords require at least six characters containing both letters and digits, without an uppercase/lowercase requirement or a password-specific maximum length. Browser login uses server-side hashed sessions. Cookies are HttpOnly, SameSite=Strict, and Secure/\_\_Host-prefixed on HTTPS. Mutations require a session-bound CSRF header; browser WebSockets require the configured Origin. Logout/password changes revoke relevant sockets. Static assets are self-hosted; the Hub sends a restrictive CSP and frame denial.
+## 身份与信任边界
 
-This release is a single-administrator Linux workspace, not a multi-tenant command-execution sandbox. Terminal commands run with the enrolled OS user's existing filesystem and tool credentials. It does not synchronize or upload Codex/API credentials.
+首次接入使用 10 分钟有效的令牌，并要求 Ed25519 私钥持有证明。同一密钥可在有效期内重试丢失的接入响应，另一密钥无法复用令牌。后续握手签署请求方法、URI、时间戳和随机数，通过时间窗口及随机数缓存防重放。节点身份可单独撤销。
 
-## Directory navigation
+新密码使用带盐 PBKDF2-HMAC-SHA256、600,000 次迭代，兼容读取旧 bcrypt 哈希。初始密码及修改后的密码至少六个字符，含 ASCII 字母和数字，大小写不限，无密码专用最大长度限制。已有密码的登录兼容性不受新规则影响。
 
-An authenticated directory request is routed through the selected node's signed control channel. The Agent reads immediate child directories as its OS user; file entries are excluded, hidden directories are optional, and symlink directories resolve to their actual target. Listing is bounded in entry count and duration. The browser can select children, navigate to the parent/home, or enter a path manually. Nodes advertise this capability so older Agents can fall back to manual entry until upgraded.
+浏览器使用服务端保存哈希的独立登录会话。Cookie 设置 HttpOnly、SameSite=Strict；HTTPS 下还设置 Secure 和 `__Host-` 前缀。写操作校验会话绑定的 CSRF，浏览器 WebSocket 校验 Origin；退出登录或改密会撤销对应连接。静态资源自托管，并设置 CSP 及禁止嵌入策略。
 
-Directory access follows the enrolled user's existing permissions. It is not confined to the user's home, matching the terminal's filesystem access.
+Hub 是认证、信令及浏览器代码分发的受信任组件。WebRTC DTLS 可以绕开 Hub 传送终端字节，但不能抵御恶意 Hub 替换前端代码。ICE / SDP 可能泄露端点地址，默认不写入数据库或普通日志。
+
+这是单管理员 Linux 工作台，终端继承系统账户的文件及工具凭证访问权限；它不是多租户命令沙箱，也不自动上传或同步 Codex / API 凭证。
+
+## 目录选择
+
+目录请求通过已签名控制连接到达节点，由 Agent 以实际账户读取直接子目录。支持进入子目录、上级、主目录、显示隐藏目录和手工输入。文件项不展示，目录符号链接解析到实际目标，条目数量和处理时间均有限制。旧 Agent 未声明能力时回退为手工输入。
+
+目录访问遵循系统账户本身的权限，不额外限制在主目录内，与终端权限一致。

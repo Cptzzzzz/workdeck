@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit deployed acceptance check. Restarts only the new Workdeck Agent."""
+"""显式离线终止验收：会重启本机普通用户的测试 Agent，请只用于隔离环境。"""
 import http.cookiejar
 import json
 import os
@@ -9,6 +9,9 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+
+if os.environ.get('WORKDECK_OFFLINE_ACCEPTANCE') != '1':
+    raise SystemExit('该验收会停止本机用户 Agent；仅在隔离环境设置 WORKDECK_OFFLINE_ACCEPTANCE=1 后执行。')
 
 BASE = os.environ['WORKDECK_TEST_URL'].rstrip('/')
 client = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -39,11 +42,15 @@ password=pathlib.Path(os.environ.get('WORKDECK_TEST_PASSWORD_FILE', str(pathlib.
 csrf=api('/login',{'username':'admin','password':password})['csrf']
 terminal=None
 completed=False
+agent_restart_needed=False
 try:
     node=next(n for n in api('/state')['nodes'] if n['online'] and (n['id']==os.environ['WORKDECK_TEST_NODE_ID'] if os.environ.get('WORKDECK_TEST_NODE_ID') else n['hostname']==socket.gethostname()))
+    if node['hostname'] != socket.gethostname():
+        raise SystemExit('离线验收仅支持本机测试节点，不能操作远程节点对应的本地服务。')
     terminal=api('/terminals',{'node_id':node['id'],'name':'离线终止验收','cwd':node['home']})
     assert terminal['state']=='running',terminal
     unit='workdeck-session-'+terminal['id']+'.service'
+    agent_restart_needed=True
     subprocess.run(['systemctl','--user','stop','workdeck-agent.service'],check=True)
     wait_for(lambda: not next(n for n in api('/state')['nodes'] if n['id']==node['id'])['online'])
     state=api('/terminals/'+terminal['id'],{},'DELETE')
@@ -55,7 +62,8 @@ try:
     completed=True
     print('PASS: offline termination persisted, live process continued while disconnected, and termination reconciled after reconnect')
 finally:
-    subprocess.run(['systemctl','--user','start','workdeck-agent.service'],check=True)
+    if agent_restart_needed:
+        subprocess.run(['systemctl','--user','start','workdeck-agent.service'],check=True)
     if terminal and not completed:
         api('/terminals/'+terminal['id'],{},'DELETE')
     api('/logout',{},'POST')

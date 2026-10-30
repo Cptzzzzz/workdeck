@@ -1,119 +1,102 @@
-# Acceptance record — 2026-10-30
+# 验证指南与验收记录
 
-Environment: a real HTTPS Hub with a Linux arm64 Agent, tmux 3.2a, desktop Chromium, and a 390 px mobile viewport. Host addresses, usernames, private paths, and original deployment identifiers are omitted from the public record.
-
-Passed checks:
-
-- Go tests with the race detector: administrator authentication, CSRF and Origin rejection, enrollment proof verification, idempotent enrollment response recovery, rejection of token reuse by another key, signed-handshake replay rejection, and password-change session revocation.
-- `go vet ./...`, frontend TypeScript/production build, shell syntax checks.
-- Go vulnerability scan: no affected symbols/packages imported by this application. npm production dependency audit: no vulnerabilities reported.
-- Public HTTPS and `/healthz`; the real Linux installer downloaded a checksummed arm64 Agent, enrolled it, and enabled its user service.
-- Browser terminal creation, real Shell input/output, browser refresh preserving an environment variable, and a background task completing while detached.
-- A 54 KB Chinese clipboard paste delivered intact through multiple input frames, tested in a clean Bash session to isolate the transport from user shell plugins.
-- Desktop and 390 px mobile layouts, readonly secondary attachment, explicit control takeover, resize propagation, and returning to the original shell.
-- A real curses alternate-screen TUI retained its screen across Agent and Hub restarts. Its parent shell retained the exported environment variable.
-- The installed Codex TUI launched and rendered through the public terminal and remained visible after resizing. No model task was submitted and no Codex configuration was changed.
-- Offline termination: the task remained alive while the Agent was stopped; the Hub saved the termination request; reconnecting the Agent stopped the dedicated terminal unit and updated observed state.
-- Unrelated pre-existing terminal services remained active. Existing application containers on the public server were not recreated.
-
-Commands for repeating deployment acceptance:
+## 不连接生产环境的检查
 
 ```sh
-WORKDECK_TEST_URL=https://work.example.com python3 scripts/check-offline-close.py
+go test -race ./...
+go vet ./...
+for script in scripts/*.sh; do sh -n "$script"; done
+npm ci --prefix web
+npm run build --prefix web
+python3 scripts/check-publication.py --history
 cd web
-WORKDECK_TEST_URL=https://work.example.com \
-WORKDECK_TEST_SSH_TARGET=deploy@server.example.com \
-WORKDECK_RECOVERY=1 WORKDECK_CODEX=1 npx playwright test
+npx playwright install chromium
+npx playwright test transport-policy.spec.ts network-metrics.spec.ts terminal-dom-rendering.spec.ts
 ```
 
-The recovery test intentionally restarts the new Workdeck Agent and Hub, detaching current viewers temporarily. Run it during an appropriate maintenance window. Its terminal processes survive these restarts.
+Go 测试覆盖登录、CSRF / Origin、节点接入及重试、防重放、改密撤销、状态恢复、目录读取、服务账户和附着连接清理。前端独立用例覆盖链路选择、网络统计和实际 xterm DOM 渲染，不需要 Hub 或计算节点。
 
-Ignored local screenshots and reports are under `test-results/` and `web/test-results/`.
+## 完整交互验收
 
-Observed host behavior: the current user's zsh plugins spend substantial CPU on extremely long command lines. Clean Bash accepts the same large paste promptly. Workdeck preserves the user's shell configuration; shell plugin performance is separate from terminal transport. The mobile paste button uses xterm's paste handling, including bracketed paste when requested by the running application.
+按 [开发指南](../CONTRIBUTING.md) 创建独立 Hub、独立 Agent 数据目录，再运行：
 
-## Directory selection, restart reconciliation, and device sessions
+```sh
+cd web
+WORKDECK_TEST_URL=http://127.0.0.1:18090 \
+WORKDECK_TEST_NODE_NAME=dev-node \
+WORKDECK_TEST_PASSWORD_FILE=../.secrets/administrator.txt \
+  npx playwright test
+```
 
-Additional acceptance completed for a Hub-host compute Agent and a separate Linux arm64 Agent:
+可通过 `CHROMIUM_PATH` 指定已有 Chromium。测试密码从本地私有文件读取，不写在命令行。用例创建和清理自己的终端；仍应使用隔离节点，避免真实用户工作受到服务重启或控制权变化影响。
 
-- The Hub host can enroll a normal-user Agent through the same identity and reverse-connection protocol as other nodes.
-- Existing databases migrate additively: nodes, terminal metadata, account hashes, and device sessions remain present.
-- Full inventories reconcile missing sessions to lost; incomplete inventories preserve the last known state for omitted records. Node boot identifiers and atomically saved Agent metadata distinguish process loss after a reboot.
-- Go tests reopen the real SQLite database in a fresh Hub instance, retain two independent logins and node/terminal records, then synchronize a simulated node reboot. Cookie persistence, renewal, and device-local logout are also covered.
-- Real browser acceptance navigates node child directories and parents, creates a terminal in the chosen folder, and verifies its working directory through the running Shell.
-- A persistent Chromium profile is closed and reopened without another login; a second device remains logged in after the first device logs out.
-- Public endpoint acceptance also rechecks Codex TUI rendering, real Agent/Hub service restarts with a running curses TUI, mobile control takeover, and large Unicode paste transport.
+默认不会执行所有外部环境相关用例：
 
-No host OS was rebooted during acceptance, so other applications were not interrupted. Boot-time Docker/Agent configuration was checked separately. A full OS reboot preserves records and credentials, but ends the processes on that host; the UI retains lost records and offers explicit recreation in the prior directory.
+| 开关 | 作用 |
+| --- | --- |
+| `WORKDECK_DIRECT_ACCEPTANCE=1` | 执行真实 DataChannel 及直连回退验收，需环境允许建立本地或公网直连 |
+| `WORKDECK_RECOVERY=1` | 执行服务重启恢复验收，需配置测试用 SSH 目标与服务管理权限 |
+| `WORKDECK_CODEX=1` | 执行节点已安装 Codex 的 TUI 显示验收，不提交模型任务 |
+| `WORKDECK_OFFLINE_ACCEPTANCE=1` | 允许 Python 离线终止验收停止本机用户 Agent，仅用于隔离环境 |
+| `WORKDECK_ROOT_ACCEPTANCE=1` | 执行 root 计算节点验收，需匹配的节点及重启权限 |
 
-The final deployed suite passed all five cases on the separate compute node. A second run passed directory selection and desktop/mobile terminal lifecycle on the Hub-host Agent with tmux 3.0a. Explicit controller-driven window sizing was checked alongside the other node’s tmux 3.2a. Total: seven public browser acceptance cases passed.
+各用例的其他参数以 `web/tests/` 中的实际读取项为准。重启测试会短暂断开查看者，只应在隔离环境或明确维护窗口执行。
 
-## Password policy, node rename, and root service migration
+`python3 scripts/check-offline-close.py` 可验证离线终止的状态同步；需要在线测试 Hub、测试节点及私有认证文件，使用前先阅读脚本参数。
 
-The final password policy is at least six characters containing both an English letter and a digit; either letter case is accepted. No password-specific maximum is imposed. Initialization and password changes enforce this rule, while existing bcrypt and versioned hashes remain readable. Regression tests accept lowercase/uppercase combinations and long Unicode inputs, reject short/letters-only/digits-only values, and verify older noncompliant credentials can still log in to set a compliant password.
+## 一键部署验收
 
-Node rename is authenticated and CSRF protected, works offline, changes only the display name, and survives reopening the Hub database. Public browser acceptance enrolls an isolated temporary node, renames it in the UI, reloads, verifies its ID is unchanged, and then revokes the test identity.
+以下命令从本地源码构建全新 Docker 实例，只绑定本机端口，不接管生产 Caddy：
 
-The Hub-host Agent was migrated to a root-owned system service. Its node ID and session records were retained, its node signing key was rotated into root-only storage, and the earlier ordinary-user Agent was disabled. Retained sessions keep their original OS account and service scope. New terminals use the actual service account; the UI reports that account on each node.
+```sh
+sh scripts/install-hub.sh --local --port 18890 \
+  --project workdeck-smoke --dir "$PWD/.secrets/deploy-smoke" --source "$PWD"
+curl -fsS http://127.0.0.1:18890/healthz
+```
 
-Acceptance passed seven standard public browser cases plus four root-host cases. The root terminal printed `whoami=root` and UID `0`, retained its shell environment across a system Agent restart, and supported directory selection and desktop/mobile takeover. A surviving pre-migration ordinary-user terminal remained reachable without sending input to or terminating it. All eleven relevant browser cases passed; no production administrator password was changed by these tests.
+应验证初次登录、Agent 下载校验、节点登记、创建终端和独立容器重启后数据恢复。再次执行安装命令，应保留数据库、初始密码和已配置的参数。测试结束后仅清理明确属于该隔离项目的容器和卷，不使用泛化的 Docker 清理命令。
 
-## Styled rename and termination forms
+独立 HTTPS 部署还需验证 DNS、80 / 443、证书申请及 WSS。本机 HTTP 健康通过不代表真实域名和证书已配置完成。
 
-Node and terminal rename now use the same modal styles as terminal creation and password changes. Terminal termination uses a site dialog showing the terminal and node, with explicit cancel/confirm buttons and an offline delivery notice when applicable. Opening confirmation from fullscreen exits fullscreen so the dialog is visible.
+## 已验证的核心行为
 
-Three browser acceptance cases passed against an isolated Hub and real local compute Agent: password form validation, offline node rename with a stable identity, and terminal rename/termination. The terminal case verifies that rename retains the running shell environment, cancelling confirmation sends no DELETE request, confirming sends exactly one, and no browser-native dialogs appear. Fullscreen visibility and both modal screenshots were also checked. The production frontend was deployed and its health endpoint returned OK; authenticated production acceptance was unavailable with the saved test credentials. The current production password was preserved.
+以下记录来自 Linux arm64 / amd64、systemd、tmux 和 Chromium 的实际验收；公开记录不包含真实主机地址、用户名、工作路径或原始部署标识。
 
-## Agent reconnect after an idle terminal detaches
+- 浏览器创建终端、真实 Shell 输入输出、刷新和断开后保留环境变量，后台任务在断开期间继续完成。
+- 长中文粘贴跨多个输入帧完整到达；桌面和约 390 px 移动端可使用，只读查看与接管权限分离。
+- curses 备用屏幕在 Hub / Agent 服务重启后保持原画面，父 Shell 环境保留；现有 Codex TUI 可显示和缩放。
+- Agent 离线期间 Hub 保存终止意图，重新连接后停止专属单元并更新观测状态。
+- 目录选择支持主目录、上级、子目录、隐藏项与手工路径，读取权限与节点账户一致。
+- 独立浏览器会话在关闭后保留，多个设备互不挤出；退出仅影响当前设备，改密撤销其他登录。
+- 节点离线重命名不改变 ID，重启后保留。节点安装账户决定新终端账户，root Agent 可连接原普通账户的会话。
+- 重命名与终止使用站内表单；取消不会发出终止请求，全屏模式也能显示确认界面。
+- 多次断线和跨账户附着清理不会阻塞 Agent 重连；临时连接进程组被回收，持久 pane 进程不变。
+- 中转立即可用；真实直连、较慢直连保留中转、断线回退、接管和注销撤权均有测试。正向直连用例仅延迟测试环境的中转探测回复，终端数据与生产策略不变。
+- 网络面板区分未知、不可用、过期和实测零值，使用实际时间计算字节速率，不把探测超时展示为网络丢包率。
+- 滚轮查看 tmux 历史，不合成 Shell 上下键；实体键盘上下键仍切换历史命令，滚动后输入自动回到实时画面。鼠标感知 curses TUI 保留原生事件。
+- 末行在窄屏、横屏、全屏、网络详情展开及字号变化时不被底部状态栏遮挡。
+- 字号即时生效，不重建连接；同一浏览器跨标签页同步、刷新记忆，不同设备独立。
 
-A production Agent stack dump identified control reconnection waiting indefinitely for an old cross-account `runuser` terminal attachment to exit. The attachment sent SIGHUP only to the wrapper and waited without a deadline. PTY setup and resize also invoked `File.Fd`, which put the master into blocking mode.
+## 末列文字截断的专项回归
 
-Attachment cleanup now cancels transport first and terminates the viewer's separate process group, escalating after two seconds. The persistent tmux server and terminal are outside that group. PTY reads use nonblocking polling, and resize uses `SyscallConn` without changing descriptor mode.
+xterm 5.5.0 DOM 渲染存在两类误差：32 个字符的字宽样本使用整数 `offsetWidth`，会带来逐字累积误差；即使修正测量，逐字变色 / 粗细切换产生的多个 inline-block 片段仍会分别取整，继续累积。
 
-Regression tests disconnect the control connection three times with an attached idle, resized terminal, verify automatic reconnection, and verify the original pane PID survives. They also cover a wrapper that ignores termination. Both cases passed locally with the race detector and on the deployment host with a root Agent attaching to a different account. The complete Go test suite and `go vet` passed.
+`patch-xterm-dom.mjs` 保留小数测量，并将每个文字片段定位到逻辑列坐标。补丁严格检查依赖版本与替换位置，检查全部通过后才写入文件。升级依赖需重新审查，不能静默跳过补丁。
 
-## Optional measured direct transport
+无需 Hub 的回归覆盖三种字体栈、六种字号和四种设备像素比例，检查逐字变色、粗细交替、中文和真彩色片段。该测试在上一版补丁上确认失败，新补丁后通过。真实 curses 用例覆盖四种窗口宽度、六种字号及三个设备像素比例，共 72 种组合，直接检查节点程序报告的列数和实际末列字符。
 
-Ten browser acceptance cases passed against an isolated Hub and a real local Agent. New coverage verifies actual terminal bytes arrive over a browser WebRTC DataChannel while Hub WebSockets carry no corresponding binary output; a continuous numbered output stream crosses the route switch without lost or duplicate lines. A deliberately delayed but reachable direct path retains relay delivery. Browsers without WebRTC retain working terminals.
+该修复已部署并核对线上资源哈希；原有终端进程保持不变。Mac Chrome、100% 缩放的反馈用户已确认显示恢复正常。自动化环境为 Linux Chromium，未声称完成所有浏览器和真实 Mac 的自动化验收。
 
-The same acceptance verifies direct readonly access rejects injected binary input, another device can take control, logout closes that device's direct peer, and a closed active peer reconnects over relay with the original shell environment and terminal record intact. Existing mobile resize, directory selection, persistent login, rename, and styled termination cases also pass. Screenshots include the mobile direct indicator and relay recovery.
+## 输出与局限
 
-Go tests cover the output fence and matching commit, stale/readonly controller tickets, failed speculative probes leaving the relay intact, and existing Agent reconnect behavior. The complete Go suite passed with the race detector, and `go vet` passed. Deployment-host tests also pass under root with a separate terminal owner, retaining the original pane PID through three control disconnects. These tests demonstrate the selection and fallback mechanism; NAT traversal success on other networks is environment-dependent and does not gate terminal access.
+截图、日志、Playwright 报告默认保存在 Git 忽略目录中。失败报告可能包含页面输入框的密码文本，不能原样发布。
 
-## Visible terminal network metrics
+测试通过只反映所用版本和环境。系统断电或重启不会恢复原进程；本项目不提供进程检查点和未知任务重放。Shell 插件、字体可用性、网络防火墙和其他外部工具的行为仍需按实际环境排查。
 
-Six relevant browser cases passed against the existing Agent protocol, including automatic selection/fallback, a slower-but-reachable direct path, a browser without WebRTC, metric calculations, mobile terminal lifecycle, and styled modal actions. The network panel shows both path RTTs and the committed active path, browser-direction transfer rates, per-path totals, jitter and recent application probe timeouts. Unknown/unsupported/stale values are distinct from measured zero traffic.
+## 开源发布整理的部署验证
 
-Acceptance sends a real output stream and compares the displayed direct upload/download totals with independent counters on the actual RTCDataChannel binary frames. It also verifies nonzero transfer rates during output and that the unused relay's measurement timestamp advances while direct is active. The slower direct case visibly retains relay delivery and reports the latency difference; the unsupported browser still receives end-to-end relay RTT. Desktop and narrow-screen screenshots were inspected, including the expanded route/metric cards. This browser-only change remains compatible with the previously deployed Agents.
+独立 Docker 多阶段构建已在 Linux arm64 上完成，未使用宿主机 Go / Node 参与安装。验证了初次登录、两个架构的 Agent 下载与 SHA256 校验、真实节点接入、终端创建和输入输出、移动端尺寸、只读 / 接管及站内确认表单。
 
-## Wheel scrollback and keyboard command history
+重复运行安装器保留私有参数和初始密码。重启 Hub 容器后，既有登录 Cookie、CSRF、节点 ID、运行终端的 pane PID 和管理状态均保留。独立 Caddy 配置及 HTTPS Compose 配置通过校验；新的真实域名仍需部署者完成 DNS 和证书验收。
 
-Six relevant browser cases passed: dedicated scrollback cases on both relay and direct transports, the three automatic transport/fallback cases, and desktop/mobile terminal lifecycle. Each scrollback case fills a real Bash terminal with numbered output, retains an unsubmitted draft, and verifies the wheel reveals older output while sending genuine mouse reports rather than cursor keys. Scrolling down restores the same draft; physical Up/Down recall prior commands and restore the draft even immediately after scrolling. Typing after scrolling returns to live input. Reconnection still exposes tmux's earlier history. A real mouse-aware curses TUI receives wheel events and a separately pressed Up key without confusing them.
-
-Agent race tests and the Go suite pass. Deployment-host compatibility tests run under root against a different session owner on the older tmux release, verifying existing servers receive mouse and both copy-table arrow bindings without changing their pane PID, including repeated reconnects. Configuration is applied as command arguments, avoiding any need for the previous account to read root-only configuration files.
-
-Positive direct-path acceptance adds a small test-only delay to relay probe replies so localhost scheduling noise cannot unexpectedly choose the relay instead of the path the test needs to exercise. Actual terminal data is not delayed; production path selection is unchanged.
-
-## Terminal bottom-row visibility
-
-FitAddon now measures an inner mount with no padding; visual padding belongs to its outer flex item. This prevents the measured terminal grid from extending into the footer or being clipped horizontally. Header/notice controls retain their height, and expanded network details reserve room for terminal rows on short screens.
-
-A real curses program continuously paints the node terminal's final row while browser acceptance cycles through desktop, narrow, mobile and landscape viewports, toggles network details, and enters/exits fullscreen. The complete rendered last row is checked against the clipping container and footer; hit testing verifies its bottom pixels belong to the terminal. Mobile/fullscreen screenshots were inspected. The existing desktop/mobile terminal lifecycle test also passed. No Agent protocol or terminal-process changes are needed.
-
-## Remembered terminal font size
-
-Font controls offer 10–24 px with a 13 px default, down from 14 px. Three relevant acceptance cases pass: stored-value validation, live/persistent/device-local preferences, and bottom-row layout under resizing and font changes. Changing the font does not create another WebSocket attachment or lose the running shell environment. Reload restores the chosen size, another tab in the same profile updates through storage events, and an independent readonly browser can use a different size without taking over the controller. The mobile settings panel fits inside the viewport. The real bottom-row TUI remains fully visible at 10, 12, 18 and 24 px as well as through existing viewport/fullscreen checks. No Hub/Agent protocol changes are required.
-
-## Last-column glyph visibility
-
-Browser reproduction confirmed that the backing TUI and browser agreed on column count, while the last glyph extended about 2.19 CSS pixels past the row's clipping edge. xterm 5.5's DOM WidthCache samples 32 glyphs through integer `offsetWidth`; rounding introduces a per-cell spacing error which accumulates across the row. The pinned installation patch replaces that measurement with fractional `getBoundingClientRect().width` in both the runtime bundle and its source, preserving the current renderer and transport. It is idempotent and checks the exact version and replacement site so dependency upgrades require an explicit review.
-
-A real curses fixture paints ASCII, bold ASCII and a two-column Chinese glyph at its actual rightmost columns, and reports its live width. Three browser cases cover 72 combinations of four viewport widths, six font sizes and device scale factors 1, 1.25 and 2. All pass with maximum measured overflow only 0.032 CSS pixels, within browser subpixel rounding. The fixture locates the last logical column, excluding intentionally retained offscreen cells in alternate buffers after a shrink. Font persistence and bottom-row/fullscreen regression also pass; screenshots were inspected. No terminal process or Agent changes are required.
-
-## 多样式文字片段的末列显示
-
-补充复现发现：即使字宽测量已经使用小数，DOM 渲染器的多个 inline-block 文字片段仍会分别取整。在频繁变色、逐字切换粗体或混合样式的 TUI 中，误差会继续累积；140 列复现样例可超出约 1.75 CSS 像素。原先单一长片段的测试未覆盖这一情况。
-
-补丁现在同时将每个文字片段定位到其逻辑列坐标，避免片段的布局误差逐段叠加，保留原有字宽测量、文字合并及颜色、光标渲染。依赖版本和替换位置继续严格校验；所有替换通过检查后才写入文件。
-
-新增无需 Hub 的浏览器回归覆盖三种字体栈、六种字号和四种设备像素比例，检查彩色逐字片段、粗细交替、中文和真彩色混排的末列及片段起点。该回归已在上一版补丁上验证失败，应用本次补丁后通过。真实 curses 端到端用例也补充逐字变色、粗细交替及整行中文。测试环境为 Linux Chromium；Mac Chrome 的用户反馈是本次排查的触发条件，尚未在真实 Mac 上运行自动测试。
+Go 竞态测试、静态检查、前端逻辑 / DOM 回归、源码格式和生产依赖审计均已执行。第三方许可清单在 amd64 / arm64 解析结果一致。全部可达 Git 历史和当前文件均检查了已知私有凭证及基础设施值；未把私有检测词表、测试报告或运行数据加入仓库。

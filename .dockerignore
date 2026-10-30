@@ -1,9 +1,35 @@
 *
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!scripts/
+!scripts/patch-xterm-dom.mjs
+!scripts/install-agent.sh
+!web/
+!web/src/
+!web/src/**
+!web/package.json
+!web/package-lock.json
+!web/index.html
+!web/tsconfig.json
+!web/vite.config.ts
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!third_party/
+!third_party/licenses/
+!third_party/licenses/**
+!Dockerfile
+# 兼容现有 Caddy 远程部署使用的预构建镜像。
 !bin/
 !bin/workdeck-linux-amd64
-!web/
 !web/dist/
 !web/dist/**
 !deploy/
 !deploy/Dockerfile
 !deploy/ca-certificates.crt
+# 下载目录由构建阶段重新生成，禁止把本地运行数据带入构建上下文。
+web/public/downloads/
+web/public/install-agent.sh

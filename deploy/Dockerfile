@@ -2,6 +2,8 @@ FROM scratch
 COPY bin/workdeck-linux-amd64 /workdeck
 COPY web/dist /web
 COPY deploy/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY LICENSE THIRD_PARTY_NOTICES.md /licenses/
+COPY third_party/ /licenses/third_party/
 USER 65532:65532
 EXPOSE 8090
 ENTRYPOINT ["/workdeck", "hub"]

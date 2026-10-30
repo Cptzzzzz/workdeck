@@ -1,127 +1,135 @@
-# Operations
+# 运维手册
 
-The examples below use placeholders. Substitute your private deployment values; do not commit them.
+以下使用示例域名和默认独立部署目录，请按自己的私有配置替换，不要把实际凭证提交到仓库。
 
-## Status and logs
+## 状态、日志与健康检查
 
 ```sh
-ssh deploy@server.example.com 'cd /opt/stacks/workdeck && docker compose ps'
-ssh deploy@server.example.com 'docker logs --tail 100 workdeck-hub'
+cd /opt/workdeck
+docker compose ps
+docker compose logs --tail 100 hub
 curl -fsS https://work.example.com/healthz
 
+# 普通账户 Agent
 systemctl --user status workdeck-agent
 journalctl --user -u workdeck-agent -n 100 --no-pager
 systemctl --user list-units 'workdeck-session-*'
+
+# root Agent 使用系统单元，不加 --user
+sudo systemctl status workdeck-agent
+sudo journalctl -u workdeck-agent -n 100 --no-pager
 ```
 
-On hosts restricting journal access, consult the system administrator rather than publishing complete logs. Logs, screenshots, and terminal output may contain private task information.
+日志、截图、终端输出和浏览器错误报告可能包含工作内容或登录信息，分享前先脱敏。
 
-## Restart or upgrade
+## 服务重启与升级
 
 ```sh
+cd /opt/workdeck
+docker compose restart hub
 systemctl --user restart workdeck-agent
-ssh deploy@server.example.com 'cd /opt/stacks/workdeck && docker compose restart hub'
+# root Agent 改用 sudo systemctl restart workdeck-agent
 ```
 
-Both operations temporarily detach browsers. tmux session units keep running. The Agent reconnects with exponential backoff and inventories existing records. Browsers retry without replaying keystrokes.
+这些操作会短暂断开浏览器，但独立 tmux 会话继续运行。Agent 指数退避重连并上报完整清单；浏览器自动重试，不重放按键。
 
-For a new release, commit the source, run `scripts/build.sh`, then `scripts/deploy.sh` with your ignored local configuration. Upgrade an Agent by replacing `~/.local/bin/workdeck` atomically with the correct architecture binary, then restarting only `workdeck-agent.service`. Do not stop session units during routine Agent upgrades.
+独立部署重复执行原一键安装命令即可更新 Hub。已有 Caddy 远程部署使用 `scripts/build.sh`、`scripts/deploy.sh`。升级 Agent 时，下载正确架构的可执行文件，校验后使用临时文件加重命名原子替换 `~/.local/bin/workdeck`，仅重启 Agent 服务，勿停止 `workdeck-session-*` 单元。
 
-## Backup and restore
+## 备份与恢复
 
-SQLite uses WAL. Use its online backup API or briefly stop the Hub before copying the entire `data/` directory; copying only `workdeck.db` during writes is unsafe. Stopping the Hub does not stop node tasks.
+SQLite 使用 WAL。应使用在线备份 API，或短暂停止 Hub 后复制完整数据目录；不要在持续写入时只复制单独的 `workdeck.db`。
+
+独立部署可先停止 Hub，再从命名卷导出：
 
 ```sh
-ssh deploy@server.example.com '
-  set -e
-  cd /opt/stacks/workdeck
-  docker compose stop hub
-  trap "docker compose start hub" EXIT
-  tar -czf "backups/data-$(date +%Y%m%d-%H%M%S).tar.gz" data
-'
+cd /opt/workdeck
+mkdir -p backups
+chmod 700 backups
+docker compose stop hub
+# 将当前项目实际的卷名替换到此处，默认项目名下如下。
+docker run --rm -v workdeck-standalone_hub-data:/data:ro \
+  -v "$PWD/backups:/backup" alpine:3 \
+  tar -czf /backup/hub-data.tar.gz -C /data .
+docker compose start hub
 ```
 
-Back up each node's private `~/.local/share/workdeck` separately. Protect its identity as a login credential. Metadata backups do not checkpoint operating-system processes; restoring records after reboot marks unavailable sessions lost and does not replay commands.
+同时备份私有 `.env`、初始化密码和 Caddy 证书卷。已有 Caddy 方案备份其 `data/` 目录。完整数据库、证书和身份备份均应作为敏感数据保存。
 
-## Terminal font size
+每个节点的 `~/.local/share/workdeck` 需另外备份。恢复到空数据卷前停止 Hub，解压后保持 UID/GID 65532 的权限，再启动。节点身份恢复要对应原节点，避免两个 Agent 同时使用同一身份。
 
-Use the font icon in the terminal toolbar to choose 10–24 px, adjust one step at a time, or restore the default 13 px. Changes apply immediately to this browser's terminals without reconnecting them, and resizing recalculates the available rows/columns. The same browser profile remembers the choice after reload and shares it across tabs; separate devices/profiles retain independent choices. Readonly viewers may adjust their own display without taking control. Preferences contain no credentials and are stored locally under `workdeck.terminal.fontSize`. If browser storage is unavailable, changing the current view still works for the active page.
+记录备份不包含操作系统进程内存。系统重启后的会话会被标记丢失，不能靠 JSON / SQLite 恢复正在执行的任务。
 
-## Terminal wheel and command history
+## 终端字号与滚轮
 
-In a terminal you control, the wheel scrolls retained tmux history. Scroll down to the live prompt or simply start typing to return to the live application. Physical Up/Down and the mobile arrow buttons retain command history behavior in the Shell, including immediately after scrolling. In mouse-aware TUIs, wheel reports and cursor keys retain the application's native behavior. Hold Shift when dragging to select text with the browser rather than tmux mouse handling.
+终端工具栏的字号按钮支持 10–24 px，默认 13 px。修改即时生效，不重新连接终端；同一浏览器记忆设置并同步到其他标签页，不同设备独立。只读查看者可调整自己的显示。设置仅保存在本机 `workdeck.terminal.fontSize`，不包含凭证。
 
-Existing sessions receive these settings on their next attachment after an Agent upgrade; their panes and shell processes are retained. Deploy the matching Hub/frontend and upgrade each Agent. No shell configuration changes or terminal recreation is required. The browser also suppresses alternate-screen wheel-to-arrow synthesis during reconnects or when attached to an older Agent.
+滚轮查看保留的 tmux 历史；滚回提示符或直接开始输入可回到实时画面。实体键盘及移动端上下键保留 Shell 的历史命令行为。支持鼠标的 TUI 接收其原生滚轮事件。按住 Shift 拖动，可使用浏览器文本选择。
 
-## Terminate and disconnect
+已有终端在升级 Agent 后的下一次附着时幂等应用滚动配置，不重建进程。前端构建保留 xterm 固定版本渲染补丁，修复末列文字截断；升级后刷新浏览器以载入新资源。
 
-Closing a UI tab detaches only that view. Explicit termination stops the terminal's dedicated systemd unit and ordinary background descendants. If the node is offline, termination is saved and reconciled when it returns. The UI labels the pending state.
+## 断开、终止与撤销节点
 
-Recover a surviving session manually:
+关闭页面或终端视图只断开该连接。明确终止会停止专属 systemd 单元和通常的后台子进程；节点离线时先保存终止意图，待重新上线执行。
+
+需要手动恢复现存画面时，以原会话账户执行：
 
 ```sh
 tmux -L workdeck-TERMINAL_ID attach-session -t main
 ```
 
-Stop a specific Workdeck terminal manually:
+手动停止某个终端：
 
 ```sh
 systemctl --user stop workdeck-session-TERMINAL_ID.service
+# root 创建的终端改用 sudo systemctl stop ...
 ```
 
-Revoking a node disables its identity and disconnects management access, while leaving local tasks running. Reenroll with a new identity only after preserving needed records. Reenrollment under a new node ID does not automatically migrate old terminal ownership.
+撤销节点身份会关闭管理访问，保留节点本地任务。重新登记新身份会产生新节点 ID，旧终端不会自动迁移。不要为排障直接删除身份或会话目录。
 
-## Automatic terminal transport selection
+## 自动选择传输链路
 
-The terminal header shows `直连` or `中转`, with measured RTT when available. The network strip below it shows WebSocket and WebRTC RTT together, marks the path actually carrying terminal bytes as `当前`, and displays browser download/upload rates. Expand it for the route diagram, comparative latency improvement, jitter, recent probe timeouts, and per-path transferred totals. Values refresh without restarting the terminal; unmeasured, unavailable, unsupported and stale paths are labeled explicitly.
+终端头部显示“直连”或“中转”；网络条同时显示 WebSocket / WebRTC RTT，并以“当前”标记实际承载数据的路径。展开后可查看路径示意、延迟差异、抖动、探测超时及各路径的数据累计量。
 
-Both available paths receive small end-to-end probes every five seconds, even when unused for terminal data. Rates update about once a second from actual terminal input/output; they exclude signaling, probes and protocol overhead, are not interface-wide bandwidth or capacity, and reset on browser attachment reconnection. Probe timeouts are not packet loss measurements. Connections start on the relay so WebRTC probing never delays terminal access. When direct delivery is faster, or similarly responsive and consistent, it can bypass the Hub for terminal bytes. Slower/unavailable direct paths retain the relay; a failed active direct path reconnects through it. Terminal processes remain on the node.
+两条可用路径每五秒探测一次，即使其中一条暂不传终端数据。速率约每秒刷新，来自当前连接的终端输入输出，不包含信令、探测和协议开销，重连后重新累计。它既不是网络接口总带宽，也不是容量测试；探测超时不是 IP 丢包率。
 
-Agent environment options (restart only the Agent after editing its systemd override):
+终端始终先走中转。直连表现合适时绕开 Hub 传送终端字节；失败后回退中转，终端程序不重启。Hub 所在机器本身作为计算节点时，直连仍占用该机器的公网连接；其他节点直连才会减少 Hub 的终端中转流量。
+
+可通过 Agent 的 systemd 覆盖配置调整：
 
 ```ini
 [Service]
-# Optional: completely disable direct negotiation on this node.
+# 完全禁止本节点协商直连。
 Environment=WORKDECK_DIRECT=0
-# Optional alternative: comma-separated STUN URLs. An explicitly empty value
-# disables external STUN discovery, retaining local/IPv6 host candidates.
+# 或指定逗号分隔的 STUN 地址；显式留空则禁用外部 STUN。
 Environment=WORKDECK_STUN_URLS=stun:stun.example.com:3478
 ```
 
-Without an override, the Agent advertises `stun:stun.cloudflare.com:3478`, which both endpoints use only for address discovery. STUN does not relay terminal contents. Unreachable STUN, blocked UDP, and restrictive NATs are normal fallback conditions; do not open broad inbound firewall ranges just to enable this optimization. TURN is not configured, and browsers reject a relay candidate as a direct optimization. For diagnostics, opening the workbench with `?transport=relay` suppresses browser direct probing for that page.
+默认使用 `stun:stun.cloudflare.com:3478` 发现地址，STUN 不传送终端内容。受限 NAT、UDP 不通、STUN 不可达均会回退，不需要因此放开大范围入站端口。未配置 TURN。地址候选和 SDP 含网络拓扑信息，避免公开日志。
 
-Direct delivery to an Agent hosted on the Hub machine still uses that machine's public connection. Other nodes can avoid Hub terminal relay bandwidth; control, signaling, page downloads, and low-volume probes still use the Hub.
+诊断时可使用 `?transport=relay` 打开页面，关闭该页面的直连探测。修改配置后只需重启 Agent。
 
-## Release limits
+## 重启恢复与持久登录
 
-Linux with systemd user services; one administrator; one Hub. No full output recording/export, native Windows Agent, process checkpointing, or high availability. tmux screen/history lives in memory; metadata lives on disk. Node power loss destroys running terminal processes.
+Hub 从持久卷恢复节点、终端与登录记录。节点重连前先显示离线及上次观测状态；新的完整清单更新实际状态。Agent 用节点启动标识区分系统重启和网络重连。
 
-## Reboot recovery and inventory reconciliation
+Docker 的自动重启策略与普通用户的 lingering 使服务开机自动启动。Hub / Agent 服务重启保留独立终端；操作系统重启会结束其本机进程。页面重新创建操作打开新 Shell，不重跑原任务。
 
-Hub node records, terminal metadata, and browser sessions are stored on the persistent data volume. A Hub restart loads them before Agents reconnect. Nodes initially appear offline with their last observed terminal state; the next Agent inventory refreshes actual state. Complete inventories also mark previously running sessions missing from the node as lost. An incomplete inventory never treats omitted records as lost.
+每台设备获得独立 HttpOnly 持久 Cookie，默认 30 天有效，活跃使用时续期。`.env` 中的 `WORKDECK_SESSION_TTL` 对应 Hub 的 `--session-ttl`，例如 `720h`。正常浏览器关闭后重开同一配置文件可保留登录；隐私模式、清除 Cookie、过期或主动退出会要求重新登录。
 
-Agent identities and per-terminal records persist on disk. State changes discovered by the Agent are saved atomically. A node boot identifier distinguishes a node reboot from a network reconnection. The Agent and Hub services can start automatically after boot when Docker and the user's lingering systemd manager are enabled.
+其他设备登录不影响已有设备。退出只影响当前设备，改密会主动撤销其他设备登录。登录凭证不放在 JavaScript localStorage。
 
-A Hub or Agent service restart preserves independently supervised terminal processes. A host OS reboot ends its processes: Workdeck retains the terminal records and synchronizes them to `lost`, with an explicit recreate action in the UI. Recreate opens a new Shell in the recorded directory and preserves the old record; it does not rerun the old commands or restore an application's in-memory state.
+## 服务账户与 root 节点
 
-## Persistent browser sessions
+创建 Agent 服务时的账户决定新终端账户。root 安装 `/etc/systemd/system/workdeck-agent.service`，普通用户安装 `~/.config/systemd/user/workdeck-agent.service`。root 使用系统级命令，普通用户使用 `--user` 并启用 lingering。
 
-Each device receives an independent HttpOnly persistent cookie and server-side session record. Default lifetime is 30 days, renewed during active authenticated use. The Hub flag `--session-ttl` accepts a lifetime such as `720h`; Compose exposes this as `WORKDECK_SESSION_TTL`. Closing a normal browser and reopening the same profile retains login. Private browsing, clearing cookies, expiration, or explicit logout requires another login.
+变更账户时保留节点 ID、身份、原始会话账户和作用域。root Agent 能管理以前由普通用户创建的会话；在这些任务结束前，勿关闭原用户的 lingering 管理器。提升为 root 时应把签名私钥轮换到 root 专属目录，防止原账户继续持有 root 节点的认证能力。这类迁移需先做好私有备份。
 
-Logging into another device does not revoke existing devices. Logout affects the current device only. Changing the password intentionally revokes the other sessions. Cookies remain protected by Secure and SameSite=Strict in HTTPS deployments; no login token is stored in JavaScript localStorage.
+## 节点名称与密码规则
 
-## Service accounts and root Agents
+节点详情中的重命名仅修改展示名称，支持离线操作，不改变身份和终端归属。终端也可独立重命名。
 
-The account creating an Agent service determines the OS user of new terminals. Ordinary accounts use user units; root installs `/etc/systemd/system/workdeck-agent.service` with `User=root` and creates per-terminal system units. Root operations use `systemctl` without `--user`; ordinary-user operations retain `systemctl --user` and lingering.
+初始密码和新密码至少六个 Unicode 字符，必须包含 ASCII 字母与数字，大小写不限，无密码专用最大长度限制；统一 JSON 请求体大小上限仍然适用。已有旧密码仍可登录，部署不会主动修改密码。新密码采用 PBKDF2，仍兼容旧 bcrypt。跨密码格式版本回滚时需匹配数据库备份。
 
-Session metadata records its original account and service scope. During an account migration, preserve these fields, the Agent identity, and all session records. A root Agent can attach to old ordinary-user sessions and stop their original user units without recreating the processes. Do not disable the original user's lingering manager until all of those old sessions have finished. New terminals run as the new service account.
+## 当前边界
 
-## Node names and password policy
-
-Select a node in the sidebar and use the rename button in its details. Renaming updates only the display name, works while the node is offline, and persists through restarts without changing identity or terminal ownership.
-
-New initial passwords and password changes require at least six Unicode characters and must contain an ASCII letter and an ASCII digit. Letter case is unrestricted; there is no password-specific upper length limit. Login remains compatible with existing passwords, including older values that predate this policy. New passwords use salted PBKDF2-HMAC-SHA256 (600,000 iterations); old bcrypt hashes remain readable. Existing account passwords are not changed by deployment. The normal HTTP request-body size limit applies to all JSON requests.
-
-When promoting an Agent from an ordinary account to root, rotate its node signing key into root-only storage while preserving the node ID. The former ordinary account's key must no longer authenticate the root Agent identity. Keep private backups of identity, records, and the database before migration.
-
-Versions predating the versioned PBKDF2 reader cannot authenticate passwords saved in the new hash format. Keep a matching database backup when rolling back across that change.
+单管理员、单 Hub；Agent 支持 Linux + systemd。尚无多租户隔离、原生 Windows Agent、进程检查点、完整录像导出或高可用。tmux 画面和历史在内存，管理元数据在磁盘。

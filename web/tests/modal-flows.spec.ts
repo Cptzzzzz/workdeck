@@ -68,7 +68,9 @@ test("rename and terminate use site forms; cancellation keeps the task alive", a
     ).toBe(renamed);
     await page
       .locator(".terminal-card")
-      .filter({ has: page.getByRole("heading", { name: renamed, exact: true }) })
+      .filter({
+        has: page.getByRole("heading", { name: renamed, exact: true }),
+      })
       .getByRole("button", { name: renamed, exact: true })
       .click();
     await expect(page.locator(".terminal-state")).toContainText("控制中");

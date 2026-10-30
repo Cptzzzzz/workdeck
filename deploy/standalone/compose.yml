@@ -1,0 +1,56 @@
+name: ${WORKDECK_PROJECT:-workdeck-standalone}
+services:
+  hub:
+    image: ${WORKDECK_IMAGE:-workdeck-standalone:local}
+    build:
+      context: ./source
+      dockerfile: Dockerfile
+      args:
+        WORKDECK_VERSION: ${WORKDECK_VERSION:-dev}
+        GOPROXY: ${WORKDECK_GO_PROXY:-https://proxy.golang.org,direct}
+    restart: unless-stopped
+    command:
+      - --addr=:8090
+      - --public-url=${WORKDECK_PUBLIC_URL:?请配置公开访问地址}
+      - --data-dir=/data
+      - --assets-dir=/web
+      - --admin-password-file=/run/secrets/admin_password
+      - --trusted-proxy-cidr=${WORKDECK_TRUSTED_PROXY_CIDR:-}
+      - --session-ttl=${WORKDECK_SESSION_TTL:-720h}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 100
+    ports:
+      - 127.0.0.1:${WORKDECK_PORT:-8090}:8090
+    volumes:
+      - hub-data:/data
+      - ./secrets/admin_password:/run/secrets/admin_password:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  caddy:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    environment:
+      WORKDECK_DOMAIN: ${WORKDECK_DOMAIN:-localhost}
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  hub-data:
+  caddy-data:
+  caddy-config:
