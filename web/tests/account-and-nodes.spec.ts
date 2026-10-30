@@ -16,17 +16,25 @@ async function login(page: Page) {
   ).toBeVisible();
 }
 
-test("password form imposes no length constraints", async ({ page }) => {
+test("password form requires six characters with letters and digits", async ({
+  page,
+}) => {
   await login(page);
   await page.getByRole("button", { name: "修改密码", exact: true }).click();
   const field = page.getByLabel("新密码", { exact: true });
-  await expect(field).not.toHaveAttribute("minlength");
+  await expect(field).toHaveAttribute("minlength", "6");
   await expect(field).not.toHaveAttribute("maxlength");
-  for (const value of ["", "1", "长".repeat(100)]) {
+  for (const value of ["abc123", "ABC123", "Ab1!@#", "A1" + "长".repeat(100)]) {
     await field.fill(value);
     expect(
       await field.evaluate((input: HTMLInputElement) => input.checkValidity()),
     ).toBe(true);
+  }
+  for (const value of ["", "abcdef", "123456"]) {
+    await field.fill(value);
+    expect(
+      await field.evaluate((input: HTMLInputElement) => input.checkValidity()),
+    ).toBe(false);
   }
   await page.getByRole("button", { name: "关闭对话框" }).click();
   // Production credentials are deliberately not changed by this acceptance test.

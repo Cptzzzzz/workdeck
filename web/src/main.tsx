@@ -1222,6 +1222,14 @@ function Password({ onSaved }: { onSaved: () => void }) {
           setError("两次输入的密码不一致");
           return;
         }
+        if (
+          Array.from(password).length < 6 ||
+          !/[A-Za-z]/.test(password) ||
+          !/[0-9]/.test(password)
+        ) {
+          setError("密码至少 6 位，且同时包含英文字母和数字，大小写不限");
+          return;
+        }
         setBusy(true);
         setError("");
         try {
@@ -1258,7 +1266,11 @@ function Password({ onSaved }: { onSaved: () => void }) {
           autoComplete="new-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          minLength={6}
+          pattern="(?=.*[A-Za-z])(?=.*[0-9]).*"
+          required
         />
+        <small>至少 6 位，同时包含英文字母和数字，大小写不限。</small>
       </label>
       <label>
         确认新密码
@@ -1267,6 +1279,7 @@ function Password({ onSaved }: { onSaved: () => void }) {
           autoComplete="new-password"
           value={confirmPassword}
           onChange={(e) => setConfirm(e.target.value)}
+          required
         />
       </label>
       {error && <div className="form-error">{error}</div>}

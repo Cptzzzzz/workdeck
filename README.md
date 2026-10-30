@@ -18,7 +18,7 @@ Requires Go 1.25+, Node 22+, tmux, and systemd (a user manager for ordinary acco
 ```sh
 mkdir -p .secrets
 chmod 700 .secrets
-# Put your chosen initial password in this file (never commit it):
+# Put an initial password (6+ characters, letters and digits, any letter case) in this file (never commit it):
 openssl rand -base64 30 > .secrets/administrator.txt
 chmod 600 .secrets/administrator.txt
 npm ci --prefix web

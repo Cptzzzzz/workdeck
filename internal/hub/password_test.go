@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func TestPasswordChangeAcceptsShortEmptyAndLongPasswords(t *testing.T) {
+func TestPasswordChangePolicyAndLegacyCompatibility(t *testing.T) {
 	x := setup(t)
 	legacy, err := bcrypt.GenerateFromPassword([]byte(x.password), bcrypt.MinCost)
 	if err != nil {
@@ -20,7 +20,12 @@ func TestPasswordChangeAcceptsShortEmptyAndLongPasswords(t *testing.T) {
 		t.Fatal(err)
 	}
 	x.signIn(t) // Existing bcrypt accounts still authenticate after deployment.
-	for _, password := range []string{"x", "", strings.Repeat("密", 100), strings.Repeat("q", 3000)} {
+	for _, password := range []string{"", "abc12", "abcdef", "ABCDEF", "123456", "中文中文中文"} {
+		if code, _ := x.request(t, "POST", "/api/account/password", map[string]string{"current": x.password, "password": password}, true); code != 400 {
+			t.Fatal("invalid password accepted", code)
+		}
+	}
+	for _, password := range []string{"abc123", "ABC123", "Ab1!@#", "A1" + strings.Repeat("密", 100), "A1" + strings.Repeat("q", 3000)} {
 		if code, out := x.request(t, "POST", "/api/account/password", map[string]string{"current": x.password, "password": password}, true); code != 200 {
 			t.Fatal("password policy still rejects a supported value", code, out)
 		}
@@ -39,8 +44,8 @@ func TestPasswordChangeAcceptsShortEmptyAndLongPasswords(t *testing.T) {
 	}
 }
 
-func TestInitialPasswordsHaveNoLengthPolicy(t *testing.T) {
-	for _, password := range []string{"", "a", strings.Repeat("长", 100), " leading and trailing spaces "} {
+func TestInitialPasswordsFollowPolicy(t *testing.T) {
+	for _, password := range []string{"abc123", "ABC123", "A1" + strings.Repeat("长", 100), " leading and trailing spaces 1 "} {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "initial-password")
 		if err := os.WriteFile(path, []byte(password+"\n"), 0600); err != nil {
@@ -78,5 +83,35 @@ func TestNodeRenameValidationAndIdentity(t *testing.T) {
 	}
 	if code, _ := x.request(t, "PATCH", "/api/nodes/"+randomID(), map[string]string{"name": "missing"}, true); code != 404 {
 		t.Fatal("missing node renamed")
+	}
+}
+
+func TestInitialPasswordRejectsMissingLettersDigitsOrLength(t *testing.T) {
+	for _, password := range []string{"", "abc12", "abcdef", "123456"} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "initial-password")
+		if err := os.WriteFile(path, []byte(password), 0600); err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenStore(dir, "admin", path)
+		if err == nil {
+			store.db.Close()
+			t.Fatal("invalid initial password accepted")
+		}
+	}
+}
+func TestNonCompliantExistingPasswordCanStillBeChanged(t *testing.T) {
+	x := setup(t)
+	old, err := hashPassword("x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = x.h.store.db.Exec("UPDATE accounts SET password_hash=? WHERE username='admin'", old); err != nil {
+		t.Fatal(err)
+	}
+	x.password = "x"
+	x.signIn(t)
+	if code, _ := x.request(t, "POST", "/api/account/password", map[string]string{"current": "x", "password": "abc123"}, true); code != 200 {
+		t.Fatal("existing password compatibility failed", code)
 	}
 }

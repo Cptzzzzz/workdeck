@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/crypto/pbkdf2"
@@ -15,6 +16,24 @@ import (
 
 const passwordPrefix = "$workdeck$pbkdf2-sha256$v1$"
 const passwordIterations = 600000
+
+const passwordPolicyMessage = "密码至少 6 位，且同时包含英文字母和数字，大小写不限"
+
+func validatePassword(password string) error {
+	letter, digit := false, false
+	for _, character := range password {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' {
+			letter = true
+		}
+		if character >= '0' && character <= '9' {
+			digit = true
+		}
+	}
+	if utf8.RuneCountInString(password) < 6 || !letter || !digit {
+		return errors.New(passwordPolicyMessage)
+	}
+	return nil
+}
 
 // Versioned PBKDF2 hashes support arbitrary password bytes without bcrypt's
 // 72-byte input bound. Existing bcrypt accounts remain readable until changed.

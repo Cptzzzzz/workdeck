@@ -33,7 +33,7 @@ backups/                    private ingress/version backups
 
 The Hub runs as UID/GID 65532 with a read-only root filesystem, dropped capabilities, no-new-privileges, and bounded memory/logs. Its writable bind mount contains SQLite. Administrator secrets are transferred separately, outside images and source archives.
 
-The initial username is `admin`. Before first deployment, place your chosen password in local `.secrets/administrator.txt` with mode 0600 and parent directory mode 0700. After a UI password change, the database password hash is authoritative; the initialization file no longer reflects the active password.
+The initial username is `admin`. Before first deployment, place a password of at least six characters containing both letters and digits in local `.secrets/administrator.txt` with mode 0600 and parent directory mode 0700. After a UI password change, the database password hash is authoritative; the initialization file no longer reflects the active password.
 
 ## Agent service
 

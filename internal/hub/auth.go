@@ -175,6 +175,10 @@ func (h *Hub) changePassword(w http.ResponseWriter, r *http.Request, l login) {
 	if !decode(w, r, &in) {
 		return
 	}
+	if err := validatePassword(in.Password); err != nil {
+		failure(w, 400, err.Error())
+		return
+	}
 	var old []byte
 	_ = h.store.db.QueryRow("SELECT password_hash FROM accounts WHERE username=?", l.Username).Scan(&old)
 	if comparePassword(old, in.Current) != nil {

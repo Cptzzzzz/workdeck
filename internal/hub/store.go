@@ -91,6 +91,10 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 			return nil, fmt.Errorf("initial administrator password: %w", e)
 		}
 		password := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+		if err := validatePassword(password); err != nil {
+			db.Close()
+			return nil, err
+		}
 		hash, e := hashPassword(password)
 		if e != nil {
 			return nil, e
