@@ -118,6 +118,8 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("PUT /api/terminals/{id}/workspace", h.protected(h.changeWorkspace))
 	m.HandleFunc("POST /api/workspaces/{id}/connections", h.protected(h.newFileConnection))
 	m.HandleFunc("GET /api/workspaces/{id}/ws", h.protected(h.browserFileSocket))
+	m.HandleFunc("POST /api/workspaces/{id}/downloads", h.protected(h.newDownloadTicket))
+	m.HandleFunc("GET /api/workspaces/{id}/downloads/{ticket}", h.protected(h.downloadFile))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))

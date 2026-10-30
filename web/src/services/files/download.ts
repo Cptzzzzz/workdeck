@@ -1,6 +1,7 @@
 import { FileClient, FileServiceError } from "./client";
 import { MAX_CHUNK } from "./protocol";
 import { checkTransferAbort } from "./transfer";
+import { api } from "../api";
 
 const BLOB_LIMIT = 20 * 1024 * 1024;
 type Writable = {
@@ -19,6 +20,7 @@ export async function downloadFile(
   path: string,
   signal?: AbortSignal,
   progress?: (done: number, total: number) => void,
+  onBrowserDownload?: () => void,
 ): Promise<void> {
   const name = path.split("/").pop() || "download";
   const picker = (window as Window & { showSaveFilePicker?: Picker })
@@ -34,11 +36,34 @@ export async function downloadFile(
     if (!Number.isSafeInteger(read.entry.size) || read.entry.size < 0)
       throw new FileServiceError("PROTOCOL_ERROR", "文件大小无效");
     if (!handle) {
-      if (read.entry.size > BLOB_LIMIT)
-        throw new FileServiceError(
-          "FILE_TOO_LARGE",
-          "当前浏览器不支持大文件流式下载，请使用支持保存文件的桌面浏览器",
+      if (read.entry.size > BLOB_LIMIT) {
+        if (!read.entry.version)
+          throw new FileServiceError("PROTOCOL_ERROR", "文件版本无效");
+        const ticket = await api<{ ticket: string }>(
+          `/workspaces/${encodeURIComponent(client.workspace.id)}/downloads`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              path,
+              version: read.entry.version,
+              size: read.entry.size,
+            }),
+            signal,
+          },
         );
+        if (!/^[0-9a-f]{48}$/.test(ticket.ticket))
+          throw new FileServiceError("PROTOCOL_ERROR", "下载凭证无效");
+        checkTransferAbort(signal);
+        const link = document.createElement("a");
+        link.href = `/api/workspaces/${encodeURIComponent(client.workspace.id)}/downloads/${ticket.ticket}`;
+        link.download = name;
+        link.rel = "noreferrer";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        onBrowserDownload?.();
+        return;
+      }
       const bytes = new Uint8Array(read.entry.size);
       for (let offset = 0; offset < bytes.length; ) {
         checkTransferAbort(signal);

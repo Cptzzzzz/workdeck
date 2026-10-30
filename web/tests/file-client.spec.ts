@@ -328,7 +328,7 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
   }
 });
 
-test("downloads stream in bounded chunks and reject oversized browser fallback", async ({
+test("downloads stream in bounded chunks and use a bounded browser fallback", async ({
   page,
 }) => {
   const bundleDir = mkdtempSync(
@@ -356,7 +356,11 @@ test("downloads stream in bounded chunks and reject oversized browser fallback",
         closed = 0,
         reads = 0;
       const client = {
-        openRead: async () => ({ id: "read", entry: { size } }),
+        workspace: { id: "b".repeat(48) },
+        openRead: async () => ({
+          id: "read",
+          entry: { size, version: "a".repeat(64) },
+        }),
         readChunk: async (_id: string, _offset: number, length: number) => {
           reads++;
           return new Uint8Array(length);
@@ -399,17 +403,36 @@ test("downloads stream in bounded chunks and reject oversized browser fallback",
       delete (window as any).showSaveFilePicker;
       size = 21 * 1024 * 1024;
       const before = reads;
-      let rejected = false;
+      const oldFetch = window.fetch,
+        oldClick = HTMLAnchorElement.prototype.click;
+      let launched = "",
+        requested = "",
+        browserNotice = false;
+      window.fetch = async (_url, init) => {
+        requested = String(init?.body);
+        return new Response(JSON.stringify({ ticket: "c".repeat(48) }), {
+          status: 200,
+        });
+      };
+      HTMLAnchorElement.prototype.click = function () {
+        launched = this.getAttribute("href") || "";
+      };
       try {
-        await downloadFile(client, "large.bin");
-      } catch (error) {
-        rejected = (error as any).code === "FILE_TOO_LARGE";
+        await downloadFile(client, "large.bin", undefined, undefined, () => {
+          browserNotice = true;
+        });
+      } finally {
+        window.fetch = oldFetch;
+        HTMLAnchorElement.prototype.click = oldClick;
       }
       return {
         total,
         largest,
         closed,
-        rejected,
+        fallback:
+          launched.endsWith("/downloads/" + "c".repeat(48)) &&
+          JSON.parse(requested).size === size &&
+          browserNotice,
         fallbackReads: reads - before,
         cancelled,
         cancelledWrite,
@@ -420,7 +443,7 @@ test("downloads stream in bounded chunks and reject oversized browser fallback",
       total: 1024 * 1024 + 7,
       largest: 32768,
       closed: 3,
-      rejected: true,
+      fallback: true,
       fallbackReads: 0,
       cancelled: true,
       cancelledWrite: true,

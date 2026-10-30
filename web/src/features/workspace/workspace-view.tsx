@@ -307,6 +307,12 @@ export function WorkspaceSidebar({
           <button onClick={controller.cancelTransfer}>取消传输</button>
         </div>
       )}
+      {controller.downloadMessage && (
+        <div className="workbench-hint" role="status">
+          {controller.downloadMessage}
+          <button onClick={controller.clearDownloadMessage}>关闭</button>
+        </div>
+      )}
       {controller.intents.length > 0 && (
         <div className="workbench-intents">
           <b>待确认的文件操作</b>

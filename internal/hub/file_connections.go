@@ -17,6 +17,8 @@ const fileTicketProtocol = "workdeck-file-ticket."
 
 type fileBrowserTicket struct {
 	workspaceID, terminalID, nodeID, loginHash string
+	mode, path, version                        string
+	size                                       int64
 	revision                                   int64
 	agent                                      *agentConn
 	expires                                    time.Time
@@ -145,7 +147,7 @@ func (h *Hub) browserFileSocket(w http.ResponseWriter, r *http.Request, l login)
 	h.mu.Lock()
 	ticket := h.fileTickets[digest(token)]
 	delete(h.fileTickets, digest(token))
-	if ticket == nil || ticket.workspaceID != workspace.ID || ticket.terminalID != workspace.TerminalID || ticket.nodeID != workspace.NodeID || ticket.revision != workspace.Revision || ticket.loginHash != l.Hash || !ticket.expires.After(time.Now()) || h.agents[workspace.NodeID] != ticket.agent {
+	if ticket == nil || ticket.mode != "" || ticket.workspaceID != workspace.ID || ticket.terminalID != workspace.TerminalID || ticket.nodeID != workspace.NodeID || ticket.revision != workspace.Revision || ticket.loginHash != l.Hash || !ticket.expires.After(time.Now()) || h.agents[workspace.NodeID] != ticket.agent {
 		h.mu.Unlock()
 		h.authMu.Unlock()
 		lock.Unlock()

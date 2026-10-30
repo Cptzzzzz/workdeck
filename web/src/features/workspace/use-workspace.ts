@@ -103,6 +103,7 @@ export function useWorkspace(
     [],
   );
   const [transfer, setTransfer] = useState("");
+  const [downloadMessage, setDownloadMessage] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [reconnect, setReconnect] = useState(0);
   const clientRef = useRef<FileClient | null>(null),
@@ -2479,6 +2480,8 @@ export function useWorkspace(
     acknowledgeDelete,
     deleteOutcomes,
     transfer,
+    downloadMessage,
+    clearDownloadMessage: () => setDownloadMessage(""),
     clearTransfer: () => setTransfer(""),
     uploadFile,
     checkUploadIntent,
@@ -2495,9 +2498,17 @@ export function useWorkspace(
         return Promise.reject(new Error("已有文件传输正在进行"));
       const controller = new AbortController();
       transferAbort.current = controller;
+      setDownloadMessage("");
       setTransfer("正在准备下载");
-      return downloadFile(client, path, controller.signal, (done, total) =>
-        setTransfer(`正在下载 ${done} / ${total} 字节`),
+      return downloadFile(
+        client,
+        path,
+        controller.signal,
+        (done, total) => setTransfer(`正在下载 ${done} / ${total} 字节`),
+        () =>
+          setDownloadMessage(
+            "大文件下载已交给浏览器，通过服务器中转；请在浏览器下载列表查看进度或取消。",
+          ),
       ).finally(() => {
         if (transferAbort.current === controller) transferAbort.current = null;
         setTransfer("");
