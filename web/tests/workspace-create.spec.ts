@@ -149,7 +149,7 @@ test("create files and folders without overwriting and recover a lost confirmati
     await expect(dialog.getByRole("alert")).toContainText("已有待确认");
     expect(existsSync(path.join(dir, "lost-confirmation"))).toBe(false);
     await dialog.getByRole("button", { name: "取消" }).click();
-    await expect(page.getByText("待确认的创建操作")).toBeVisible();
+    await expect(page.getByText("待确认的文件操作")).toBeVisible();
     const pending = page
       .locator(".workbench-intents")
       .filter({ hasText: "project/lost-confirmation" });
@@ -157,7 +157,7 @@ test("create files and folders without overwriting and recover a lost confirmati
       pending.getByRole("button", { name: "核对并继续" }),
     ).toBeEnabled();
     await pending.getByRole("button", { name: "核对并继续" }).click();
-    await expect(page.getByText("待确认的创建操作")).toBeHidden();
+    await expect(page.getByText("待确认的文件操作")).toBeHidden();
     expect(
       readdirSync(path.join(dir, "project")).filter(
         (n) => n === "lost-confirmation",

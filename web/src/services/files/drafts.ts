@@ -34,12 +34,14 @@ export type CreateIntent = {
   workspaceID: string;
   rootRevision: number;
   opID: string;
-  kind: "file" | "directory" | "upload";
+  kind: "file" | "directory" | "upload" | "rename";
   path: string;
   createdAt: number;
   size?: number;
   sha256?: string;
   sourceName?: string;
+  source?: string;
+  version?: string;
 };
 const intentScope = (
   v: Pick<CreateIntent, "account" | "nodeID" | "workspaceID" | "rootRevision">,
@@ -190,6 +192,7 @@ export async function moveDrafts(
   scope: Omit<DraftIdentity, "path">,
   source: string,
   target: string,
+  validateOnly = false,
 ): Promise<DraftMove[]> {
   const parent = (path: string) => {
     const separator = path.lastIndexOf("/");
@@ -263,11 +266,13 @@ export async function moveDrafts(
               tx.abort();
               return;
             }
-            store.put(
-              { ...draft, identity: next, token, updatedAt: Date.now() },
-              nextKey,
-            );
-            store.delete(previousKey);
+            if (!validateOnly) {
+              store.put(
+                { ...draft, identity: next, token, updatedAt: Date.now() },
+                nextKey,
+              );
+              store.delete(previousKey);
+            }
           };
         }
         item.continue();

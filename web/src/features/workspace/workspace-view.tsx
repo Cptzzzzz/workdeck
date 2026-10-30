@@ -9,6 +9,7 @@ import {
   Download,
   Plus,
   Upload,
+  Pencil,
   Server,
   Settings2,
   LogOut,
@@ -35,6 +36,7 @@ export function WorkspaceSidebar({
   onPassword,
   onLogout,
   onNewItem,
+  onRename,
 }: {
   controller: WorkspaceController;
   onJoin: () => void;
@@ -42,6 +44,7 @@ export function WorkspaceSidebar({
   onPassword: () => void;
   onLogout: () => void;
   onNewItem: () => void;
+  onRename: (path: string) => void;
 }) {
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadTarget = useRef<{
@@ -100,6 +103,21 @@ export function WorkspaceSidebar({
                   {folder ? <Folder size={15} /> : <File size={15} />}
                   <span>{entry.name}</span>
                 </button>
+                {!entry.restricted && (folder || entry.kind === "file") && (
+                  <button
+                    className="file-tree-download"
+                    title={`重命名 ${entry.name}`}
+                    aria-label={`重命名 ${entry.name}`}
+                    disabled={
+                      !controller.supportsRename ||
+                      controller.renaming ||
+                      controller.connection !== "中转连接"
+                    }
+                    onClick={() => onRename(child)}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                )}
                 {!folder && entry.kind === "file" && !entry.restricted && (
                   <button
                     className="file-tree-download"
@@ -221,7 +239,7 @@ export function WorkspaceSidebar({
       )}
       {controller.intents.length > 0 && (
         <div className="workbench-intents">
-          <b>待确认的创建操作</b>
+          <b>待确认的文件操作</b>
           {controller.intents.map((intent) => (
             <div key={intent.opID}>
               <span title={intent.path}>{intent.path}</span>
@@ -229,16 +247,24 @@ export function WorkspaceSidebar({
                 disabled={
                   !controller.supportsCreate ||
                   controller.connection !== "中转连接" ||
-                  !!controller.transfer
+                  !!controller.transfer ||
+                  controller.renaming ||
+                  (intent.kind === "rename" && !controller.supportsRename)
                 }
                 onClick={() =>
                   intent.kind === "upload"
                     ? chooseUpload(intent)
-                    : void controller
-                        .retryCreate(intent)
-                        .catch((e) =>
-                          controller.reportError((e as Error).message),
-                        )
+                    : intent.kind === "rename"
+                      ? void controller
+                          .retryRename(intent)
+                          .catch((e) =>
+                            controller.reportError((e as Error).message),
+                          )
+                      : void controller
+                          .retryCreate(intent)
+                          .catch((e) =>
+                            controller.reportError((e as Error).message),
+                          )
                 }
               >
                 {intent.kind === "upload" ? "选择原文件继续" : "核对并继续"}
@@ -388,6 +414,7 @@ export function WorkspaceEditor({
             className="secondary"
             disabled={
               doc.saving ||
+              controller.renaming ||
               !!doc.warning ||
               doc.conflict ||
               controller.connection !== "中转连接"
@@ -446,6 +473,7 @@ export function WorkspaceEditor({
             >
               <MonacoEditor
                 document={doc}
+                readOnly={controller.renaming}
                 onChange={(text) => controller.edit(doc, text)}
                 onSave={() => void controller.save(doc)}
               />
@@ -488,6 +516,78 @@ export function WorkspaceEditor({
         </div>
       )}
     </section>
+  );
+}
+
+export function RenameItemForm({
+  controller,
+  source,
+  onCancel,
+  onRenamed,
+}: {
+  controller: WorkspaceController;
+  source: string;
+  onCancel: () => void;
+  onRenamed: () => void;
+}) {
+  const [name, setName] = useState(() => source.split("/").pop() || "");
+  const [target] = useState(() => ({
+    id: controller.workspace?.id || "",
+    revision: controller.workspace?.root_revision || 0,
+  }));
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+          await controller.renameItem(source, name, target.id, target.revision);
+          onRenamed();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        <Pencil size={24} />
+      </div>
+      <h2>重命名文件或文件夹</h2>
+      <p className="modal-description">当前路径：{source}</p>
+      <label>
+        新名称
+        <input
+          aria-label="新的文件名称"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoFocus
+          maxLength={255}
+        />
+      </label>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}。若结果尚未确认，可在文件树下方核对。
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={onCancel}
+          disabled={busy}
+        >
+          取消
+        </button>
+        <button className="primary" disabled={busy || !name}>
+          {busy ? "正在重命名…" : "重命名"}
+        </button>
+      </div>
+    </form>
   );
 }
 

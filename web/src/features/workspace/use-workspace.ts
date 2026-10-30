@@ -15,6 +15,7 @@ import {
   recordCreateIntent,
   listCreateIntents,
   removeCreateIntent,
+  moveDrafts,
 } from "../../services/files/drafts";
 import type {
   FileEntry,
@@ -67,6 +68,7 @@ export function useWorkspace(
   terminal: TerminalRecord | undefined,
   account: string,
   supportsCreate: boolean,
+  supportsRename: boolean,
 ) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [connection, setConnection] = useState("等待连接");
@@ -77,6 +79,7 @@ export function useWorkspace(
   const [selectedDirectory, setSelectedDirectory] = useState(".");
   const [intents, setIntents] = useState<CreateIntent[]>([]);
   const [transfer, setTransfer] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [reconnect, setReconnect] = useState(0);
   const clientRef = useRef<FileClient | null>(null),
     generation = useRef(0);
@@ -87,6 +90,7 @@ export function useWorkspace(
     queues = useRef(new Map<string, Promise<void>>());
   const activeIntents = useRef(new Set<string>());
   const transferAbort = useRef<AbortController | null>(null);
+  const renameLock = useRef(false);
   const [, render] = useReducer((n: number) => n + 1, 0);
   const update = useCallback(() => render(), []);
 
@@ -286,6 +290,7 @@ export function useWorkspace(
   }, [enabled, workspace, refresh]);
   const toggle = useCallback(
     async (path: string) => {
+      if (renameLock.current) return;
       setSelectedDirectory(path);
       if (expanded.has(path)) {
         setExpanded((old) => {
@@ -310,6 +315,7 @@ export function useWorkspace(
   );
   const openFile = useCallback(
     async (path: string) => {
+      if (renameLock.current) return;
       const client = clientRef.current,
         w = workspace;
       if (!client || !w || !terminal) return;
@@ -384,6 +390,17 @@ export function useWorkspace(
             /* Keep the original operation for a later retry. */
           }
         }
+        // A rename changes inode metadata even when the bytes do not change.
+        // Rebase only after comparing the exact decoded base and encoding;
+        // later writes still use the freshly observed version as a CAS guard.
+        if (
+          saved &&
+          !saved.pendingSave &&
+          saved.baseVersion !== entry.version &&
+          saved.baseText === text &&
+          saved.encoding === (bom ? "utf8-bom" : "utf8")
+        )
+          saved.baseVersion = entry.version;
         if (
           saved &&
           !saved.pendingSave &&
@@ -455,6 +472,7 @@ export function useWorkspace(
         client.workspace.id !== doc.identity.workspaceID ||
         client.workspace.root_revision !== doc.identity.rootRevision ||
         doc.saving ||
+        renameLock.current ||
         doc.conflict ||
         doc.warning
       )
@@ -507,7 +525,7 @@ export function useWorkspace(
   const retry = useCallback(() => setReconnect((n) => n + 1), []);
   const runCreateIntent = useCallback(
     async (intent: CreateIntent) => {
-      if (intent.kind === "upload")
+      if (intent.kind === "upload" || intent.kind === "rename")
         throw new Error("请重新选择原文件以核对并继续上传");
       const client = clientRef.current;
       if (
@@ -589,6 +607,344 @@ export function useWorkspace(
     },
     [refresh],
   );
+  const renameIntent = useCallback(
+    async (intent: CreateIntent) => {
+      const client = clientRef.current,
+        gen = generation.current;
+      if (
+        !client ||
+        client.workspace.id !== intent.workspaceID ||
+        client.workspace.root_revision !== intent.rootRevision ||
+        intent.kind !== "rename" ||
+        !intent.source ||
+        !intent.version
+      )
+        throw new Error("工作区或重命名记录无效");
+      if (activeIntents.current.has(intent.opID))
+        throw new Error("此操作正在进行");
+      activeIntents.current.add(intent.opID);
+      const source = intent.source,
+        target = intent.path;
+      const matches = (p: string) => p === source || p.startsWith(source + "/");
+      const sameScope = (id: DraftIdentity) =>
+        id.account === intent.account &&
+        id.nodeID === intent.nodeID &&
+        id.workspaceID === intent.workspaceID &&
+        id.rootRevision === intent.rootRevision;
+      try {
+        const active = Array.from(docs.current.values()).filter(
+          (d) => sameScope(d.identity) && matches(d.path),
+        );
+        if (
+          Array.from(docs.current.values()).some(
+            (d) =>
+              sameScope(d.identity) &&
+              (d.path === target || d.path.startsWith(target + "/")),
+          ) ||
+          Array.from(previews.current.values()).some(
+            (p) =>
+              sameScope(p.identity) &&
+              (p.path === target || p.path.startsWith(target + "/")),
+          )
+        )
+          throw new Error("目标路径已有打开的标签，请先处理");
+        for (const doc of active) {
+          if (doc.saving || doc.pending)
+            throw new Error("请先完成受影响文件的保存或结果核对");
+          const oldKey = documentKey(doc.identity),
+            timer = timers.current.get(oldKey);
+          if (timer) {
+            clearTimeout(timer);
+            timers.current.delete(oldKey);
+          }
+          await persist(doc);
+        }
+        await moveDrafts(intent, source, target, true);
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，操作记录已保存，请返回后核对");
+        let state;
+        try {
+          state = await client.operationStatus(intent.opID, "entry.rename");
+        } catch (e) {
+          if (
+            !(e instanceof FileServiceError) ||
+            e.code !== "OPERATION_NOT_FOUND"
+          )
+            throw e;
+        }
+        if (!state || state.state === "prepared")
+          state = await client.rename(
+            intent.opID,
+            source,
+            target,
+            intent.version,
+          );
+        if (state.state === "conflict" || state.state === "failed") {
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+          throw new Error(
+            state.error?.message || "重命名未执行，请检查文件后重试",
+          );
+        }
+        if (state.state !== "committed")
+          throw new Error("重命名结果尚未确认，请稍后核对");
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("重命名已执行，请返回原工作区核对草稿");
+        const moved = await moveDrafts(intent, source, target);
+        const byOld = new Map(moved.map((m) => [documentKey(m.previous), m]));
+        for (const doc of active) {
+          const oldKey = documentKey(doc.identity),
+            migration = byOld.get(oldKey);
+          if (!migration || migration.previousToken !== doc.token) {
+            doc.conflict = true;
+            doc.persistenceError = "草稿在其他标签页发生变化，请先导出当前内容";
+            continue;
+          }
+          docs.current.delete(oldKey);
+          doc.identity = migration.identity;
+          doc.path = migration.identity.path;
+          doc.token = migration.token;
+          doc.conflict = true;
+          const newKey = documentKey(doc.identity);
+          docs.current.set(newKey, doc);
+          if (selections.current.get(intent.workspaceID) === oldKey)
+            selections.current.set(intent.workspaceID, newKey);
+          setSelected((old) => (old === oldKey ? newKey : old));
+          try {
+            const current = await client.readBytes(doc.path);
+            const hasBOM =
+              current.bytes.length >= 3 &&
+              current.bytes[0] === 0xef &&
+              current.bytes[1] === 0xbb &&
+              current.bytes[2] === 0xbf;
+            if (
+              current.entry.version &&
+              doc.encoding === (hasBOM ? "utf8-bom" : "utf8") &&
+              new TextDecoder("utf-8", { fatal: true }).decode(
+                current.bytes,
+              ) === doc.base
+            ) {
+              doc.version = current.entry.version;
+              doc.conflict = false;
+            }
+            await persist(doc);
+          } catch (e) {
+            doc.persistenceError =
+              "重命名后草稿仍需核对：" + (e as Error).message;
+          }
+        }
+        for (const [oldKey, item] of previews.current) {
+          if (!sameScope(item.identity) || !matches(item.path)) continue;
+          const nextPath = target + item.path.slice(source.length),
+            nextIdentity = { ...item.identity, path: nextPath };
+          try {
+            const entry = await client.stat(nextPath);
+            if (!entry.version) continue;
+            previews.current.delete(oldKey);
+            const nextKey = documentKey(nextIdentity);
+            previews.current.set(nextKey, {
+              ...item,
+              identity: nextIdentity,
+              path: nextPath,
+              version: entry.version,
+              size: entry.size,
+            });
+            if (selections.current.get(intent.workspaceID) === oldKey)
+              selections.current.set(intent.workspaceID, nextKey);
+            setSelected((old) => (old === oldKey ? nextKey : old));
+          } catch {
+            /* Keep the old tab available for an explicit refresh. */
+          }
+        }
+        setExpanded(
+          (old) =>
+            new Set(
+              Array.from(old, (p) =>
+                matches(p) ? target + p.slice(source.length) : p,
+              ),
+            ),
+        );
+        setSelectedDirectory((old) =>
+          matches(old) ? target + old.slice(source.length) : old,
+        );
+        setDirectories((old) => {
+          const next: Record<string, Directory> = {};
+          for (const [p, listing] of Object.entries(old))
+            next[matches(p) ? target + p.slice(source.length) : p] = listing;
+          return next;
+        });
+        await removeCreateIntent(intent.opID);
+        setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+        update();
+        if (clientRef.current === client && gen === generation.current) {
+          try {
+            for (const p of expanded)
+              await loadDirectory(
+                client,
+                matches(p) ? target + p.slice(source.length) : p,
+                gen,
+              );
+          } catch (e) {
+            setError("重命名已完成，文件树刷新失败：" + (e as Error).message);
+          }
+        }
+      } catch (e) {
+        if (
+          e instanceof FileServiceError &&
+          [
+            "ALREADY_EXISTS",
+            "CONFLICT",
+            "FILE_CHANGED",
+            "SPECIAL_FILE",
+          ].includes(e.code)
+        ) {
+          await removeCreateIntent(intent.opID);
+          setIntents((old) => old.filter((i) => i.opID !== intent.opID));
+        }
+        throw e;
+      } finally {
+        activeIntents.current.delete(intent.opID);
+      }
+    },
+    [persist, expanded, loadDirectory, update],
+  );
+  const withRenameLock = useCallback(async (run: () => Promise<void>) => {
+    if (renameLock.current) throw new Error("已有重命名正在进行");
+    renameLock.current = true;
+    setRenaming(true);
+    try {
+      await run();
+    } finally {
+      renameLock.current = false;
+      setRenaming(false);
+    }
+  }, []);
+  const renameItem = useCallback(
+    async (
+      source: string,
+      name: string,
+      expectedWorkspace: string,
+      expectedRevision: number,
+    ) =>
+      withRenameLock(async () => {
+        const client = clientRef.current,
+          w = workspace,
+          gen = generation.current;
+        if (
+          !client ||
+          !w ||
+          !terminal ||
+          w.id !== expectedWorkspace ||
+          w.root_revision !== expectedRevision ||
+          !supportsRename
+        )
+          throw new Error("工作区已切换或节点尚未升级");
+        if (transferAbort.current)
+          throw new Error("请先完成或取消正在进行的文件传输");
+        if (
+          !name ||
+          name === "." ||
+          name === ".." ||
+          /[\/\\\u0000-\u001f]/.test(name) ||
+          new TextEncoder().encode(name).length > 255
+        )
+          throw new Error("名称无效，请输入单个文件名或文件夹名");
+        const slash = source.lastIndexOf("/"),
+          target = childPath(slash < 0 ? "." : source.slice(0, slash), name);
+        if (source === target) throw new Error("名称没有改变");
+        const overlap = (a: string, b: string) =>
+          a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+        if (
+          intents.some((i) =>
+            [i.path, i.source].some(
+              (p) => !!p && (overlap(p, source) || overlap(p, target)),
+            ),
+          )
+        )
+          throw new Error("相关目录中有待确认文件操作，请先处理");
+        const inScope = (id: DraftIdentity) =>
+          id.account === account &&
+          id.nodeID === terminal.node_id &&
+          id.workspaceID === w.id &&
+          id.rootRevision === w.root_revision;
+        const targets =
+          Array.from(docs.current.values()).some(
+            (d) =>
+              inScope(d.identity) &&
+              (d.path === target || d.path.startsWith(target + "/")),
+          ) ||
+          Array.from(previews.current.values()).some(
+            (p) =>
+              inScope(p.identity) &&
+              (p.path === target || p.path.startsWith(target + "/")),
+          );
+        if (targets) throw new Error("目标路径已有打开的标签，请先处理");
+        for (const doc of docs.current.values()) {
+          if (
+            !inScope(doc.identity) ||
+            !(doc.path === source || doc.path.startsWith(source + "/"))
+          )
+            continue;
+          if (doc.saving || doc.pending)
+            throw new Error("请先完成受影响文件的保存或结果核对");
+          const oldKey = documentKey(doc.identity),
+            timer = timers.current.get(oldKey);
+          if (timer) {
+            clearTimeout(timer);
+            timers.current.delete(oldKey);
+          }
+          await persist(doc);
+        }
+        await moveDrafts(
+          {
+            account,
+            nodeID: terminal.node_id,
+            workspaceID: w.id,
+            rootRevision: w.root_revision,
+          },
+          source,
+          target,
+          true,
+        );
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，请重新选择文件");
+        const meta = await client.stat(source);
+        if (!meta.version || meta.restricted)
+          throw new Error("源文件不支持重命名");
+        const intent: CreateIntent = {
+          account,
+          nodeID: terminal.node_id,
+          workspaceID: w.id,
+          rootRevision: w.root_revision,
+          opID: client.newOperationID(),
+          kind: "rename",
+          path: target,
+          source,
+          version: meta.version,
+          createdAt: Date.now(),
+        };
+        await recordCreateIntent(intent);
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，操作记录已保存，请返回后核对");
+        setIntents((old) => [...old, intent]);
+        await renameIntent(intent);
+      }),
+    [
+      account,
+      workspace,
+      terminal?.id,
+      terminal?.node_id,
+      supportsRename,
+      intents,
+      persist,
+      renameIntent,
+      withRenameLock,
+    ],
+  );
+  const retryRename = useCallback(
+    (intent: CreateIntent) => withRenameLock(() => renameIntent(intent)),
+    [renameIntent, withRenameLock],
+  );
   const runUploadFile = useCallback(
     async (
       file: File,
@@ -598,6 +954,7 @@ export function useWorkspace(
       existing?: CreateIntent,
       signal?: AbortSignal,
     ) => {
+      if (renameLock.current) throw new Error("重命名期间不能开始上传");
       const client = clientRef.current,
         w = workspace,
         gen = generation.current;
@@ -753,6 +1110,7 @@ export function useWorkspace(
       expectedRevision: number,
       existing?: CreateIntent,
     ) => {
+      if (renameLock.current) throw new Error("重命名期间不能开始上传");
       if (transferAbort.current) throw new Error("已有文件传输正在进行");
       const controller = new AbortController();
       transferAbort.current = controller;
@@ -775,6 +1133,7 @@ export function useWorkspace(
   const checkUploadIntent = useCallback(
     async (intent: CreateIntent, cancel = false) => {
       const client = clientRef.current;
+      if (renameLock.current) throw new Error("重命名期间不能核对上传");
       if (
         !client ||
         client.workspace.id !== intent.workspaceID ||
@@ -842,6 +1201,7 @@ export function useWorkspace(
       expectedWorkspace: string,
       expectedRevision: number,
     ) => {
+      if (renameLock.current) throw new Error("重命名期间不能创建文件");
       const client = clientRef.current,
         w = workspace,
         gen = generation.current;
@@ -891,6 +1251,10 @@ export function useWorkspace(
     selectedDirectory,
     selectDirectory: setSelectedDirectory,
     intents,
+    renaming,
+    supportsRename,
+    renameItem,
+    retryRename,
     transfer,
     clearTransfer: () => setTransfer(""),
     uploadFile,
@@ -901,6 +1265,8 @@ export function useWorkspace(
     },
     download: (path: string) => {
       const client = clientRef.current;
+      if (renameLock.current)
+        return Promise.reject(new Error("重命名期间不能开始下载"));
       if (!client) return Promise.reject(new Error("文件连接未就绪"));
       if (transferAbort.current)
         return Promise.reject(new Error("已有文件传输正在进行"));

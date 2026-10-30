@@ -12,10 +12,12 @@ export function MonacoEditor({
   document,
   onChange,
   onSave,
+  readOnly = false,
 }: {
   document: Document;
   onChange: (value: string) => void;
   onSave: () => void;
+  readOnly?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null),
     editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
@@ -98,8 +100,8 @@ export function MonacoEditor({
     const instance = editor.current,
       current = model.current;
     if (!instance || !current) return;
-    instance.updateOptions({ readOnly: !!document.warning });
+    instance.updateOptions({ readOnly: !!document.warning || readOnly });
     if (current.getValue() !== document.text) current.setValue(document.text);
-  }, [document.text, document.warning]);
+  }, [document.text, document.warning, readOnly]);
   return <div className="workbench-monaco" ref={root} />;
 }
