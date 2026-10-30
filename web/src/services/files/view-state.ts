@@ -6,6 +6,12 @@ export type PDFViewState = {
   scrollTop: number;
   scrollLeft: number;
 };
+export type EditorViewState = {
+  line: number;
+  column: number;
+  scrollTop: number;
+  scrollLeft: number;
+};
 const database = "workdeck-workspace-views",
   store = "pdf-views";
 const queues = new Map<string, Promise<void>>();
@@ -96,6 +102,95 @@ export function writePDFView(
           tx.objectStore(store).put(snapshot, id);
           tx.oncomplete = () => resolve();
           tx.onabort = () => reject(tx.error || new Error("保存 PDF 视图失败"));
+          tx.onerror = () => {};
+        });
+      } finally {
+        db.close();
+      }
+    });
+  queues.set(id, next);
+  void next
+    .finally(() => {
+      if (queues.get(id) === next) queues.delete(id);
+    })
+    .catch(() => {});
+  return next;
+}
+
+function validEditor(value: unknown): value is EditorViewState {
+  const v = value as EditorViewState | null;
+  return (
+    !!v &&
+    Number.isSafeInteger(v.line) &&
+    v.line >= 1 &&
+    v.line <= 10000000 &&
+    Number.isSafeInteger(v.column) &&
+    v.column >= 1 &&
+    v.column <= 10000000 &&
+    Number.isFinite(v.scrollTop) &&
+    v.scrollTop >= 0 &&
+    v.scrollTop <= 100000000 &&
+    Number.isFinite(v.scrollLeft) &&
+    v.scrollLeft >= 0 &&
+    v.scrollLeft <= 100000000
+  );
+}
+
+export async function readEditorView(
+  identity: DraftIdentity,
+): Promise<EditorViewState | undefined> {
+  const id = "editor:" + key(identity);
+  try {
+    const session = sessionStorage.getItem("workdeck-view:" + id);
+    if (session) {
+      const value: unknown = JSON.parse(session);
+      if (validEditor(value)) return value;
+    }
+  } catch {
+    // IndexedDB remains the fallback if session storage is unavailable.
+  }
+  await queues.get(id)?.catch(() => {});
+  const db = await open();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(store, "readonly"),
+        request = tx.objectStore(store).get(id);
+      request.onsuccess = () =>
+        resolve(validEditor(request.result) ? request.result : undefined);
+      request.onerror = () =>
+        reject(request.error || new Error("读取编辑器视图失败"));
+      tx.onabort = () => reject(tx.error || new Error("读取编辑器视图失败"));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export function writeEditorView(
+  identity: DraftIdentity,
+  value: EditorViewState,
+): Promise<void> {
+  if (!validEditor(value))
+    return Promise.reject(new Error("编辑器视图参数无效"));
+  const id = "editor:" + key(identity),
+    snapshot = { ...value };
+  try {
+    sessionStorage.setItem("workdeck-view:" + id, JSON.stringify(snapshot));
+  } catch {
+    // Continue with IndexedDB; it reports an error if persistence also fails.
+  }
+  const prior = queues.get(id) || Promise.resolve();
+  const next = prior
+    .catch(() => {})
+    .then(async () => {
+      const db = await open();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(store, "readwrite");
+          tx.objectStore(store).put(snapshot, id);
+          tx.oncomplete = () => resolve();
+          tx.onabort = () =>
+            reject(tx.error || new Error("保存编辑器视图失败"));
           tx.onerror = () => {};
         });
       } finally {

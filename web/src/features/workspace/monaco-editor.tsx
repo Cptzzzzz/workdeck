@@ -1,8 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import "monaco-editor/esm/vs/basic-languages/monaco.contribution";
 import type { Document } from "./use-workspace";
+import {
+  readEditorView,
+  writeEditorView,
+  type EditorViewState,
+} from "../../services/files/view-state";
 
 (
   globalThis as typeof globalThis & { MonacoEnvironment?: unknown }
@@ -23,6 +28,7 @@ export function MonacoEditor({
     editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
     model = useRef<monaco.editor.ITextModel | null>(null);
   const applyingRemote = useRef(false);
+  const [viewError, setViewError] = useState("");
   const changeRef = useRef(onChange),
     saveRef = useRef(onSave);
   changeRef.current = onChange;
@@ -91,8 +97,78 @@ export function MonacoEditor({
     const listener = current.onDidChangeContent(() => {
       if (!applyingRemote.current) changeRef.current(current.getValue());
     });
-    return () => listener.dispose();
+    const identity = { ...document.identity };
+    let active = true,
+      ready = false,
+      touched = false,
+      timer = 0;
+    let latest: EditorViewState | undefined;
+    setViewError("");
+    const capture = () => {
+      const position = instance.getPosition();
+      if (!position || instance.getModel() !== current) return;
+      latest = {
+        line: position.lineNumber,
+        column: position.column,
+        scrollTop: instance.getScrollTop(),
+        scrollLeft: instance.getScrollLeft(),
+      };
+    };
+    const flush = () => {
+      if (timer) clearTimeout(timer);
+      timer = 0;
+      if (!latest || (!ready && !touched)) return;
+      void writeEditorView(identity, latest)
+        .then(() => {
+          if (active) setViewError("");
+        })
+        .catch((e) => {
+          if (active) setViewError((e as Error).message);
+        });
+    };
+    const changed = () => {
+      touched = true;
+      capture();
+      if (timer) clearTimeout(timer);
+      timer = window.setTimeout(flush, 200);
+    };
+    const cursorListener = instance.onDidChangeCursorPosition(changed);
+    const scrollListener = instance.onDidScrollChange(changed);
+    window.addEventListener("pagehide", flush);
+    void readEditorView(identity)
+      .then((saved) => {
+        if (!active || instance.getModel() !== current) return;
+        if (saved && !touched) {
+          instance.setPosition({
+            lineNumber: saved.line,
+            column: saved.column,
+          });
+          instance.setScrollPosition({
+            scrollTop: saved.scrollTop,
+            scrollLeft: saved.scrollLeft,
+          });
+        }
+        ready = true;
+        capture();
+        if (touched) flush();
+      })
+      .catch((e) => {
+        if (!active) return;
+        ready = true;
+        setViewError((e as Error).message);
+        if (touched) flush();
+      });
+    return () => {
+      flush();
+      active = false;
+      window.removeEventListener("pagehide", flush);
+      cursorListener.dispose();
+      scrollListener.dispose();
+      listener.dispose();
+    };
   }, [
+    document.identity.account,
+    document.identity.nodeID,
     document.identity.workspaceID,
     document.identity.rootRevision,
     document.path,
@@ -118,5 +194,14 @@ export function MonacoEditor({
       if (view) instance.restoreViewState(view);
     }
   }, [document.text, document.warning, document.newline, readOnly]);
-  return <div className="workbench-monaco" ref={root} />;
+  return (
+    <div className="workbench-monaco-container">
+      {viewError && (
+        <div className="workbench-notice" role="status">
+          编辑器视图保存失败：{viewError}
+        </div>
+      )}
+      <div className="workbench-monaco" ref={root} />
+    </div>
+  );
 }

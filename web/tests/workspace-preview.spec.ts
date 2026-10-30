@@ -62,6 +62,10 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
     "# 安全文档\n\n![本地图](pixel.png)\n\n![外链图](https://example.invalid/tracker.png)\n\n![越界图](../outside.png)\n\n![编码越界](%2e%2e/outside.png)\n\n![数据图](data:image/svg+xml,malicious)\n\n![SVG图片](attack.svg)\n\n[本地文件](notes/info.txt)\n\n[危险链接](javascript:alert(1))\n\n<script>window.previewExecuted=true</script>\n",
   );
   writeFileSync(path.join(dir, "document.pdf"), fixturePDF());
+  writeFileSync(
+    path.join(dir, "long.txt"),
+    Array.from({ length: 160 }, (_, i) => `line-${i + 1}`).join("\n") + "\n",
+  );
   const external: string[] = [],
     pageErrors: string[] = [],
     directFiles: string[] = [];
@@ -249,6 +253,45 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
     await expect
       .poll(() => pdfViewport.evaluate((el) => el.scrollTop))
       .toBeGreaterThan(0);
+    await page.getByRole("button", { name: "long.txt", exact: true }).click();
+    const input = page.locator(".monaco-editor textarea.inputarea");
+    await input.focus();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Home");
+    await expect(page.locator(".monaco-editor .view-lines")).toContainText(
+      "line-160",
+    );
+    await page
+      .locator(".workbench-tabs .workbench-tab-select")
+      .filter({ hasText: "document.pdf" })
+      .click();
+    await page
+      .locator(".workbench-tabs .workbench-tab-select")
+      .filter({ hasText: "long.txt" })
+      .click();
+    await expect(page.locator(".monaco-editor .view-lines")).toContainText(
+      "line-160",
+    );
+    await input.focus();
+    await page.keyboard.insertText("MARK");
+    await page.keyboard.press("ControlOrMeta+S");
+    await expect
+      .poll(() => readFileSync(path.join(dir, "long.txt"), "utf8"))
+      .toContain("MARKline-160");
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await page.getByRole("button", { name: "long.txt", exact: true }).click();
+    await expect(page.locator(".monaco-editor .view-lines")).toContainText(
+      "MARKline-160",
+    );
+    await input.focus();
+    await page.keyboard.insertText("SECOND");
+    await page.keyboard.press("ControlOrMeta+S");
+    await expect
+      .poll(() => readFileSync(path.join(dir, "long.txt"), "utf8"))
+      .toContain("MARKSECONDline-160");
     const resourceStatuses = await page.evaluate(async () =>
       Promise.all([
         fetch("/assets/pdfjs/standard_fonts/LiberationSans-Regular.ttf").then(

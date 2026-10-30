@@ -563,16 +563,47 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       } catch {
         rejected = true;
       }
+      await Promise.all([
+        views.writeEditorView(id, {
+          line: 2,
+          column: 3,
+          scrollTop: 4,
+          scrollLeft: 5,
+        }),
+        views.writeEditorView(id, {
+          line: 8,
+          column: 9,
+          scrollTop: 10,
+          scrollLeft: 11,
+        }),
+      ]);
+      let editorRejected = false;
+      try {
+        await views.writeEditorView(id, {
+          line: 0,
+          column: 1,
+          scrollTop: 0,
+          scrollLeft: 0,
+        });
+      } catch {
+        editorRejected = true;
+      }
       return {
         a: await views.readPDFView(id),
         b: await views.readPDFView(other),
         rejected,
+        editor: await views.readEditorView(id),
+        editorOther: await views.readEditorView(other),
+        editorRejected,
       };
     });
     expect(viewState).toEqual({
       a: { page: 3, zoom: 1.5, scrollTop: 40, scrollLeft: 5 },
       b: { page: 1, zoom: 1, scrollTop: 0, scrollLeft: 0 },
       rejected: true,
+      editor: { line: 8, column: 9, scrollTop: 10, scrollLeft: 11 },
+      editorOther: undefined,
+      editorRejected: true,
     });
     const migration = await page.evaluate(async () => {
       const drafts = (window as any).workdeckFileTest.drafts;
