@@ -29,3 +29,10 @@ export async function selectTestNode(page: Page) {
     .getByRole("combobox", { name: "计算节点", exact: true })
     .selectOption(node.id);
 }
+
+export async function terminateCurrentTerminal(page: Page) {
+  await page.getByRole("button", { name: "终止终端", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "终止终端", exact: true });
+  await dialog.getByRole("button", { name: "终止终端", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+}

@@ -1,3 +1,4 @@
+import { terminateCurrentTerminal } from "./helpers";
 import { selectTestNode } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
@@ -105,6 +106,5 @@ docker compose restart hub
     "recovered=" + marker,
   );
   await page.screenshot({ path: "../test-results/service-recovery.png" });
-  page.once("dialog", (d) => d.accept());
-  await page.getByRole("button", { name: "终止终端", exact: true }).click();
+  await terminateCurrentTerminal(page);
 });

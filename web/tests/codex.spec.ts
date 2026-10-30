@@ -1,3 +1,4 @@
+import { terminateCurrentTerminal } from "./helpers";
 import { selectTestNode } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
@@ -41,6 +42,5 @@ test("installed Codex TUI renders through the public terminal", async ({
   await expect(page.locator(".xterm-screen")).toContainText("Codex");
   await page.screenshot({ path: "../test-results/codex-tui.png" });
   // Do not submit a task or change the user's Codex configuration during rendering acceptance.
-  page.once("dialog", (d) => d.accept());
-  await page.getByRole("button", { name: "终止终端", exact: true }).click();
+  await terminateCurrentTerminal(page);
 });

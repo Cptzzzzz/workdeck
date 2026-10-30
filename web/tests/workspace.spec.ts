@@ -1,3 +1,4 @@
+import { terminateCurrentTerminal } from "./helpers";
 import { selectTestNode } from "./helpers";
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
@@ -124,8 +125,7 @@ test("persistent terminal, mobile resize, readonly and takeover", async ({
     path: "../test-results/terminal-desktop.png",
     fullPage: true,
   });
-  page.once("dialog", (d) => d.accept());
-  await page.getByRole("button", { name: "终止终端", exact: true }).click();
+  await terminateCurrentTerminal(page);
   await expect(
     page.getByRole("heading", { name: "你的远程工作台." }),
   ).toBeVisible();

@@ -1,3 +1,4 @@
+import { terminateCurrentTerminal } from "./helpers";
 import { test, expect, chromium, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { selectTestNode } from "./helpers";
@@ -61,8 +62,7 @@ test("choose a real node child directory and create a terminal there", async ({
   await expect(page.locator(".xterm-screen")).toContainText(
     "actual-directory=" + chosen,
   );
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "终止终端", exact: true }).click();
+  await terminateCurrentTerminal(page);
 });
 
 test("browser profile remembers login and another device remains logged in", async ({

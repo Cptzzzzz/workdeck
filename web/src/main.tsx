@@ -61,7 +61,8 @@ type Term = {
 };
 type Snapshot = { nodes: Node[]; terminals: Term[] };
 type User = { username: string; csrf: string };
-type Modal = "create" | "join" | "password" | null;
+type Modal = "create" | "join" | "password" | "rename" | "terminate" | null;
+type RenameTarget = { kind: "node" | "terminal"; id: string; name: string };
 let csrf = "";
 function sendInput(socket: WebSocket | null, bytes: Uint8Array) {
   if (socket?.readyState !== WebSocket.OPEN) return;
@@ -125,6 +126,8 @@ function App() {
   const [modal, setModal] = useState<Modal>(null),
     [active, setActive] = useState<string | null>(null),
     [tabs, setTabs] = useState<string[]>([]);
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+  const [terminationTarget, setTerminationTarget] = useState<Term | null>(null);
   const [menu, setMenu] = useState(false),
     [toast, setToast] = useState(""),
     [refreshError, setRefreshError] = useState("");
@@ -175,21 +178,9 @@ function App() {
     setTabs(next);
     if (active === id) setActive(next.at(-1) || null);
   };
-  const stop = async (t: Term) => {
-    if (
-      !confirm(
-        `终止「${t.name}」？该终端及其后台任务将被结束。${!data.nodes.find((n) => n.id === t.node_id)?.online ? "节点离线，指令将在节点重新上线后执行。" : ""}`,
-      )
-    )
-      return;
-    try {
-      await api("/terminals/" + t.id, { method: "DELETE" });
-      closeTab(t.id);
-      await refresh();
-      notify("终止请求已保存");
-    } catch (e) {
-      notify((e as Error).message);
-    }
+  const stop = (terminal: Term) => {
+    setTerminationTarget(terminal);
+    setModal("terminate");
   };
   const recreate = async (t: Term) => {
     if (
@@ -217,32 +208,13 @@ function App() {
       notify((error as Error).message);
     }
   };
-  const rename = async (t: Term) => {
-    const name = prompt("终端名称", t.name);
-    if (!name || name === t.name) return;
-    try {
-      await api("/terminals/" + t.id, {
-        method: "PATCH",
-        body: JSON.stringify({ name }),
-      });
-      await refresh();
-    } catch (e) {
-      notify((e as Error).message);
-    }
+  const rename = (terminal: Term) => {
+    setRenameTarget({ kind: "terminal", id: terminal.id, name: terminal.name });
+    setModal("rename");
   };
-  const renameNode = async (node: Node) => {
-    const name = prompt("节点名称", node.name)?.trim();
-    if (!name || name === node.name) return;
-    try {
-      await api("/nodes/" + node.id, {
-        method: "PATCH",
-        body: JSON.stringify({ name }),
-      });
-      await refresh();
-      notify("节点名称已更新");
-    } catch (error) {
-      notify((error as Error).message);
-    }
+  const renameNode = (node: Node) => {
+    setRenameTarget({ kind: "node", id: node.id, name: node.name });
+    setModal("rename");
   };
   const revoke = async (n: Node) => {
     if (
@@ -735,7 +707,13 @@ function App() {
                 ? "新建终端"
                 : modal === "join"
                   ? "接入节点"
-                  : "修改密码"
+                  : modal === "rename"
+                    ? renameTarget?.kind === "node"
+                      ? "重命名节点"
+                      : "重命名终端"
+                    : modal === "terminate"
+                      ? "终止终端"
+                      : "修改密码"
             }
           >
             <button
@@ -757,6 +735,64 @@ function App() {
               />
             ) : modal === "join" ? (
               <JoinNode notify={notify} />
+            ) : modal === "rename" && renameTarget ? (
+              <RenameForm
+                target={renameTarget}
+                onCancel={() => setModal(null)}
+                onSaved={(name) => {
+                  const target = renameTarget;
+                  setData((previous) =>
+                    target.kind === "node"
+                      ? {
+                          ...previous,
+                          nodes: previous.nodes.map((node) =>
+                            node.id === target.id ? { ...node, name } : node,
+                          ),
+                        }
+                      : {
+                          ...previous,
+                          terminals: previous.terminals.map((terminal) =>
+                            terminal.id === target.id
+                              ? { ...terminal, name }
+                              : terminal,
+                          ),
+                        },
+                  );
+                  setModal(null);
+                  setRenameTarget(null);
+                  notify(
+                    target.kind === "node"
+                      ? "节点名称已更新"
+                      : "终端名称已更新",
+                  );
+                  void refresh();
+                }}
+              />
+            ) : modal === "terminate" && terminationTarget ? (
+              <TerminateForm
+                terminal={terminationTarget}
+                node={data.nodes.find(
+                  (node) => node.id === terminationTarget.node_id,
+                )}
+                onCancel={() => setModal(null)}
+                onSubmitted={(terminal) => {
+                  closeTab(terminal.id);
+                  setData((previous) => ({
+                    ...previous,
+                    terminals: previous.terminals.map((item) =>
+                      item.id === terminal.id ? terminal : item,
+                    ),
+                  }));
+                  setModal(null);
+                  setTerminationTarget(null);
+                  notify(
+                    terminal.state === "closed"
+                      ? "终端已终止"
+                      : "终止请求已保存，等待节点确认",
+                  );
+                  void refresh();
+                }}
+              />
             ) : (
               <Password
                 onSaved={() => {
@@ -769,6 +805,168 @@ function App() {
         </div>
       )}
     </div>
+  );
+}
+function RenameForm({
+  target,
+  onCancel,
+  onSaved,
+}: {
+  target: RenameTarget;
+  onCancel: () => void;
+  onSaved: (name: string) => void;
+}) {
+  const [name, setName] = useState(target.name),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const label = target.kind === "node" ? "节点" : "终端";
+  return (
+    <form
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const value = name.trim();
+        if (!value) {
+          setError("请输入名称");
+          return;
+        }
+        if (new TextEncoder().encode(value).length > 100) {
+          setError("名称太长，请缩短后重试");
+          return;
+        }
+        setBusy(true);
+        setError("");
+        try {
+          await api(
+            "/" +
+              (target.kind === "node" ? "nodes" : "terminals") +
+              "/" +
+              target.id,
+            { method: "PATCH", body: JSON.stringify({ name: value }) },
+          );
+          onSaved(value);
+        } catch (error) {
+          setError((error as Error).message);
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        {target.kind === "node" ? (
+          <Server size={24} />
+        ) : (
+          <TerminalSquare size={24} />
+        )}
+      </div>
+      <h2>重命名{label}</h2>
+      <p className="modal-description">
+        为{label}设置一个便于识别的名称，方便下次查找。
+      </p>
+      <label>
+        {label}名称
+        <input
+          value={name}
+          onChange={(event) => {
+            setName(event.target.value);
+            setError("");
+          }}
+          onFocus={(event) => event.currentTarget.select()}
+          disabled={busy}
+          maxLength={100}
+          autoFocus
+          required
+        />
+      </label>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          取消
+        </button>
+        <button
+          className="primary"
+          disabled={busy || name.trim() === target.name}
+        >
+          {busy ? "正在保存…" : "保存名称"}
+        </button>
+      </div>
+    </form>
+  );
+}
+function TerminateForm({
+  terminal,
+  node,
+  onCancel,
+  onSubmitted,
+}: {
+  terminal: Term;
+  node?: Node;
+  onCancel: () => void;
+  onSubmitted: (terminal: Term) => void;
+}) {
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <form
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+          onSubmitted(
+            await api<Term>("/terminals/" + terminal.id, { method: "DELETE" }),
+          );
+        } catch (error) {
+          setError((error as Error).message);
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol danger-symbol">
+        <Trash2 size={24} />
+      </div>
+      <h2>终止终端</h2>
+      <p className="modal-description">
+        终端「{terminal.name}」及其后台任务将被结束。
+      </p>
+      <div className="termination-summary">
+        <TerminalSquare size={18} />
+        <div>
+          <b>{terminal.name}</b>
+          <small>{node?.name || "计算节点"}</small>
+        </div>
+      </div>
+      {!node?.online && (
+        <div className="form-hint offline-termination">
+          节点当前离线，终止请求会保存，并在节点重新上线后执行。
+        </div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          取消
+        </button>
+        <button className="primary danger-button" disabled={busy}>
+          {busy ? "正在提交…" : "终止终端"}
+        </button>
+      </div>
+    </form>
   );
 }
 function Brand() {

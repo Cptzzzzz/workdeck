@@ -1,3 +1,4 @@
+import { terminateCurrentTerminal } from "./helpers";
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -81,8 +82,7 @@ test("root service creates root terminals that survive its restart", async ({
     );
   }
   await page.screenshot({ path: "../test-results/root-service-terminal.png" });
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "终止终端", exact: true }).click();
+  await terminateCurrentTerminal(page);
 });
 
 test("migrated ordinary-user terminal stays reachable through root Agent", async ({

@@ -74,8 +74,12 @@ test("rename an offline node without changing its identity", async ({
   try {
     await page.getByRole("button", { name: "刷新状态", exact: true }).click();
     await page.locator(".node-item").filter({ hasText: initial }).click();
-    page.once("dialog", (dialog) => dialog.accept(renamed));
     await page.getByRole("button", { name: "重命名节点", exact: true }).click();
+    const modal = page.getByRole("dialog", { name: "重命名节点", exact: true });
+    await modal.getByLabel("节点名称", { exact: true }).fill(renamed);
+    await page.screenshot({ path: "../test-results/node-rename-form.png" });
+    await modal.getByRole("button", { name: "保存名称", exact: true }).click();
+    await expect(modal).not.toBeVisible();
     await expect(
       page.locator(".node-item").filter({ hasText: renamed }),
     ).toBeVisible();

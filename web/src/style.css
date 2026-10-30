@@ -1707,3 +1707,57 @@ main {
 .node-detail .node-actions button {
   margin-left: 0;
 }
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 25px;
+}
+.form-actions > button {
+  flex: 1;
+}
+.modal-symbol.danger-symbol {
+  color: #dfa28c;
+  background: #623b2a40;
+  border-color: #8d57412f;
+}
+.primary.danger-button {
+  background: #d0967b;
+  color: #2d1a13;
+}
+.primary.danger-button:hover:not(:disabled) {
+  background: #e0a58b;
+}
+.termination-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 22px;
+  padding: 14px;
+  border: 1px solid #3b493a;
+  border-radius: 7px;
+  background: #121b1450;
+  color: #a6b29d;
+}
+.termination-summary > div {
+  min-width: 0;
+}
+.termination-summary b {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.termination-summary small {
+  display: block;
+  font-size: 10px;
+  color: #7e937a;
+  margin-top: 5px;
+}
+.offline-termination {
+  padding: 10px 12px;
+  border: 1px solid #8c76423d;
+  border-radius: 6px;
+  background: #57472520;
+  color: #c5b58e;
+  line-height: 1.8;
+}
