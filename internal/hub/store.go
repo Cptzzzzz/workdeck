@@ -41,7 +41,8 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS enrollment_claims(hash TEXT PRIMARY KEY,node_id TEXT NOT NULL,public_key TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY,name TEXT NOT NULL,public_key TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT NOT NULL DEFAULT '',hostname TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT '',home TEXT NOT NULL DEFAULT '',shell TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS terminals(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),name TEXT NOT NULL,cwd TEXT NOT NULL,desired_state TEXT NOT NULL,observed_state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',exit_code INTEGER);
- CREATE INDEX IF NOT EXISTS terminals_node ON terminals(node_id);`
+ CREATE INDEX IF NOT EXISTS terminals_node ON terminals(node_id);
+ CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,terminal_id TEXT NOT NULL UNIQUE REFERENCES terminals(id),node_id TEXT NOT NULL REFERENCES nodes(id),root_path TEXT NOT NULL,root_revision INTEGER NOT NULL,run_user TEXT NOT NULL DEFAULT '',device TEXT NOT NULL DEFAULT '',inode TEXT NOT NULL DEFAULT '',state TEXT NOT NULL CHECK(state IN ('initializing','ready','changing')),pending_id TEXT NOT NULL DEFAULT '',pending_target TEXT NOT NULL DEFAULT '',pending_candidate TEXT NOT NULL DEFAULT '');`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
