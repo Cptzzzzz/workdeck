@@ -303,23 +303,149 @@ export function useWorkspace(
     loadDirectory,
   ]);
 
+  const refreshActive = useRef(false);
+  const refreshPending = useRef(false);
+  const refreshLatest = useRef<() => Promise<void>>(async () => {});
   const refresh = useCallback(async () => {
     const client = clientRef.current,
       gen = generation.current;
-    if (!client) return;
+    if (!client || renameLock.current) return;
+    if (refreshActive.current) {
+      refreshPending.current = true;
+      return;
+    }
+    refreshActive.current = true;
     try {
       for (const path of expanded) await loadDirectory(client, path, gen);
-      setError("");
+      const doc = selected ? docs.current.get(selected) : undefined;
+      if (
+        doc &&
+        workspace &&
+        doc.identity.account === account &&
+        doc.identity.workspaceID === workspace.id &&
+        doc.identity.rootRevision === workspace.root_revision &&
+        !doc.deleted &&
+        !doc.conflict &&
+        !doc.pending &&
+        !doc.saving
+      ) {
+        const version = doc.version,
+          sequence = doc.sequence;
+        const unchanged = () =>
+          gen === generation.current &&
+          clientRef.current === client &&
+          docs.current.get(selected!) === doc &&
+          doc.version === version &&
+          doc.sequence === sequence &&
+          !doc.saving &&
+          !doc.pending &&
+          !doc.deleted &&
+          !doc.conflict &&
+          !renameLock.current;
+        try {
+          const stat = await client.stat(doc.path);
+          if (unchanged() && doc.message.startsWith("无法刷新文件：")) {
+            doc.message = "";
+            update();
+          }
+          if (
+            unchanged() &&
+            (stat.kind !== "file" || !stat.version || stat.version !== version)
+          ) {
+            if (
+              doc.text !== doc.base ||
+              doc.persistenceError ||
+              stat.kind !== "file" ||
+              !stat.version
+            ) {
+              doc.conflict = true;
+              doc.message = "远端文件已变化，请先处理本地草稿。";
+              await persist(doc).catch(() => {});
+            } else {
+              const { entry, bytes } = await client.readBytes(
+                doc.path,
+                stat.version,
+              );
+              if (!entry.version || entry.version !== stat.version)
+                throw new Error("读取的文件版本不一致");
+              const text = new TextDecoder("utf-8", { fatal: true }).decode(
+                bytes,
+              );
+              if (text.includes("\0"))
+                throw new Error("远端文件不是可编辑的 UTF-8 文本");
+              const bom =
+                bytes.length >= 3 &&
+                bytes[0] === 0xef &&
+                bytes[1] === 0xbb &&
+                bytes[2] === 0xbf;
+              const crlf = (text.match(/\r\n/g) || []).length,
+                bareLF = (text.match(/(?<!\r)\n/g) || []).length,
+                bareCR = (text.match(/\r(?!\n)/g) || []).length;
+              if (unchanged() && doc.text === doc.base) {
+                doc.base = text;
+                doc.text = text;
+                doc.version = entry.version!;
+                doc.encoding = bom ? "utf8-bom" : "utf8";
+                doc.newline = crlf ? "crlf" : "lf";
+                doc.warning =
+                  bareCR || (crlf && bareLF)
+                    ? "文件包含混合换行，暂不能安全保存"
+                    : "";
+                doc.message = "";
+                await persist(doc).catch(() => {});
+              }
+            }
+            update();
+          }
+        } catch (e) {
+          if (
+            unchanged() &&
+            e instanceof FileServiceError &&
+            e.code === "NOT_FOUND"
+          ) {
+            doc.conflict = true;
+            doc.message = "文件不存在或无法访问，本地内容已保留。";
+            await persist(doc).catch(() => {});
+            update();
+          } else if (
+            unchanged() &&
+            !(e instanceof FileServiceError && e.code === "FILE_CHANGED")
+          ) {
+            doc.message = `无法刷新文件：${(e as Error).message}`;
+            update();
+          }
+        }
+      }
+      if (gen === generation.current) setError("");
     } catch (e) {
       if (gen === generation.current) setError((e as Error).message);
+    } finally {
+      refreshActive.current = false;
+      if (refreshPending.current) {
+        refreshPending.current = false;
+        queueMicrotask(() => void refreshLatest.current());
+      }
     }
-  }, [expanded, loadDirectory]);
+  }, [account, expanded, loadDirectory, persist, selected, update, workspace]);
+  refreshLatest.current = refresh;
   useEffect(() => {
     if (!enabled || !workspace) return;
     const timer = window.setInterval(() => {
       if (globalThis.document.visibilityState === "visible") void refresh();
     }, 10000);
     return () => clearInterval(timer);
+  }, [enabled, workspace, refresh]);
+  useEffect(() => {
+    if (enabled && workspace && selected) void refresh();
+  }, [enabled, workspace, selected, refresh]);
+  useEffect(() => {
+    if (!enabled || !workspace) return;
+    const visible = () => {
+      if (globalThis.document.visibilityState === "visible") void refresh();
+    };
+    globalThis.document.addEventListener("visibilitychange", visible);
+    return () =>
+      globalThis.document.removeEventListener("visibilitychange", visible);
   }, [enabled, workspace, refresh]);
   const toggle = useCallback(
     async (path: string) => {

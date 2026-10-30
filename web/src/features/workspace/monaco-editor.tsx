@@ -22,6 +22,7 @@ export function MonacoEditor({
   const root = useRef<HTMLDivElement>(null),
     editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null),
     model = useRef<monaco.editor.ITextModel | null>(null);
+  const applyingRemote = useRef(false);
   const changeRef = useRef(onChange),
     saveRef = useRef(onSave);
   changeRef.current = onChange;
@@ -87,9 +88,9 @@ export function MonacoEditor({
     model.current = current;
     instance.setModel(current);
     previous?.dispose();
-    const listener = current.onDidChangeContent(() =>
-      changeRef.current(current.getValue()),
-    );
+    const listener = current.onDidChangeContent(() => {
+      if (!applyingRemote.current) changeRef.current(current.getValue());
+    });
     return () => listener.dispose();
   }, [
     document.identity.workspaceID,
@@ -101,7 +102,21 @@ export function MonacoEditor({
       current = model.current;
     if (!instance || !current) return;
     instance.updateOptions({ readOnly: !!document.warning || readOnly });
-    if (current.getValue() !== document.text) current.setValue(document.text);
-  }, [document.text, document.warning, readOnly]);
+    if (current.getValue() !== document.text) {
+      const view = instance.saveViewState();
+      applyingRemote.current = true;
+      try {
+        current.setValue(document.text);
+        current.setEOL(
+          document.newline === "crlf"
+            ? monaco.editor.EndOfLineSequence.CRLF
+            : monaco.editor.EndOfLineSequence.LF,
+        );
+      } finally {
+        applyingRemote.current = false;
+      }
+      if (view) instance.restoreViewState(view);
+    }
+  }, [document.text, document.warning, document.newline, readOnly]);
   return <div className="workbench-monaco" ref={root} />;
 }
