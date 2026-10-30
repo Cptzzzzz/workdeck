@@ -34,6 +34,8 @@ sh /tmp/workdeck-install.sh \
 
 安装器会识别架构、下载并校验 Agent、登记节点身份，根据执行账户创建并启动系统级或用户级 `workdeck-agent.service`。身份已存在时安装器会停止，不会覆盖旧身份；普通重启不需要重新接入。
 
+root 安装会将与 Agent 完全相同的可执行文件同时安装到 `/usr/local/libexec/workdeck-file-worker`。它由 root 管理、其他账户可执行，供 root Agent 以原账户访问迁移前创建的会话文件；该目录及所有上级目录必须由 root 拥有且不能被其他账户写入。
+
 4. 普通用户安装时，为了让退出 SSH 后会话继续运行，并在主机开机后自动启动用户服务，执行（root 的系统服务不需要此步骤）：
 
 ```sh
@@ -99,5 +101,14 @@ Hub 和 Agent 可以部署在同一台机器上。终端使用创建 Agent 服�
 systemctl restart workdeck-agent
 systemctl status workdeck-agent --no-pager
 ```
+
+已有标准安装需要更新时，以安装服务的同一账户执行，不需要新的加入令牌：
+
+```sh
+curl -fsS https://work.example.com/install-agent.sh -o /tmp/workdeck-install.sh
+sh /tmp/workdeck-install.sh --hub https://work.example.com --upgrade
+```
+
+root 系统服务以 root 执行，用户服务以原用户执行。升级会校验下载，原子替换 Agent；root 安装还会更新匹配的文件工作程序，然后只重启 `workdeck-agent.service`。它不会重新登记节点或停止 `workdeck-session-*` 单元。若重启失败，安装器尝试恢复原程序和服务；仍需检查服务状态及日志。请确保 `--hub` 是原来信任的 Hub 地址，手动配置了不同可执行文件路径或数据目录的服务需要按实际配置升级。
 
 Hub 的 Docker 服务和对应的 systemd Agent 服务均应设置为自动启动，并保留各自的数据目录。

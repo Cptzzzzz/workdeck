@@ -3,15 +3,18 @@ set -eu
 hub=''
 token=''
 node_name="$(hostname)"
+upgrade=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --upgrade) upgrade=1; shift;;
     --hub) hub="$2"; shift 2;;
     --token) token="$2"; shift 2;;
     --name) node_name="$2"; shift 2;;
     *) echo "Unknown option: $1" >&2; exit 1;;
   esac
 done
-[ -n "$hub" ] && [ -n "$token" ] || { echo 'Usage: sh install-agent.sh --hub https://your-hub --token TOKEN [--name NAME]' >&2; exit 1; }
+[ -n "$hub" ] || { echo 'Usage: sh install-agent.sh --hub https://your-hub (--token TOKEN [--name NAME] | --upgrade)' >&2; exit 1; }
+if [ "$upgrade" = 0 ]; then [ -n "$token" ] || { echo 'Enrollment requires a token.' >&2; exit 1; }; else [ -z "$token" ] || { echo 'Upgrade does not use an enrollment token.' >&2; exit 1; }; fi
 case "$hub" in https://*) ;; *) echo 'HTTPS Hub URL required' >&2; exit 1;; esac
 [ "$(uname -s)" = Linux ] || { echo 'This installer supports Linux only.' >&2; exit 1; }
 case "$(uname -m)" in x86_64) arch=amd64;; aarch64|arm64) arch=arm64;; *) echo 'Unsupported CPU architecture' >&2; exit 1;; esac
@@ -31,15 +34,93 @@ else
 fi
 mkdir -p "$install_home/.local/bin" "$service_dir" "$install_home/.local/share/workdeck"
 chmod 700 "$install_home/.local/share/workdeck"
-[ ! -f "$install_home/.local/share/workdeck/identity.json" ] || { echo 'This account already has a Workdeck identity. Installation stopped.' >&2; exit 1; }
+identity="$install_home/.local/share/workdeck/identity.json"
+if [ "$upgrade" = 0 ]; then
+  [ ! -e "$identity" ] && [ ! -L "$identity" ] || { echo 'This account already has a Workdeck identity. Installation stopped.' >&2; exit 1; }
+  [ ! -e "$service_dir/workdeck-agent.service" ] && [ ! -L "$service_dir/workdeck-agent.service" ] || { echo 'An Agent service file already exists. Installation stopped.' >&2; exit 1; }
+  [ ! -e "$install_home/.local/bin/workdeck" ] && [ ! -L "$install_home/.local/bin/workdeck" ] || { echo 'An Agent executable already exists. Installation stopped.' >&2; exit 1; }
+else
+  [ -f "$identity" ] && [ ! -L "$identity" ] || { echo 'Upgrade requires an existing identity; no enrollment was attempted.' >&2; exit 1; }
+  [ -f "$install_home/.local/bin/workdeck" ] && [ ! -L "$install_home/.local/bin/workdeck" ] || { echo 'Existing Agent executable is missing or is a symbolic link.' >&2; exit 1; }
+  [ -f "$service_dir/workdeck-agent.service" ] && [ ! -L "$service_dir/workdeck-agent.service" ] || { echo 'Existing Agent service file is missing or is a symbolic link.' >&2; exit 1; }
+fi
 tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+helper_tmp=''
+agent_tmp=''
+helper_changed=0
+agent_changed=0
+restart_attempted=0
+upgrade_done=0
+cleanup() {
+  result=$?
+  trap - EXIT HUP INT TERM
+  if [ "$upgrade" = 1 ] && [ "$upgrade_done" = 0 ] && [ "$result" -ne 0 ]; then
+    echo 'Upgrade failed; restoring the previous Agent and file worker.' >&2
+    if [ "$agent_changed" = 1 ]; then
+      restore="$(mktemp "$install_home/.local/bin/.workdeck-restore.XXXXXXXX")"
+      cp -p "$tmp_dir/previous-agent" "$restore" && mv -f "$restore" "$install_home/.local/bin/workdeck" || echo 'Unable to restore Agent executable.' >&2
+    fi
+    if [ "$helper_changed" = 1 ]; then
+      if [ -f "$tmp_dir/previous-helper" ]; then
+        restore="$(mktemp /usr/local/libexec/.workdeck-restore.XXXXXXXX)"
+        cp -p "$tmp_dir/previous-helper" "$restore" && mv -f "$restore" /usr/local/libexec/workdeck-file-worker || echo 'Unable to restore file worker.' >&2
+      else
+        rm -f /usr/local/libexec/workdeck-file-worker
+      fi
+    fi
+    if [ "$restart_attempted" = 1 ]; then
+      if [ "$(id -u)" = 0 ]; then systemctl restart workdeck-agent.service || echo 'Previous Agent could not be restarted.' >&2
+      else systemctl --user restart workdeck-agent.service || echo 'Previous Agent could not be restarted.' >&2; fi
+    fi
+  fi
+  [ -z "$helper_tmp" ] || rm -f "$helper_tmp"
+  [ -z "$agent_tmp" ] || rm -f "$agent_tmp"
+  rm -rf "$tmp_dir"
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 curl -fsS "$hub/downloads/workdeck-linux-$arch" -o "$tmp_dir/workdeck"
 curl -fsS "$hub/downloads/SHA256SUMS" -o "$tmp_dir/SHA256SUMS"
 expected="$(awk -v name="workdeck-linux-$arch" '$2==name {print $1}' "$tmp_dir/SHA256SUMS")"
 [ -n "$expected" ] || { echo 'Missing download checksum' >&2; exit 1; }
+case "$expected" in *[!0123456789abcdef]*) echo 'Invalid download checksum' >&2; exit 1;; esac
+[ "${#expected}" = 64 ] || { echo 'Invalid download checksum' >&2; exit 1; }
 printf '%s  %s\n' "$expected" "$tmp_dir/workdeck" | sha256sum -c -
-install -m 755 "$tmp_dir/workdeck" "$install_home/.local/bin/workdeck"
+"$tmp_dir/workdeck" version >/dev/null || { echo 'Downloaded Agent is not executable on this machine.' >&2; exit 1; }
+if [ "$upgrade" = 1 ]; then cp -p "$install_home/.local/bin/workdeck" "$tmp_dir/previous-agent"; fi
+# Root agents may need to run file workers as the owners of older sessions.
+# The helper and every parent directory must be root-owned and not writable
+# by other accounts; never replace an unsafe path or follow a symlink.
+if [ "$(id -u)" = 0 ]; then
+  for parent in / /usr /usr/local; do
+    [ -d "$parent" ] && [ ! -L "$parent" ] && [ "$(stat -c %u "$parent")" = 0 ] && [ $((0$(stat -c %a "$parent") & 022)) = 0 ] && [ $((0$(stat -c %a "$parent") & 001)) = 1 ] || { echo "Unsafe or inaccessible helper directory: $parent" >&2; exit 1; }
+  done
+  if [ ! -e /usr/local/libexec ] && [ ! -L /usr/local/libexec ]; then mkdir -m 755 /usr/local/libexec; fi
+  [ -d /usr/local/libexec ] && [ ! -L /usr/local/libexec ] && [ "$(stat -c %u /usr/local/libexec)" = 0 ] && [ $((0$(stat -c %a /usr/local/libexec) & 022)) = 0 ] && [ $((0$(stat -c %a /usr/local/libexec) & 001)) = 1 ] || { echo 'Unsafe or inaccessible helper directory: /usr/local/libexec' >&2; exit 1; }
+  [ ! -L /usr/local/libexec/workdeck-file-worker ] && [ ! -d /usr/local/libexec/workdeck-file-worker ] || { echo 'Unsafe existing file worker path.' >&2; exit 1; }
+  if [ "$upgrade" = 1 ] && [ -f /usr/local/libexec/workdeck-file-worker ]; then cp -p /usr/local/libexec/workdeck-file-worker "$tmp_dir/previous-helper"; fi
+  helper_tmp="$(mktemp /usr/local/libexec/.workdeck-file-worker.XXXXXXXX)"
+  install -m 755 "$tmp_dir/workdeck" "$helper_tmp"
+  chown 0:0 "$helper_tmp"
+  mv -f "$helper_tmp" /usr/local/libexec/workdeck-file-worker
+  helper_changed=1
+fi
+agent_tmp="$(mktemp "$install_home/.local/bin/.workdeck.XXXXXXXX")"
+install -m 755 "$tmp_dir/workdeck" "$agent_tmp"
+mv -f "$agent_tmp" "$install_home/.local/bin/workdeck"
+agent_changed=1
+if [ "$upgrade" = 1 ]; then
+  restart_attempted=1
+  if [ "$(id -u)" = 0 ]; then
+    systemctl restart workdeck-agent.service
+  else
+    systemctl --user restart workdeck-agent.service
+  fi
+  upgrade_done=1
+  printf '\nAgent updated as %s. Existing session units were not stopped.\n' "$install_user"
+  exit 0
+fi
 printf '%s' "$token" > "$tmp_dir/token"
 chmod 600 "$tmp_dir/token"
 "$install_home/.local/bin/workdeck" agent enroll --data-dir "$install_home/.local/share/workdeck" --hub "$hub" --name "$node_name" --token-file "$tmp_dir/token"

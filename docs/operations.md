@@ -33,7 +33,7 @@ systemctl --user restart workdeck-agent
 
 这些操作会短暂断开浏览器，但独立 tmux 会话继续运行。Agent 指数退避重连并上报完整清单；浏览器自动重试，不重放按键。
 
-独立部署重复执行原一键安装命令即可更新 Hub。已有 Caddy 远程部署使用 `scripts/build.sh`、`scripts/deploy.sh`。升级 Agent 时，下载正确架构的可执行文件，校验后使用临时文件加重命名原子替换 `~/.local/bin/workdeck`，仅重启 Agent 服务，勿停止 `workdeck-session-*` 单元。
+独立部署重复执行原一键安装命令即可更新 Hub。已有 Caddy 远程部署使用 `scripts/build.sh`、`scripts/deploy.sh`。标准 Agent 安装可由原安装账户执行 `sh install-agent.sh --hub https://work.example.com --upgrade`，校验并原子替换 Agent；root Agent 同步安装匹配的 `/usr/local/libexec/workdeck-file-worker`。只重启 Agent 服务，勿停止 `workdeck-session-*` 单元。非标准路径和手动服务请按实际配置升级；root 服务的工作程序与 Agent 必须使用完全相同的构建版本。
 
 ## 备份与恢复
 
