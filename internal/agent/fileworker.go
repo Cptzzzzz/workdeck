@@ -284,7 +284,7 @@ func (w *fileWorkerClient) failPending() {
 // Upload and download chunks never hold this gate. Keep it across reconnects:
 // the gate belongs to the Agent, not to its short-lived connection pool.
 func (w *fileWorkerClient) Call(ctx context.Context, method, workspace string, revision int64, params any, result any) error {
-	mutates := method == "write.commit" || method == "entry.rename" || method == "directory.create" || method == "operation.status" || method == "entry.delete"
+	mutates := method == "write.commit" || method == "entry.rename" || method == "directory.create" || method == "operation.status" || method == "entry.delete.prepare" || method == "entry.delete.commit" || method == "entry.delete.cancel"
 	if !mutates || w.commitGate == nil {
 		return w.call(ctx, method, workspace, revision, params, result)
 	}

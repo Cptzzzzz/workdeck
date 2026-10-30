@@ -282,6 +282,49 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			return nil, err
 		}
 		return s.engine.Rename(ctx, r.WorkspaceID, r.Revision, p.OpID, p.Source, p.Target, p.Version)
+	case "entry.delete.prepare":
+		var p struct {
+			OpID      string `json:"op_id"`
+			Path      string `json:"path"`
+			Version   string `json:"version"`
+			Recursive bool   `json:"recursive"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.PrepareDelete(ctx, r.WorkspaceID, r.Revision, p.OpID, p.Path, p.Version, p.Recursive)
+	case "entry.delete.commit", "entry.delete.cancel", "entry.delete.status":
+		var p struct {
+			OpID string `json:"op_id"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		switch r.Method {
+		case "entry.delete.commit":
+			return s.engine.CommitDelete(ctx, r.WorkspaceID, r.Revision, p.OpID)
+		case "entry.delete.cancel":
+			return s.engine.CancelDelete(ctx, r.WorkspaceID, r.Revision, p.OpID)
+		default:
+			return s.engine.DeleteStatus(ctx, r.WorkspaceID, r.Revision, p.OpID)
+		}
+	case "entry.delete.outcomes":
+		var p struct {
+			OpID   string `json:"op_id"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		items, next, err := s.engine.DeleteOutcomes(ctx, r.WorkspaceID, r.Revision, p.OpID, p.Offset, p.Limit)
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			Items []files.DeleteOutcome `json:"items"`
+			Next  int                   `json:"next"`
+		}{items, next}, nil
 	case "operation.status":
 		var p struct {
 			OpID string `json:"op_id"`

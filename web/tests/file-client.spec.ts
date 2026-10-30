@@ -182,6 +182,30 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
           ) !== "rename me"
         )
           throw new Error("renamed content mismatch");
+        const deleteID = client.newOperationID();
+        const deleteVersion = (await client.stat("renamed.txt")).version;
+        const deletion = await client.prepareDelete(
+          deleteID,
+          "renamed.txt",
+          deleteVersion,
+          false,
+        );
+        if (
+          deletion.state !== "prepared" ||
+          deletion.count !== 1 ||
+          (await client.stat("renamed.txt")).kind !== "file"
+        )
+          throw new Error("delete preview changed file");
+        const deleted = await client.commitDelete(deleteID);
+        const outcome = await client.deleteOutcomes(deleteID, 0);
+        if (
+          deleted.state !== "committed" ||
+          deleted.deleted !== 1 ||
+          outcome.items.length !== 1 ||
+          outcome.items[0].state !== "deleted" ||
+          (await client.deleteStatus(deleteID)).state !== "committed"
+        )
+          throw new Error("delete result mismatch");
         const fileBytes = new Uint8Array(1024 * 1024 + 123);
         for (let i = 0; i < fileBytes.length; i++) fileBytes[i] = i % 251;
         const file = new File([fileBytes], "upload.bin");

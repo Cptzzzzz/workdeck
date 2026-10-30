@@ -39,6 +39,23 @@ export type FileOperation = {
   version?: string;
   error?: { code: string; message: string };
 };
+export type DeleteStatus = FileOperation & {
+  path: string;
+  recursive: boolean;
+  count: number;
+  directories: number;
+  bytes: number;
+  deleted?: number;
+  skipped?: number;
+  pending?: number;
+  uncertain?: number;
+};
+export type DeleteOutcome = {
+  path: string;
+  kind: string;
+  state: string;
+  error?: { code: string; message: string };
+};
 export type SaveSpec = {
   path: string;
   base_version?: string;

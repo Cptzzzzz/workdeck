@@ -171,7 +171,7 @@ func (e *Engine) CommitRootChange(ctx context.Context, workspace, id string) (Ro
 		return change, fail("STALE_WORKSPACE", "工作区根目录已改变")
 	}
 	var pending int
-	if err := e.db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM operations WHERE workspace_id=? AND revision=? AND state IN ('receiving','ready','committing','uncertain')) + (SELECT count(*) FROM mutations WHERE workspace_id=? AND revision=? AND state IN ('prepared','uncertain'))`, workspace, change.OldRevision, workspace, change.OldRevision).Scan(&pending); err != nil {
+	if err := e.db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM operations WHERE workspace_id=? AND revision=? AND state IN ('receiving','ready','committing','uncertain')) + (SELECT count(*) FROM mutations WHERE workspace_id=? AND revision=? AND state IN ('prepared','uncertain','deleting'))`, workspace, change.OldRevision, workspace, change.OldRevision).Scan(&pending); err != nil {
 		return change, err
 	}
 	if pending != 0 {

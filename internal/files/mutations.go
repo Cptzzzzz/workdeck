@@ -13,12 +13,18 @@ import (
 )
 
 type directoryPlan struct {
-	Path      string       `json:"path"`
-	Temporary string       `json:"temporary"`
-	Source    string       `json:"source,omitempty"`
-	Device    uint64       `json:"device"`
-	Inode     uint64       `json:"inode"`
-	Original  fileIdentity `json:"original,omitempty"`
+	Path      string         `json:"path"`
+	Temporary string         `json:"temporary"`
+	Source    string         `json:"source,omitempty"`
+	Device    uint64         `json:"device"`
+	Inode     uint64         `json:"inode"`
+	Original  fileIdentity   `json:"original,omitempty"`
+	Count     int            `json:"count,omitempty"`
+	Dirs      int            `json:"dirs,omitempty"`
+	Bytes     int64          `json:"bytes,omitempty"`
+	Recursive bool           `json:"recursive,omitempty"`
+	Anchors   []deleteAnchor `json:"anchors,omitempty"`
+	MountID   uint64         `json:"mount_id,omitempty"`
 }
 type mutationRecord struct {
 	Operation
@@ -116,7 +122,7 @@ func (e *Engine) CreateDirectory(ctx context.Context, workspace string, revision
 	}
 	defer release()
 	var pending int
-	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM mutations WHERE state IN ('prepared','uncertain')`).Scan(&pending); err != nil {
+	if err := e.db.QueryRowContext(ctx, `SELECT count(*) FROM mutations WHERE state IN ('prepared','uncertain','deleting')`).Scan(&pending); err != nil {
 		return Operation{}, err
 	}
 	if pending >= 64 {
@@ -275,6 +281,8 @@ func (e *Engine) MutationStatus(ctx context.Context, workspace string, revision 
 			return e.reconcileDirectory(ctx, &m, false)
 		case "entry.rename":
 			return e.reconcileRename(ctx, &m, false)
+		case "entry.delete":
+			return m.Operation, nil
 		default:
 			return m.Operation, fail("INVALID_STATE", "未知的文件操作类型")
 		}

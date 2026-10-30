@@ -15,6 +15,8 @@ import type {
   FileOperation,
   SaveTransaction,
   UploadTransaction,
+  DeleteStatus,
+  DeleteOutcome,
   Workspace,
   WorkspaceView,
 } from "./types";
@@ -579,10 +581,139 @@ export class FileClient {
       "entry.rename",
     );
   }
+  async prepareDelete(
+    opID: string,
+    path: string,
+    version: string,
+    recursive: boolean,
+  ): Promise<DeleteStatus> {
+    const value = (
+      await this.request("entry.delete.prepare", {
+        op_id: opID,
+        path,
+        version,
+        recursive,
+      })
+    ).value;
+    return this.checkDelete(value, opID);
+  }
+  async commitDelete(opID: string): Promise<DeleteStatus> {
+    return this.checkDelete(
+      (await this.request("entry.delete.commit", { op_id: opID })).value,
+      opID,
+    );
+  }
+  async cancelDelete(opID: string): Promise<DeleteStatus> {
+    return this.checkDelete(
+      (await this.request("entry.delete.cancel", { op_id: opID })).value,
+      opID,
+    );
+  }
+  async deleteStatus(opID: string): Promise<DeleteStatus> {
+    return this.checkDelete(
+      (await this.request("entry.delete.status", { op_id: opID })).value,
+      opID,
+    );
+  }
+  async deleteOutcomes(
+    opID: string,
+    offset: number,
+  ): Promise<{ items: DeleteOutcome[]; next: number }> {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 8192)
+      throw new FileServiceError("INVALID_RANGE", "删除结果分页无效");
+    const value = (
+      await this.request("entry.delete.outcomes", {
+        op_id: opID,
+        offset,
+        limit: 64,
+      })
+    ).value as { items?: DeleteOutcome[]; next?: number };
+    if (
+      !value ||
+      !Array.isArray(value.items) ||
+      value.items.length > 64 ||
+      value.items.some(
+        (item) =>
+          !item ||
+          typeof item.path !== "string" ||
+          new TextEncoder().encode(item.path).length > 4096 ||
+          !["file", "directory", "symlink"].includes(item.kind) ||
+          ![
+            "pending",
+            "moving",
+            "removing",
+            "deleted",
+            "skipped",
+            "uncertain",
+          ].includes(item.state) ||
+          (item.error !== undefined &&
+            (typeof item.error?.code !== "string" ||
+              typeof item.error?.message !== "string")),
+      ) ||
+      !Number.isSafeInteger(value.next) ||
+      value.next !== offset + value.items.length
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "删除结果分页无效");
+    return value as { items: DeleteOutcome[]; next: number };
+  }
+  private checkDelete(value: unknown, opID: string): DeleteStatus {
+    const operation = this.checkOperation(
+      value,
+      opID,
+      "entry.delete",
+    ) as DeleteStatus;
+    if (
+      typeof operation.path !== "string" ||
+      typeof operation.recursive !== "boolean" ||
+      !Number.isSafeInteger(operation.count) ||
+      operation.count < 1 ||
+      operation.count > 8192 ||
+      !Number.isSafeInteger(operation.directories) ||
+      operation.directories < 0 ||
+      operation.directories > operation.count ||
+      !Number.isSafeInteger(operation.bytes) ||
+      operation.bytes < 0
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "删除预览无效");
+    for (const count of [
+      operation.deleted,
+      operation.skipped,
+      operation.pending,
+      operation.uncertain,
+    ])
+      if (
+        count !== undefined &&
+        (!Number.isSafeInteger(count) || count < 0 || count > operation.count)
+      )
+        throw new FileServiceError("PROTOCOL_ERROR", "删除结果数量无效");
+    if (
+      [
+        operation.deleted,
+        operation.skipped,
+        operation.pending,
+        operation.uncertain,
+      ].some((n) => n !== undefined) &&
+      (operation.deleted === undefined ||
+        operation.skipped === undefined ||
+        operation.pending === undefined ||
+        operation.uncertain === undefined ||
+        operation.deleted +
+          operation.skipped +
+          operation.pending +
+          operation.uncertain !==
+          operation.count)
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "删除结果总数不一致");
+    return operation;
+  }
   private checkOperation(
     value: unknown,
     opID: string,
-    kind: "write" | "directory.create" | "entry.rename" = "write",
+    kind:
+      | "write"
+      | "directory.create"
+      | "entry.rename"
+      | "entry.delete" = "write",
   ): FileOperation {
     const op = value as FileOperation | undefined;
     if (

@@ -174,7 +174,7 @@ func (l *fileLink) send(id, kind string, value any, err error) error {
 func (l *fileLink) control(request fileprotocol.Envelope) error {
 	id := request.RequestID
 	switch request.Type {
-	case "directory.list", "directory.create", "file.stat", "entry.rename":
+	case "directory.list", "directory.create", "file.stat", "entry.rename", "entry.delete.prepare", "entry.delete.commit", "entry.delete.cancel", "entry.delete.status", "entry.delete.outcomes":
 		var result json.RawMessage
 		err := l.call(request.Type, request.Payload, &result)
 		return l.send(id, "result", result, err)

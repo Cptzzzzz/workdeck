@@ -62,7 +62,7 @@ func (e *Engine) Rename(ctx context.Context, workspace string, revision int64, i
 		return Operation{}, fail("OPERATION_EXPIRED", "操作标识已过期，请重新确认")
 	}
 	var pending int
-	if err = e.db.QueryRowContext(ctx, `SELECT count(*) FROM mutations WHERE state IN ('prepared','uncertain')`).Scan(&pending); err != nil {
+	if err = e.db.QueryRowContext(ctx, `SELECT count(*) FROM mutations WHERE state IN ('prepared','uncertain','deleting')`).Scan(&pending); err != nil {
 		return Operation{}, err
 	}
 	if pending >= 64 {

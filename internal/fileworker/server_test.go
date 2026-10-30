@@ -108,6 +108,33 @@ func TestWorkerRPCFileLifecycleAndScope(t *testing.T) {
 	if err := json.Unmarshal(result, &directoryOperation); err != nil || directoryOperation.State != "committed" {
 		t.Fatal(directoryOperation, err)
 	}
+	result, errResp = c.call(t, "file.stat", workspace.ID, 1, map[string]any{"path": "renamed-directory"})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	if err := json.Unmarshal(result, &directory); err != nil || directory.Version == "" {
+		t.Fatal(directory, err)
+	}
+	deleteID := files.NewID(time.Now())
+	result, errResp = c.call(t, "entry.delete.prepare", workspace.ID, 1, map[string]any{"op_id": deleteID, "path": "renamed-directory", "version": directory.Version, "recursive": false})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	var preview files.DeletePreview
+	if err := json.Unmarshal(result, &preview); err != nil || preview.State != "prepared" || preview.Count != 1 {
+		t.Fatal(preview, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "renamed-directory")); err != nil {
+		t.Fatal("preview deleted directory", err)
+	}
+	result, errResp = c.call(t, "entry.delete.commit", workspace.ID, 1, map[string]any{"op_id": deleteID})
+	if errResp != nil {
+		t.Fatal(errResp)
+	}
+	var deleteStatus files.DeleteStatus
+	if err := json.Unmarshal(result, &deleteStatus); err != nil || deleteStatus.State != "committed" || deleteStatus.Deleted != 1 {
+		t.Fatal(deleteStatus, err)
+	}
 	body := []byte("hello workspace\n")
 	sum := sha256.Sum256(body)
 	id := files.NewID(time.Now())
