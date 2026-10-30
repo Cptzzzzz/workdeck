@@ -1,42 +1,47 @@
-# Deployment on server.example.com
+# Deploying behind an existing Caddy stack
 
-## Existing infrastructure
+Keep actual infrastructure values in `.env.deploy.local`, which is ignored by Git. The repository contains only `.env.deploy.example` placeholders. Copy and edit that file before deployment:
 
-Inspected on 2026-10-30:
-
-- Existing Compose stack: `/opt/stacks/public-apps/compose.yml`.
-- Caddy configuration: `/opt/stacks/public-apps/caddy/Caddyfile`.
-- Existing ingress container: `caddy`, exposing 80/443.
-- Existing Docker network: `public-apps_default`.
-- `work.example.com` resolves to `server.example.com`.
-
-Workdeck uses the same deployment pattern, with an isolated stack at `/opt/stacks/workdeck`. Its Compose service joins the existing network. No additional host port is exposed. The only change to the existing stack is an appended `work.example.com` site in Caddy; the complete candidate is validated before reload, with a backup saved first. Existing application containers are not recreated.
-
-## Server paths
-
-```text
-/opt/stacks/workdeck/
-  compose.yml                  service definition
-  .env                         deployed image version
-  build/                       release build context
-  data/workdeck.db              SQLite database (UID 65532)
-  secrets/admin_password       initial password (0400, UID 65532)
-  backups/                    ingress/version backups
+```sh
+cp .env.deploy.example .env.deploy.local
+chmod 600 .env.deploy.local
 ```
 
-The Hub runs as UID/GID 65532 with a read-only root filesystem, dropped capabilities, no-new-privileges, and bounded memory/logs. Its writable bind mount contains the SQLite database. A restart does not erase the database.
+The private file specifies the SSH target, public HTTPS URL, server deployment directory, existing Docker network, Caddy directory/container, and optional trusted proxy CIDR. The deploy script sources this file as trusted shell code; do not source a configuration received from an untrusted source.
 
-The administrator username is `admin`. The initial password is in the local ignored file `.secrets/administrator.txt`; change it in the UI after first login. After a UI password change, the initial file is no longer authoritative: the database password hash is authoritative. The password file is read only when initializing an empty database.
+The deployment host needs Docker Compose, an existing Caddy container, and an existing Docker network shared with Caddy. The Caddy configuration directory must be mounted at `/etc/caddy` inside its container. The SSH account needs permission to manage these resources. Current release images target Linux amd64 servers; Agents are available for amd64 and arm64.
 
-## First node
+```sh
+scripts/build.sh
+scripts/deploy.sh
+```
 
-The current development host `worker-01` is the first production node. The Agent runs as user `fuxc`:
+The script creates an isolated Workdeck Compose stack and attaches it to the configured network. It exposes no additional host port. If the hostname is not already configured, it appends a Caddy site, validates the complete candidate, saves a backup, and reloads Caddy. Existing application containers are not recreated. Existing site blocks are left for the operator to manage.
+
+## Server layout
+
+Example root: `/opt/stacks/workdeck` (configurable).
+
+```text
+compose.yml                 service definition
+.env                        deployed version and runtime configuration
+build/                      release build context
+data/workdeck.db           SQLite database, UID 65532
+secrets/admin_password      initial password, mode 0400, UID 65532
+backups/                    private ingress/version backups
+```
+
+The Hub runs as UID/GID 65532 with a read-only root filesystem, dropped capabilities, no-new-privileges, and bounded memory/logs. Its writable bind mount contains SQLite. Administrator secrets are transferred separately, outside images and source archives.
+
+The initial username is `admin`. Before first deployment, place a random 16–72 byte password in local `.secrets/administrator.txt` with mode 0600 and parent directory mode 0700. After a UI password change, the database password hash is authoritative; the initialization file no longer reflects the active password.
+
+## Agent service
+
+Each Agent runs as an ordinary work user, never as root:
 
 - Executable: `~/.local/bin/workdeck`.
-- Identity and session records: `~/.local/share/workdeck/`.
+- Private identity and session records: `~/.local/share/workdeck/`.
 - User unit: `~/.config/systemd/user/workdeck-agent.service`.
 - Per-terminal units: `workdeck-session-<terminal-id>.service`.
 
-The existing `agent-terminal.service` and `agent-terminal-tmux.service` use their own executable/configuration/socket and are not managed by Workdeck.
-
-The Agent identity and the initial administrator password are never committed to Git or embedded in container images.
+Unrelated terminal services are outside Workdeck's management. See [node onboarding](agent-setup.md), [operations](operations.md), and [sensitive data](security.md).

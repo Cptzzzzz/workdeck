@@ -19,3 +19,16 @@
 /web/playwright-report/
 __pycache__/
 *.pyc
+.env
+.env.*
+!.env.*.example
+/deploy/data/
+/deploy/secrets/
+/data/
+/secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.bundle
+*.har

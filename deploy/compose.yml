@@ -6,6 +6,13 @@ services:
     pull_policy: never
     restart: unless-stopped
     init: false
+    command:
+      - --addr=:8090
+      - --public-url=${WORKDECK_PUBLIC_URL:?Set WORKDECK_PUBLIC_URL}
+      - --data-dir=/data
+      - --assets-dir=/web
+      - --admin-password-file=/run/secrets/admin_password
+      - --trusted-proxy-cidr=${WORKDECK_TRUSTED_PROXY_CIDR:-}
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -26,4 +33,4 @@ services:
 networks:
   public:
     external: true
-    name: public-apps_default
+    name: ${WORKDECK_DOCKER_NETWORK:?Set WORKDECK_DOCKER_NETWORK}

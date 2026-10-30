@@ -22,7 +22,9 @@ test("installed Codex TUI renders through the public terminal", async ({
     .first()
     .click();
   await page.getByLabel("终端名称").fill("Codex TUI 验收");
-  await page.getByLabel("工作目录").fill("/home/workdeck-user/workdeck");
+  if (process.env.WORKDECK_TEST_CWD) {
+    await page.getByLabel("工作目录").fill(process.env.WORKDECK_TEST_CWD);
+  }
   await page.getByRole("button", { name: "创建并连接" }).click();
   await expect(page.locator(".terminal-state")).toContainText("控制中");
   await page.locator(".xterm-helper-textarea").focus();

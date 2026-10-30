@@ -1,6 +1,6 @@
 # Acceptance record — 2026-10-30
 
-Environment: Hub at `https://work.example.com` on `server.example.com`; Agent on `worker-01`, Linux arm64, user `fuxc`, tmux 3.2a. The deployed application build is `9eb1b23`. Later Git commits contain acceptance tests, operations documentation, and deployment-script reliability changes.
+Environment: a real HTTPS Hub with a Linux arm64 Agent, tmux 3.2a, desktop Chromium, and a 390 px mobile viewport. Host addresses, usernames, private paths, and original deployment identifiers are omitted from the public record.
 
 Passed checks:
 
@@ -14,14 +14,15 @@ Passed checks:
 - A real curses alternate-screen TUI retained its screen across Agent and Hub restarts. Its parent shell retained the exported environment variable.
 - The installed Codex TUI launched and rendered through the public terminal and remained visible after resizing. No model task was submitted and no Codex configuration was changed.
 - Offline termination: the task remained alive while the Agent was stopped; the Hub saved the termination request; reconnecting the Agent stopped the dedicated terminal unit and updated observed state.
-- Existing `agent-terminal` and `agent-terminal-tmux` services remained active. Existing application containers on the public server were not recreated.
+- Unrelated pre-existing terminal services remained active. Existing application containers on the public server were not recreated.
 
 Commands for repeating deployment acceptance:
 
 ```sh
-python3 scripts/check-offline-close.py
+WORKDECK_TEST_URL=https://work.example.com python3 scripts/check-offline-close.py
 cd web
 WORKDECK_TEST_URL=https://work.example.com \
+WORKDECK_TEST_SSH_TARGET=deploy@server.example.com \
 WORKDECK_RECOVERY=1 WORKDECK_CODEX=1 npx playwright test
 ```
 

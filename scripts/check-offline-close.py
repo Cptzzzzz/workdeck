@@ -2,13 +2,15 @@
 """Explicit deployed acceptance check. Restarts only the new Workdeck Agent."""
 import http.cookiejar
 import json
+import os
+import socket
 import pathlib
 import subprocess
 import time
 import urllib.request
 import urllib.error
 
-BASE = 'https://work.example.com'
+BASE = os.environ['WORKDECK_TEST_URL'].rstrip('/')
 client = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 csrf = ''
 
@@ -33,12 +35,12 @@ def wait_for(fn, seconds=40):
         time.sleep(1)
     raise RuntimeError('Acceptance condition timed out')
 
-password=(pathlib.Path(__file__).resolve().parent.parent/'.secrets/administrator.txt').read_text().strip()
+password=pathlib.Path(os.environ.get('WORKDECK_TEST_PASSWORD_FILE', str(pathlib.Path(__file__).resolve().parent.parent/'.secrets/administrator.txt'))).read_text().strip()
 csrf=api('/login',{'username':'admin','password':password})['csrf']
 terminal=None
 completed=False
 try:
-    node=next(n for n in api('/state')['nodes'] if n['hostname']=='worker-01' and n['online'])
+    node=next(n for n in api('/state')['nodes'] if n['online'] and (n['id']==os.environ['WORKDECK_TEST_NODE_ID'] if os.environ.get('WORKDECK_TEST_NODE_ID') else n['hostname']==socket.gethostname()))
     terminal=api('/terminals',{'node_id':node['id'],'name':'离线终止验收','cwd':node['home']})
     assert terminal['state']=='running',terminal
     unit='workdeck-session-'+terminal['id']+'.service'

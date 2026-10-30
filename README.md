@@ -39,6 +39,8 @@ An Agent identity is stored by default in `~/.local/share/workdeck/identity.json
 ## Build and deploy
 
 ```sh
+cp .env.deploy.example .env.deploy.local
+# Edit the private local file for your server, hostname, Caddy path, and Docker network.
 scripts/build.sh
 scripts/deploy.sh
 ```
@@ -52,10 +54,15 @@ go test -race ./...
 go vet ./...
 npm run build --prefix web
 cd web
-# Override CHROMIUM_PATH if a browser is not installed at the development host path.
-CHROMIUM_PATH=/path/to/chromium npx playwright test
+npx playwright install chromium
+npx playwright test
+# Optional: CHROMIUM_PATH=/path/to/chromium npx playwright test
 ```
 
 The browser acceptance test requires a running Hub and exactly one connected test node. It creates and terminates its own terminal; it does not touch pre-existing sessions. Set `WORKDECK_TEST_URL` and `WORKDECK_TEST_PASSWORD_FILE` for a different environment.
 
 Read [architecture](docs/architecture.md), [operations](docs/operations.md), and [deployment](docs/deployment.md) for lifecycle rules and recovery procedures.
+
+## Node onboarding and sensitive data
+
+See [从节点接入指南](docs/agent-setup.md) and [敏感信息清单](docs/security.md). Public deployment examples use placeholder hostnames. Keep your actual infrastructure in ignored `.env.deploy.local`; credentials, Agent identities, databases, terminal output, and private Git backups must never be committed.

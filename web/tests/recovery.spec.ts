@@ -9,6 +9,15 @@ test("terminal process survives Agent and Hub service restart", async ({
     process.env.WORKDECK_RECOVERY !== "1",
     "Explicitly enable this test in the deployed acceptance environment",
   );
+  const sshTarget = process.env.WORKDECK_TEST_SSH_TARGET;
+  test.skip(
+    !sshTarget,
+    "Set WORKDECK_TEST_SSH_TARGET before enabling service-restart acceptance",
+  );
+  const deployDir =
+    process.env.WORKDECK_TEST_DEPLOY_DIR || "/opt/stacks/workdeck";
+  const shellQuote = (value: string) =>
+    "'" + value.replaceAll("'", "'\"'\"'") + "'";
   test.setTimeout(150000);
   let readyCount = 0;
   page.on("websocket", (ws) =>
@@ -71,14 +80,14 @@ curses.wrapper(main)
   await expect(page.locator(".terminal-state")).toContainText("控制中");
   await expect(page.locator(".xterm-screen")).toContainText("TUI-ALIVE");
   before = readyCount;
-  execFileSync(
-    "ssh",
-    [
-      "root@server.example.com",
-      "cd /opt/stacks/workdeck && docker compose restart hub",
-    ],
-    { timeout: 30000, stdio: "pipe" },
-  );
+  execFileSync("ssh", [sshTarget!, "sh", "-s"], {
+    timeout: 30000,
+    stdio: "pipe",
+    input: `set -eu
+cd ${shellQuote(deployDir)}
+docker compose restart hub
+`,
+  });
   await expect
     .poll(() => readyCount, { timeout: 60000 })
     .toBeGreaterThan(before);

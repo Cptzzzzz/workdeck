@@ -9,9 +9,7 @@ export default defineConfig({
     headless: true,
     viewport: { width: 1440, height: 1000 },
     launchOptions: {
-      executablePath:
-        process.env.CHROMIUM_PATH ||
-        "/home/workdeck-user/.cache/ms-playwright/chromium-1243/chrome-linux-arm64/chrome",
+      executablePath: process.env.CHROMIUM_PATH,
       args: ["--no-sandbox", "--disable-dev-shm-usage"],
     },
   },
