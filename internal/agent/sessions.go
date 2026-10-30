@@ -22,6 +22,14 @@ type Sessions struct {
 	mu               sync.Mutex
 }
 
+const scrollingConfig = `set -g mouse on
+bind-key -T copy-mode Up send-keys -X cancel \; send-keys Up
+bind-key -T copy-mode Down send-keys -X cancel \; send-keys Down
+bind-key -T copy-mode-vi Up send-keys -X cancel \; send-keys Up
+bind-key -T copy-mode-vi Down send-keys -X cancel \; send-keys Down
+bind-key -T copy-mode-vi Escape send-keys -X cancel
+`
+
 func newSessions(dir string) (*Sessions, error) {
 	t, err := exec.LookPath("tmux")
 	if err != nil {
@@ -51,7 +59,7 @@ set -g escape-time 10
 set -g set-clipboard off
 set -g allow-rename off
 set -g window-size manual
-`
+` + scrollingConfig
 	if err = os.WriteFile(filepath.Join(dir, "tmux.conf"), []byte(config), 0600); err != nil {
 		return nil, err
 	}
@@ -276,6 +284,12 @@ func (s *Sessions) AttachCommand(id string, readonly bool) (*exec.Cmd, error) {
 	if t.State != "running" && t.State != "exited" {
 		return nil, fmt.Errorf("终端无法连接：%s", t.State)
 	}
+	// Existing servers do not reread tmux.conf after an Agent upgrade. Apply
+	// only these idempotent options, as the saved session owner, without ever
+	// recreating the pane or requiring a foreign account to read root's files.
+	if err := s.configureScrolling(id); err != nil {
+		return nil, err
+	}
 	args := []string{"-L", socketName(id), "attach-session", "-t", "main", "-E"}
 	if readonly {
 		args = append(args, "-r")
@@ -286,4 +300,24 @@ func (s *Sessions) AttachCommand(id string, readonly bool) (*exec.Cmd, error) {
 	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "LANG=C.UTF-8")
 	return cmd, nil
+}
+
+func (s *Sessions) configureScrolling(id string) error {
+	args := []string{"set-option", "-g", "mouse", "on"}
+	for _, table := range []string{"copy-mode", "copy-mode-vi"} {
+		for _, key := range []string{"Up", "Down"} {
+			args = append(args, ";", "bind-key", "-T", table, key, "send-keys -X cancel ; send-keys "+key)
+		}
+	}
+	args = append(args, ";", "bind-key", "-T", "copy-mode-vi", "Escape", "send-keys -X cancel")
+	out, err := s.tmuxRun(id, args...)
+	if err != nil {
+		return fmt.Errorf("配置终端滚动失败：%s", strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (s *Sessions) leaveHistory(id string) error {
+	_, err := s.tmuxRun(id, "if-shell", "-F", "-t", "main:0.0", "#{pane_in_mode}", "send-keys -X -t main:0.0 cancel")
+	return err
 }

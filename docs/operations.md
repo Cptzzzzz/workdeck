@@ -43,6 +43,12 @@ ssh deploy@server.example.com '
 
 Back up each node's private `~/.local/share/workdeck` separately. Protect its identity as a login credential. Metadata backups do not checkpoint operating-system processes; restoring records after reboot marks unavailable sessions lost and does not replay commands.
 
+## Terminal wheel and command history
+
+In a terminal you control, the wheel scrolls retained tmux history. Scroll down to the live prompt or simply start typing to return to the live application. Physical Up/Down and the mobile arrow buttons retain command history behavior in the Shell, including immediately after scrolling. In mouse-aware TUIs, wheel reports and cursor keys retain the application's native behavior. Hold Shift when dragging to select text with the browser rather than tmux mouse handling.
+
+Existing sessions receive these settings on their next attachment after an Agent upgrade; their panes and shell processes are retained. Deploy the matching Hub/frontend and upgrade each Agent. No shell configuration changes or terminal recreation is required. The browser also suppresses alternate-screen wheel-to-arrow synthesis during reconnects or when attached to an older Agent.
+
 ## Terminate and disconnect
 
 Closing a UI tab detaches only that view. Explicit termination stops the terminal's dedicated systemd unit and ordinary background descendants. If the node is offline, termination is saved and reconciled when it returns. The UI labels the pending state.

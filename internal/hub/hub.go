@@ -736,6 +736,13 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 					continue
 				}
 				switch f.Type {
+				case "scroll-exit":
+					h.mu.Lock()
+					controlling := h.controllers[t.ID] == a.id
+					h.mu.Unlock()
+					if !a.readonly && controlling {
+						e = data.JSON(f)
+					}
 				case "probe", "rtc-offer", "route-request", "route-commit":
 					// Signaling shares this authenticated attachment. Its lifetime
 					// remains the authority for any direct data channel as well.

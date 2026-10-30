@@ -252,6 +252,10 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 					continue
 				}
 				switch frame.Type {
+				case "scroll-exit":
+					if a.isController(msg) && link.accepts(packet.route) {
+						e = a.sessions.leaveHistory(msg.TerminalID)
+					}
 				case "rtc-offer":
 					if packet.route == "relay" {
 						link.negotiate(frame.SDP)

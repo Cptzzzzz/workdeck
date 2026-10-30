@@ -45,6 +45,8 @@ Terminating a terminal stops its dedicated systemd unit/cgroup, including ordina
 
 The running tmux server preserves the current screen and up to 10,000 history lines per pane in memory. Browser scrollback is per attachment. Reconnection attaches and redraws the current screen; it does not reconstruct all historical terminal output in the browser scrollback. tmux copy mode can inspect retained pane history.
 
+tmux mouse reporting routes the wheel to pane history rather than letting xterm synthesize cursor keys in an alternate screen. Mouse-aware TUIs continue to receive their own wheel reports. The next keyboard/paste/mobile-key input from the controller first leaves history mode on the same ordered transport; Up/Down then reach the Shell/application unchanged. Both tmux copy key tables also bind plain Up/Down to leave copy mode and forward the key. Readonly attachments gain no input permission. Scrolling options are applied idempotently on attachment, including pre-upgrade sessions and sessions owned by a different account, without recreating their processes. A browser wheel guard suppresses cursor-key synthesis if mouse reporting is not yet active.
+
 Data uses a bounded output acknowledgment window (256 KiB plus one chunk). A slow attachment is disconnected after its timeout, freeing the task from a stalled browser. Full recording/export and task-specific completion detection are not implemented.
 
 ## Trust and authentication

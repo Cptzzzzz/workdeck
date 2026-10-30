@@ -120,6 +120,26 @@ func TestReconnectWithIdleResizedTerminal(t *testing.T) {
 	if err != nil || string(before) != string(after) {
 		t.Fatalf("persistent terminal changed during reconnect: %q -> %q (%v)", before, after, err)
 	}
+	if out, err := sessions.tmuxRun(id, "show-options", "-gv", "mouse"); err != nil || strings.TrimSpace(string(out)) != "on" {
+		t.Fatalf("existing pane did not receive mouse upgrade: %q %v", out, err)
+	}
+	for _, table := range []string{"copy-mode", "copy-mode-vi"} {
+		out, err := sessions.tmuxRun(id, "list-keys", "-T", table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"Up", "Down"} {
+			found := false
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, " "+key+" ") && strings.Contains(line, "cancel") && strings.Contains(line, "send-keys "+key) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s %s did not retain keyboard history behavior", table, key)
+			}
+		}
+	}
 }
 
 func TestStopUnresponsiveAttachment(t *testing.T) {

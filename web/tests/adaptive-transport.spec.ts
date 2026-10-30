@@ -1,6 +1,11 @@
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { readState, selectTestNode, terminateCurrentTerminal } from "./helpers";
+import {
+  readState,
+  selectTestNode,
+  terminateCurrentTerminal,
+  delayRelayProbesForDirectTest,
+} from "./helpers";
 import { formatBytes } from "../src/network-metrics";
 
 const password = readFileSync(
@@ -58,6 +63,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     process.env.WORKDECK_DIRECT_ACCEPTANCE !== "1",
     "requires a directly reachable test Agent",
   );
+  await page.addInitScript(delayRelayProbesForDirectTest);
   await page.addInitScript(() => {
     const Native = window.RTCPeerConnection;
     (window as any).__peers = [];
@@ -195,6 +201,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     // A separate authenticated device gets readonly access and can take over.
     const other = await browser.newContext();
     try {
+      await other.addInitScript(delayRelayProbesForDirectTest);
       await other.addInitScript(() => {
         const Native = window.RTCPeerConnection;
         (window as any).__channels = [];

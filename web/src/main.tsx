@@ -1512,6 +1512,7 @@ function TerminalView({
     panel = useRef<HTMLElement>(null),
     instance = useRef<XTerminal | null>(null),
     socket = useRef<TerminalTransport | null>(null),
+    inputRef = useRef<(bytes: Uint8Array) => void>(() => {}),
     connectRef = useRef<(takeover?: boolean) => void>(() => {}),
     fitRef = useRef<() => void>(() => {});
   const [connection, setConnection] = useState("connecting"),
@@ -1560,7 +1561,39 @@ function TerminalView({
       retry: ReturnType<typeof setTimeout> | null = null,
       generation = 0,
       attempt = 0,
-      currentReadonly = true;
+      currentReadonly = true,
+      wheelDispatch = false,
+      historyMayBeActive = true;
+    const sendKeyboardInput = (bytes: Uint8Array) => {
+      if (socket.current?.readyState !== WebSocket.OPEN || currentReadonly)
+        return;
+      if (!wheelDispatch && historyMayBeActive) {
+        socket.current.send(JSON.stringify({ type: "scroll-exit" }));
+        historyMayBeActive = false;
+      }
+      sendInput(socket.current, bytes);
+    };
+    inputRef.current = sendKeyboardInput;
+    term.attachCustomWheelEventHandler((event) => {
+      if (event.ctrlKey) return false;
+      if (term.modes.mouseTrackingMode !== "none") {
+        // tmux receives genuine mouse reports. Do not treat those reports as
+        // keyboard input, or they would cancel the copy mode they just opened.
+        wheelDispatch = true;
+        historyMayBeActive = true;
+        queueMicrotask(() => {
+          wheelDispatch = false;
+        });
+        return true;
+      }
+      if (term.buffer.active.type === "alternate") {
+        // xterm otherwise synthesizes Up/Down in an alternate screen. During
+        // reconnect/with an old Agent a wheel must never edit shell history.
+        event.preventDefault();
+        return false;
+      }
+      return true;
+    });
     const sendSize = () => {
       if (!visibleRef.current) return;
       try {
@@ -1598,6 +1631,7 @@ function TerminalView({
             const frame = JSON.parse(e.data);
             if (frame.type === "ready") {
               term.reset();
+              historyMayBeActive = true;
               currentReadonly = frame.readonly;
               setReadonly(frame.readonly);
               term.options.disableStdin = frame.readonly;
@@ -1632,15 +1666,10 @@ function TerminalView({
     };
     connectRef.current = connect;
     const input = term.onData((data) => {
-      if (socket.current?.readyState === WebSocket.OPEN && !currentReadonly)
-        sendInput(socket.current, new TextEncoder().encode(data));
+      sendKeyboardInput(new TextEncoder().encode(data));
     });
     const binary = term.onBinary((data) => {
-      if (socket.current?.readyState === WebSocket.OPEN && !currentReadonly)
-        sendInput(
-          socket.current,
-          Uint8Array.from(data, (c) => c.charCodeAt(0)),
-        );
+      sendKeyboardInput(Uint8Array.from(data, (c) => c.charCodeAt(0)));
     });
     const observer = new ResizeObserver(() => requestAnimationFrame(sendSize));
     observer.observe(container.current);
@@ -1661,6 +1690,7 @@ function TerminalView({
       binary.dispose();
       term.dispose();
       instance.current = null;
+      inputRef.current = () => {};
     };
   }, [terminal.id, stopped]);
   useEffect(() => {
@@ -1673,7 +1703,7 @@ function TerminalView({
   }, [visible]);
   const send = (s: string) => {
     if (readonly || socket.current?.readyState !== WebSocket.OPEN) return;
-    sendInput(socket.current, new TextEncoder().encode(s));
+    inputRef.current(new TextEncoder().encode(s));
     instance.current?.focus();
   };
   return (

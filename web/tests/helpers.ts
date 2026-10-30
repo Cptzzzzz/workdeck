@@ -1,5 +1,31 @@
 import { Page } from "@playwright/test";
 
+// Keep positive direct-path acceptance deterministic even when localhost
+// scheduling noise makes the two real transports otherwise indistinguishable.
+// Only application probe replies are delayed; terminal data is untouched.
+export function delayRelayProbesForDirectTest() {
+  const Native = window.WebSocket;
+  window.WebSocket = class extends Native {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols);
+      Object.defineProperty(this, "onmessage", {
+        set: (handler: (event: MessageEvent) => void) => {
+          this.addEventListener("message", (event) => {
+            let probe = false;
+            if (typeof event.data === "string") {
+              try {
+                probe = JSON.parse(event.data).type === "probe-reply";
+              } catch {}
+            }
+            if (probe) setTimeout(() => handler(event), 30);
+            else handler(event);
+          });
+        },
+      });
+    }
+  };
+}
+
 export async function readState(page: Page) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
