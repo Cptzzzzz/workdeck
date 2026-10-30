@@ -20,7 +20,7 @@ def api(path, body=None, method=None):
             with client.open(request, timeout=8) as response:
                 return json.load(response)
         except (urllib.error.URLError,TimeoutError):
-            if attempt==2 or (body is not None and method not in ('DELETE','POST')):
+            if attempt==2 or (body is not None and method!='DELETE' and path!='/logout'):
                 raise
             time.sleep(1)
 

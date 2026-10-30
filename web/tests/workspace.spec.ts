@@ -69,6 +69,9 @@ test("persistent terminal, mobile resize, readonly and takeover", async ({
   await type(page, "echo $WORKDECK_PERSIST; cat /tmp/workdeck-e2e-" + id);
   await screen(page, "survived-browser-reconnect");
   await screen(page, "background-task-complete");
+  // Isolate transport validation from potentially expensive user zsh highlighting plugins.
+  await type(page, "bash --noprofile --norc");
+  await screen(page, "bash-");
   // A Unicode paste larger than one allowed input frame must arrive intact.
   await page.locator(".xterm-helper-textarea").evaluate(
     (element, text) => {
@@ -86,6 +89,7 @@ test("persistent terminal, mobile resize, readonly and takeover", async ({
   );
   await page.keyboard.press("Enter");
   await screen(page, "paste-characters=18000");
+  await type(page, "exit");
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     isMobile: true,

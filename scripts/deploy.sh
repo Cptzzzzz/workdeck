@@ -1,6 +1,12 @@
 #!/bin/sh
 # Build locally first: PATH=/path/to/go/bin:$PATH scripts/build.sh
 set -eu
+ssh() {
+  for attempt in 1 2 3; do
+    if command ssh -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "$@"; then return 0; fi
+  done
+  return 1
+}
 cd "$(dirname "$0")/.."
 server="${WORKDECK_SSH_TARGET:-root@server.example.com}"
 version="$(cat bin/VERSION)"
@@ -10,7 +16,7 @@ archive="$(mktemp)"
 trap 'rm -f "$archive"' EXIT HUP INT TERM
 tar -czf "$archive" bin/workdeck-linux-amd64 web/dist deploy/Dockerfile deploy/ca-certificates.crt deploy/compose.yml deploy/Caddyfile.snippet
 ssh "$server" 'install -d -m 700 /opt/stacks/workdeck /opt/stacks/workdeck/secrets /opt/stacks/workdeck/backups; mkdir -p /opt/stacks/workdeck/build /opt/stacks/workdeck/data; chown 65532:65532 /opt/stacks/workdeck/data'
-rsync -az --partial --timeout=60 -e "ssh -o ServerAliveInterval=15" "$archive" "$server:/opt/stacks/workdeck/release.tar.gz"
+rsync -az --partial --timeout=60 -e "ssh -o ConnectTimeout=10 -o ServerAliveInterval=15" "$archive" "$server:/opt/stacks/workdeck/release.tar.gz"
 # Secrets are transferred as a separate file, never included in an image or source archive.
 if ! ssh "$server" 'test -f /opt/stacks/workdeck/secrets/admin_password'; then
   [ -f .secrets/administrator.txt ] || { echo 'Create a 16+ character administrator password in .secrets/administrator.txt first' >&2; exit 1; }
