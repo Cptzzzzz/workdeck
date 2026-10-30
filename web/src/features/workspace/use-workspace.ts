@@ -56,6 +56,7 @@ export type Document = {
   persistenceError: string;
   deleted?: boolean;
   unavailable?: boolean;
+  manualSaveRequired?: boolean;
 };
 export type BinaryPreview = {
   identity: DraftIdentity;
@@ -64,6 +65,7 @@ export type BinaryPreview = {
   version: string;
   size: number;
 };
+export type ConflictSnapshot = { text: string; version: string; key: string };
 const documentKey = (id: DraftIdentity) =>
   JSON.stringify([
     id.account,
@@ -133,6 +135,7 @@ export function useWorkspace(
             pendingSave: doc.pending,
             deleted: doc.deleted,
             unavailable: doc.unavailable,
+            manualSaveRequired: doc.manualSaveRequired,
           };
           try {
             const stored = await saveDraft(draft, doc.token);
@@ -615,10 +618,13 @@ export function useWorkspace(
           newline: saved?.newline ?? (crlf ? "crlf" : "lf"),
           token: saved?.token ?? null,
           pending: saved?.pendingSave,
+          manualSaveRequired: saved?.manualSaveRequired,
           saving: false,
           conflict: !!saved && saved.baseVersion !== entry.version,
           warning,
-          message: "",
+          message: saved?.manualSaveRequired
+            ? "已采用远端版本作为基准；请检查后手动保存。"
+            : "",
           persistenceError,
         };
         docs.current.set(key, doc);
@@ -883,6 +889,105 @@ export function useWorkspace(
     },
     [schedule, update],
   );
+  const readConflict = useCallback(
+    async (doc: Document): Promise<ConflictSnapshot> => {
+      const client = clientRef.current,
+        gen = generation.current;
+      if (
+        !client ||
+        !doc.conflict ||
+        doc.deleted ||
+        doc.unavailable ||
+        doc.pending ||
+        doc.saving ||
+        renameLock.current ||
+        doc.identity.account !== account ||
+        client.workspace.id !== doc.identity.workspaceID ||
+        client.workspace.root_revision !== doc.identity.rootRevision
+      )
+        throw new Error("请先核对待确认保存，并确保远端文件可访问");
+      const { entry, bytes } = await client.readBytes(doc.path);
+      if (
+        gen !== generation.current ||
+        clientRef.current !== client ||
+        docs.current.get(documentKey(doc.identity)) !== doc ||
+        !doc.conflict ||
+        doc.pending
+      )
+        throw new Error("工作区或草稿状态已改变，请重新比较");
+      if (!entry.version || entry.kind !== "file" || entry.restricted)
+        throw new Error("远端文件不可比较");
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (text.includes("\0"))
+        throw new Error("远端文件不是可编辑的 UTF-8 文本");
+      return { text, version: entry.version, key: documentKey(doc.identity) };
+    },
+    [account],
+  );
+  const acceptConflictBase = useCallback(
+    async (doc: Document, snapshot: ConflictSnapshot) => {
+      const client = clientRef.current,
+        gen = generation.current;
+      if (
+        !client ||
+        snapshot.key !== documentKey(doc.identity) ||
+        !doc.conflict ||
+        doc.deleted ||
+        doc.unavailable ||
+        doc.pending ||
+        doc.saving ||
+        doc.warning ||
+        renameLock.current ||
+        doc.identity.account !== account ||
+        client.workspace.id !== doc.identity.workspaceID ||
+        client.workspace.root_revision !== doc.identity.rootRevision
+      )
+        throw new Error("草稿状态已改变，请重新比较");
+      doc.saving = true;
+      update();
+      try {
+        const current = await client.stat(doc.path);
+        if (
+          gen !== generation.current ||
+          clientRef.current !== client ||
+          docs.current.get(documentKey(doc.identity)) !== doc ||
+          !doc.conflict ||
+          doc.pending ||
+          renameLock.current
+        )
+          throw new Error("工作区或草稿状态已改变，请重新比较");
+        if (
+          current.kind !== "file" ||
+          current.restricted ||
+          current.version !== snapshot.version
+        )
+          throw new Error("远端文件再次变化，请重新比较");
+        const before = {
+          base: doc.base,
+          version: doc.version,
+          conflict: doc.conflict,
+          message: doc.message,
+          manualSaveRequired: doc.manualSaveRequired,
+        };
+        doc.base = snapshot.text;
+        doc.version = snapshot.version;
+        doc.conflict = false;
+        doc.manualSaveRequired = true;
+        doc.message =
+          "已采用所比较的远端版本作为基准；本地草稿未写入，请检查后手动保存。";
+        try {
+          await persist(doc);
+        } catch (e) {
+          Object.assign(doc, before);
+          throw e;
+        }
+      } finally {
+        doc.saving = false;
+        update();
+      }
+    },
+    [account, persist, update],
+  );
   const checkPendingSave = useCallback(
     async (doc: Document, cancel = false) => {
       const client = clientRef.current,
@@ -959,10 +1064,12 @@ export function useWorkspace(
             conflict: doc.conflict,
             unavailable: doc.unavailable,
             message: doc.message,
+            manualSaveRequired: doc.manualSaveRequired,
           };
           if (operation.state === "committed" && !transaction.spec.create) {
             doc.base = new TextDecoder().decode(transaction.content);
             doc.version = operation.version!;
+            doc.manualSaveRequired = false;
             doc.conflict = !matches || !!doc.deleted;
             if (matches && !doc.deleted) doc.unavailable = false;
             else if (missing) doc.unavailable = true;
@@ -1051,6 +1158,7 @@ export function useWorkspace(
         doc.version = result.version;
         doc.pending = undefined;
         doc.conflict = false;
+        doc.manualSaveRequired = false;
         await persist(doc);
         if (doc.text === doc.base)
           setRecoverableDrafts((old) =>
@@ -1059,8 +1167,10 @@ export function useWorkspace(
         void refresh();
       } catch (e) {
         if (e instanceof UncertainSaveError) doc.pending = e.transaction;
-        if (e instanceof FileServiceError && e.code === "CONFLICT")
+        if (e instanceof FileServiceError && e.code === "CONFLICT") {
+          doc.pending = undefined;
           doc.conflict = true;
+        }
         doc.message = (e as Error).message;
         await persist(doc).catch(() => {});
       } finally {
@@ -1092,6 +1202,7 @@ export function useWorkspace(
           doc.warning ||
           doc.message ||
           doc.persistenceError ||
+          doc.manualSaveRequired ||
           renameLock.current
         )
           continue;
@@ -1114,6 +1225,7 @@ export function useWorkspace(
             !doc.warning &&
             !doc.message &&
             !doc.persistenceError &&
+            !doc.manualSaveRequired &&
             !renameLock.current
           )
             void save(doc);
@@ -2356,6 +2468,8 @@ export function useWorkspace(
     toggle,
     openFile,
     edit,
+    readConflict,
+    acceptConflictBase,
     save,
     checkPendingSave,
     retry,

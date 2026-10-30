@@ -114,6 +114,65 @@ test("refresh updates clean files and protects dirty drafts", async ({
     await expect(
       page.getByRole("button", { name: "保存", exact: true }),
     ).toBeDisabled();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "设置" });
+    await settings.getByLabel("停止输入后自动保存文件").check();
+    await settings.getByRole("button", { name: "关闭对话框" }).click();
+    await page.getByRole("button", { name: "比较远端版本" }).click();
+    await expect(page.getByLabel("远端版本与本地草稿差异")).toBeVisible();
+    await expect(page.locator(".workbench-compare-toolbar")).toContainText(
+      "左侧：远端版本",
+    );
+    writeFileSync(file, "changed during comparison\n");
+    await page
+      .getByRole("button", { name: "采用此远端版本作为保存基准" })
+      .click();
+    await expect(
+      page.getByText("远端文件再次变化，请重新比较", { exact: true }),
+    ).toBeVisible();
+    expect(readFileSync(file, "utf8")).toBe("changed during comparison\n");
+    await page.getByRole("button", { name: "比较远端版本" }).click();
+    await page
+      .getByRole("button", { name: "采用此远端版本作为保存基准" })
+      .click();
+    await expect(
+      page.getByText(
+        "已采用所比较的远端版本作为基准；本地草稿未写入，请检查后手动保存。",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(screen).toContainText("local draft");
+    expect(readFileSync(file, "utf8")).toBe("changed during comparison\n");
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page
+      .getByRole("button", { name: "example.txt", exact: true })
+      .click();
+    await expect(
+      page.getByText("已采用远端版本作为基准；请检查后手动保存。", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page.waitForTimeout(2000);
+    expect(readFileSync(file, "utf8")).toBe("changed during comparison\n");
+    writeFileSync(file, "changed before save\n");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(
+      page
+        .locator(".workbench-notice")
+        .filter({ hasText: "远端文件已改变，本地草稿已保留" }),
+    ).toBeVisible();
+    expect(readFileSync(file, "utf8")).toBe("changed before save\n");
+    await expect(
+      page.getByRole("button", { name: "核对保存状态" }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "比较远端版本" }).click();
+    await page
+      .getByRole("button", { name: "采用此远端版本作为保存基准" })
+      .click();
+    expect(readFileSync(file, "utf8")).toBe("changed before save\n");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect.poll(() => readFileSync(file, "utf8")).toBe("local draft\n");
     await page.getByRole("button", { name: "new.txt", exact: true }).click();
     await expect(screen).toContainText("new");
     await editor.focus();

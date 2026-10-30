@@ -2489,6 +2489,24 @@ main {
   color: #e7ad7a;
   margin-left: 8px;
 }
+.workbench-compare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 13px;
+  color: #aebfac;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.workbench-compare-toolbar span {
+  flex: 1;
+}
+.workbench-compare-toolbar button {
+  color: #e7ad7a;
+}
+.workbench-compare-toolbar button:disabled {
+  opacity: 0.4;
+}
 @media (max-width: 700px) {
   .workbench-mode .sidebar {
     width: var(--workbench-sidebar-width);

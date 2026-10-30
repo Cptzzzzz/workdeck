@@ -18,6 +18,7 @@ export type Draft = {
   pendingSave?: SaveTransaction;
   deleted?: boolean;
   unavailable?: boolean;
+  manualSaveRequired?: boolean;
 };
 export type StoredDraft = Draft & { token: string; updatedAt: number };
 export class DraftConflictError extends Error {

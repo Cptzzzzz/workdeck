@@ -16,12 +16,19 @@ import {
   UserRound,
   TerminalSquare,
 } from "lucide-react";
-import type { WorkspaceController, Document } from "./use-workspace";
+import type {
+  WorkspaceController,
+  Document,
+  ConflictSnapshot,
+} from "./use-workspace";
 import type { CreateIntent } from "../../services/files/drafts";
 import type { DeleteStatus, DeleteOutcome } from "../../services/files/types";
 import { formatBytes, formatLatency } from "../../network-metrics";
 const MonacoEditor = lazy(() =>
   import("./monaco-editor").then((m) => ({ default: m.MonacoEditor })),
+);
+const ConflictDiff = lazy(() =>
+  import("./conflict-diff").then((m) => ({ default: m.ConflictDiff })),
 );
 const MarkdownPreview = lazy(() =>
   import("./markdown-preview").then((m) => ({ default: m.MarkdownPreview })),
@@ -411,6 +418,34 @@ export function WorkspaceEditor({
   const [markdownMode, setMarkdownMode] = useState<
     "edit" | "preview" | "split"
   >("edit");
+  const [comparison, setComparison] = useState<ConflictSnapshot | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [compareError, setCompareError] = useState("");
+  const compareSequence = useRef(0);
+  useEffect(() => {
+    compareSequence.current++;
+    setComparison(null);
+    setComparing(false);
+    setCompareError("");
+    return () => {
+      compareSequence.current++;
+    };
+  }, [doc?.identity.workspaceID, doc?.identity.rootRevision, doc?.path]);
+  const compareRemote = async () => {
+    if (!doc || comparing) return;
+    const sequence = ++compareSequence.current;
+    setComparing(true);
+    setCompareError("");
+    try {
+      const snapshot = await controller.readConflict(doc);
+      if (sequence === compareSequence.current) setComparison(snapshot);
+    } catch (e) {
+      if (sequence === compareSequence.current)
+        setCompareError((e as Error).message);
+    } finally {
+      if (sequence === compareSequence.current) setComparing(false);
+    }
+  };
   useEffect(
     () => setMarkdownMode("edit"),
     [doc?.identity.workspaceID, doc?.path],
@@ -565,6 +600,20 @@ export function WorkspaceEditor({
               {doc.pending ? "核对并继续另存" : "另存为新文件"}
             </button>
           )}
+          {!doc.deleted && !doc.unavailable && (
+            <button
+              disabled={
+                doc.saving ||
+                !!doc.pending ||
+                controller.renaming ||
+                !controller.fileReady ||
+                comparing
+              }
+              onClick={() => void compareRemote()}
+            >
+              {comparing ? "正在读取远端版本…" : "比较远端版本"}
+            </button>
+          )}
           {(doc.deleted || doc.unavailable) && (
             <button
               disabled={doc.saving || !!doc.pending || controller.renaming}
@@ -598,12 +647,51 @@ export function WorkspaceEditor({
           </button>
         </div>
       )}
+      {compareError && (
+        <div className="workbench-notice" role="alert">
+          {compareError}
+        </div>
+      )}
+      {doc && comparison && doc.conflict && (
+        <div className="workbench-compare-toolbar">
+          <span>左侧：远端版本　右侧：本地草稿</span>
+          <button
+            disabled={
+              doc.saving ||
+              !!doc.pending ||
+              !!doc.warning ||
+              controller.renaming ||
+              !controller.fileReady ||
+              comparing
+            }
+            onClick={() => {
+              void controller
+                .acceptConflictBase(doc, comparison)
+                .then(() => setComparison(null))
+                .catch((e) => setCompareError((e as Error).message));
+            }}
+          >
+            采用此远端版本作为保存基准
+          </button>
+          <button
+            onClick={() => {
+              compareSequence.current++;
+              setComparison(null);
+              setCompareError("");
+            }}
+          >
+            关闭比较
+          </button>
+        </div>
+      )}
       {doc ? (
         <div className="workbench-document">
           <div
             className={
               "workbench-code " +
-              (markdown && markdownMode === "preview" ? "hidden" : "")
+              (comparison || (markdown && markdownMode === "preview")
+                ? "hidden"
+                : "")
             }
           >
             <Suspense
@@ -617,7 +705,19 @@ export function WorkspaceEditor({
               />
             </Suspense>
           </div>
-          {markdown &&
+          {comparison && doc.conflict && (
+            <div className="workbench-code">
+              <Suspense
+                fallback={
+                  <div className="workbench-empty">正在加载差异视图…</div>
+                }
+              >
+                <ConflictDiff remote={comparison.text} local={doc.text} />
+              </Suspense>
+            </div>
+          )}
+          {!comparison &&
+            markdown &&
             markdownMode !== "edit" &&
             (controller.client ? (
               <Suspense
