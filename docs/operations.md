@@ -78,3 +78,15 @@ A Hub or Agent service restart preserves independently supervised terminal proce
 Each device receives an independent HttpOnly persistent cookie and server-side session record. Default lifetime is 30 days, renewed during active authenticated use. The Hub flag `--session-ttl` accepts a lifetime such as `720h`; Compose exposes this as `WORKDECK_SESSION_TTL`. Closing a normal browser and reopening the same profile retains login. Private browsing, clearing cookies, expiration, or explicit logout requires another login.
 
 Logging into another device does not revoke existing devices. Logout affects the current device only. Changing the password intentionally revokes the other sessions. Cookies remain protected by Secure and SameSite=Strict in HTTPS deployments; no login token is stored in JavaScript localStorage.
+
+## Service accounts and root Agents
+
+The account creating an Agent service determines the OS user of new terminals. Ordinary accounts use user units; root installs `/etc/systemd/system/workdeck-agent.service` with `User=root` and creates per-terminal system units. Root operations use `systemctl` without `--user`; ordinary-user operations retain `systemctl --user` and lingering.
+
+Session metadata records its original account and service scope. During an account migration, preserve these fields, the Agent identity, and all session records. A root Agent can attach to old ordinary-user sessions and stop their original user units without recreating the processes. Do not disable the original user's lingering manager until all of those old sessions have finished. New terminals run as the new service account.
+
+## Node names and password policy
+
+Select a node in the sidebar and use the rename button in its details. Renaming updates only the display name, works while the node is offline, and persists through restarts without changing identity or terminal ownership.
+
+Password initialization, login, and password changes impose no application-specific length or complexity policy. New passwords use salted PBKDF2-HMAC-SHA256 (600,000 iterations); old bcrypt hashes remain readable. Existing account passwords are not changed by deployment. The normal HTTP request-body size limit applies to all JSON requests.

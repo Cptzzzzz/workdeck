@@ -6,7 +6,7 @@ The Agent initiates a signed WSS control connection to the Hub. Heartbeat invent
 
 For each browser attachment, the Hub issues a 15-second one-time ticket. The Agent initiates a separate authenticated data WSS connection carrying that ticket. The Hub pairs the two sockets. Binary frames transport PTY bytes; text frames transport resize events and processed-output acknowledgments. The control socket is independent of noisy terminal output.
 
-Each attachment launches `tmux attach-session` inside its own PTY. The actual shell belongs to a separate, per-terminal tmux server supervised by a separate systemd user unit. Disconnecting or upgrading the Agent destroys attachments but not session units.
+The creating service account is recorded with each terminal; root Agents can retain access to migrated sessions owned by an earlier account. Each attachment launches `tmux attach-session` inside its own PTY. The actual shell belongs to a separate, per-terminal tmux server supervised by a separate systemd unit (system scope for root, user scope for ordinary accounts). Disconnecting or upgrading the Agent destroys attachments but not session units.
 
 ## Ownership and size
 
@@ -43,7 +43,7 @@ The Hub is trusted with terminal data. HTTPS/WSS encrypt browser↔Hub and Agent
 
 Initial join uses a short-lived token that can enroll one node identity, with Ed25519 proof of key possession. The same key can retry a lost enrollment response during the token validity window; a different key cannot reuse it. Subsequent Agent handshakes sign method, request URI, timestamp, and nonce. Timestamp windows and a nonce cache reject replay. Nodes can be revoked independently.
 
-Browser login uses bcrypt and server-side hashed sessions. Cookies are HttpOnly, SameSite=Strict, and Secure/\_\_Host-prefixed on HTTPS. Mutations require a session-bound CSRF header; browser WebSockets require the configured Origin. Logout/password changes revoke relevant sockets. Static assets are self-hosted; the Hub sends a restrictive CSP and frame denial.
+New passwords use salted PBKDF2-HMAC-SHA256 (600,000 iterations) and retain compatibility with existing bcrypt hashes. Passwords have no application-specific length or complexity policy. Browser login uses server-side hashed sessions. Cookies are HttpOnly, SameSite=Strict, and Secure/\_\_Host-prefixed on HTTPS. Mutations require a session-bound CSRF header; browser WebSockets require the configured Origin. Logout/password changes revoke relevant sockets. Static assets are self-hosted; the Hub sends a restrictive CSP and frame denial.
 
 This release is a single-administrator Linux workspace, not a multi-tenant command-execution sandbox. Terminal commands run with the enrolled OS user's existing filesystem and tool credentials. It does not synchronize or upload Codex/API credentials.
 

@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 type login struct {
@@ -124,7 +122,7 @@ func (h *Hub) signIn(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		hash = h.dummyHash
 	}
-	if e := bcrypt.CompareHashAndPassword(hash, []byte(in.Password)); e != nil || err != nil {
+	if e := comparePassword(hash, in.Password); e != nil || err != nil {
 		failure(w, 401, "用户名或密码错误")
 		return
 	}
@@ -177,17 +175,13 @@ func (h *Hub) changePassword(w http.ResponseWriter, r *http.Request, l login) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if len(in.Password) < 16 || len(in.Password) > 72 {
-		failure(w, 400, "新密码需要 16–72 字节")
-		return
-	}
 	var old []byte
 	_ = h.store.db.QueryRow("SELECT password_hash FROM accounts WHERE username=?", l.Username).Scan(&old)
-	if bcrypt.CompareHashAndPassword(old, []byte(in.Current)) != nil {
+	if comparePassword(old, in.Current) != nil {
 		failure(w, 403, "当前密码错误")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), 12)
+	hash, err := hashPassword(in.Password)
 	if err != nil {
 		failure(w, 400, "密码格式无效")
 		return

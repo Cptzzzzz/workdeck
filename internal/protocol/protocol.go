@@ -10,6 +10,8 @@ type Session struct {
 	ExitCode  *int   `json:"exit_code,omitempty"`
 	CreatedAt string `json:"created_at"`
 	BootID    string `json:"boot_id,omitempty"`
+	RunUser   string `json:"run_user,omitempty"`
+	Scope     string `json:"scope,omitempty"`
 }
 
 type Directory struct {
@@ -25,6 +27,7 @@ type DirectoryListing struct {
 }
 
 type Message struct {
+	RunUser       string            `json:"run_user,omitempty"`
 	Type          string            `json:"type"`
 	RequestID     string            `json:"request_id,omitempty"`
 	TerminalID    string            `json:"terminal_id,omitempty"`

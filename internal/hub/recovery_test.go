@@ -27,6 +27,9 @@ func TestPersistentDeviceSessionsAndHubRestart(t *testing.T) {
 	if _, err := x.h.store.db.Exec("INSERT INTO terminals("+terminalFields+") VALUES(?,?,?,?,?,?,?,?,?,NULL)", terminal, node, "remembered terminal", "/tmp", "running", "running", now(), now(), ""); err != nil {
 		t.Fatal(err)
 	}
+	if code, _ := x.request(t, "PATCH", "/api/nodes/"+node, map[string]string{"name": "renamed compute node"}, true); code != 200 {
+		t.Fatal("rename failed", code)
+	}
 	// Exercise the actual disk database and cookie through a fresh Hub instance.
 	cfg := x.h.cfg
 	cfg.PasswordFile = "/does/not/exist"
@@ -54,6 +57,9 @@ func TestPersistentDeviceSessionsAndHubRestart(t *testing.T) {
 		t.Fatal(code, state)
 	}
 	n := state["nodes"].([]any)[0].(map[string]any)
+	if n["name"] != "renamed compute node" || n["id"] != node {
+		t.Fatal("node name or identity lost across restart")
+	}
 	if n["online"] != false {
 		t.Fatal("node must remain offline until it reconnects")
 	}

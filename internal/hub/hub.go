@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/bcrypt"
 	"workdeck/internal/protocol"
 )
 
@@ -77,7 +76,7 @@ func New(cfg Config) (*Hub, error) {
 	if err != nil {
 		return nil, err
 	}
-	dummy, _ := bcrypt.GenerateFromPassword([]byte(randomID()), 12)
+	dummy, _ := hashPassword(randomID())
 	return &Hub{cfg: cfg, store: s, agents: map[string]*agentConn{}, requests: map[string]waiter{}, pending: map[string]*pending{}, attachments: map[string]*attachment{}, controllers: map[string]string{}, attempts: map[string]attempt{}, nonces: map[string]time.Time{}, dummyHash: dummy}, nil
 }
 func (h *Hub) Handler() http.Handler {
@@ -102,6 +101,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("DELETE /api/terminals/{id}", h.protected(h.closeTerminal))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
+	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
 	m.HandleFunc("GET /api/nodes/{id}/directories", h.protected(h.directories))
 	m.HandleFunc("POST /api/agent/enroll", h.enroll)
 	m.HandleFunc("GET /api/agent/control", h.controlSocket)
@@ -164,7 +164,7 @@ func (h *Hub) assets(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	nodes := []Node{}
-	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities FROM nodes WHERE revoked=0 ORDER BY name")
+	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities,run_user FROM nodes WHERE revoked=0 ORDER BY name")
 	if err != nil {
 		failure(w, 500, "读取节点失败")
 		return
@@ -172,7 +172,7 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	for rows.Next() {
 		var n Node
 		var capabilities string
-		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities); err != nil {
+		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities, &n.RunUser); err != nil {
 			rows.Close()
 			failure(w, 500, "读取节点失败")
 			return
@@ -321,6 +321,30 @@ func (h *Hub) closeTerminal(w http.ResponseWriter, r *http.Request, l login) {
 	t, _ = h.store.terminal(id)
 	respond(w, 200, t)
 }
+func (h *Hub) renameNode(w http.ResponseWriter, r *http.Request, l login) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" || len(in.Name) > 100 {
+		failure(w, 400, "节点名称需要 1–100 字节")
+		return
+	}
+	result, err := h.store.db.Exec("UPDATE nodes SET name=? WHERE id=? AND revoked=0", in.Name, r.PathValue("id"))
+	if err != nil {
+		failure(w, 500, "保存节点名称失败")
+		return
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		failure(w, 404, "节点不存在")
+		return
+	}
+	respond(w, 200, map[string]bool{"ok": true})
+}
 func (h *Hub) revokeNode(w http.ResponseWriter, r *http.Request, l login) {
 	id := r.PathValue("id")
 	_, err := h.store.db.Exec("UPDATE nodes SET revoked=1 WHERE id=?", id)
@@ -386,7 +410,7 @@ func (h *Hub) applyInventory(node string, msg protocol.Message) {
 	if msg.Capabilities == nil {
 		capabilities = []byte("[]")
 	}
-	_, err = tx.Exec("UPDATE nodes SET last_seen=?,hostname=?,platform=?,home=?,shell=?,version=?,boot_id=?,capabilities=? WHERE id=?", now(), msg.Hostname, msg.Platform, msg.Home, msg.Shell, msg.Version, msg.BootID, string(capabilities), node)
+	_, err = tx.Exec("UPDATE nodes SET last_seen=?,hostname=?,platform=?,home=?,shell=?,version=?,boot_id=?,capabilities=?,run_user=CASE WHEN ?<>'' THEN ? ELSE run_user END WHERE id=?", now(), msg.Hostname, msg.Platform, msg.Home, msg.Shell, msg.Version, msg.BootID, string(capabilities), msg.RunUser, msg.RunUser, node)
 	if err != nil {
 		log.Printf("inventory update: %v", err)
 		return

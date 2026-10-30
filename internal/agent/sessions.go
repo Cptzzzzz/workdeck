@@ -28,7 +28,7 @@ func newSessions(dir string) (*Sessions, error) {
 		return nil, errors.New("tmux is required")
 	}
 	if _, err = exec.LookPath("systemd-run"); err != nil {
-		return nil, errors.New("systemd-run and a running user systemd manager are required")
+		return nil, errors.New("systemd-run and a running systemd service manager are required")
 	}
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -75,8 +75,13 @@ func (s *Sessions) path(id string) string { return filepath.Join(s.dir, "session
 func (s *Sessions) tmuxRun(id string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	a := append([]string{"-L", socketName(id)}, args...)
-	return exec.CommandContext(ctx, s.tmux, a...).CombinedOutput()
+	args = append([]string{"-L", socketName(id)}, args...)
+	record, _ := s.read(id)
+	command, err := sessionCommand(ctx, record, s.tmux, args...)
+	if err != nil {
+		return nil, err
+	}
+	return command.CombinedOutput()
 }
 func (s *Sessions) read(id string) (protocol.Session, error) {
 	var t protocol.Session
@@ -142,6 +147,16 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 			continue
 		}
 		previous, _ := json.Marshal(t)
+		if t.RunUser == "" {
+			if account, e := serviceUser(); e == nil {
+				t.RunUser = account.Username
+			} else {
+				snapshotErr = e
+			}
+		}
+		if t.Scope == "" {
+			t.Scope = serviceScope()
+		}
 		t = s.inspect(t)
 		if t.State == "running" && t.BootID == "" {
 			t.BootID = s.bootID
@@ -174,6 +189,12 @@ func (s *Sessions) Create(spec protocol.Session) (protocol.Session, error) {
 	if err != nil || !info.IsDir() {
 		return spec, errors.New("工作目录不存在或无法访问")
 	}
+	account, err := serviceUser()
+	if err != nil {
+		return spec, err
+	}
+	spec.RunUser = account.Username
+	spec.Scope = serviceScope()
 	spec.State = "creating"
 	spec.BootID = s.bootID
 	if err = atomicJSON(s.path(spec.ID), spec); err != nil {
@@ -181,10 +202,14 @@ func (s *Sessions) Create(spec protocol.Session) (protocol.Session, error) {
 	}
 	// Every terminal owns a separate systemd unit, tmux server, and cgroup.
 	// Its lifecycle is independent of the network Agent service.
-	args := []string{"--user", "--unit=" + unitName(spec.ID), "--property=Type=forking", "--property=Restart=no", "--property=KillMode=control-group", "--property=TimeoutStopSec=8", "--setenv=COLORTERM=truecolor", "--setenv=LANG=C.UTF-8", s.tmux, "-L", socketName(spec.ID), "-f", filepath.Join(s.dir, "tmux.conf"), "new-session", "-d", "-s", "main", "-x", "100", "-y", "30", "-c", spec.Cwd, s.shell, "-l"}
+	args := []string{"--unit=" + unitName(spec.ID), "--property=Type=forking", "--property=Restart=no", "--property=KillMode=control-group", "--property=TimeoutStopSec=8", "--setenv=COLORTERM=truecolor", "--setenv=LANG=C.UTF-8", "--setenv=HOME=" + account.HomeDir, "--setenv=USER=" + account.Username, "--setenv=LOGNAME=" + account.Username, s.tmux, "-L", socketName(spec.ID), "-f", filepath.Join(s.dir, "tmux.conf"), "new-session", "-d", "-s", "main", "-x", "100", "-y", "30", "-c", spec.Cwd, s.shell, "-l"}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemd-run", args...).CombinedOutput()
+	command, err := managerCommand(ctx, spec, "systemd-run", args...)
+	if err != nil {
+		return spec, err
+	}
+	out, err := command.CombinedOutput()
 	if err != nil {
 		spec.State = "error"
 		spec.Error = "启动终端失败：" + strings.TrimSpace(string(out))
@@ -218,7 +243,11 @@ func (s *Sessions) Close(id string) (protocol.Session, error) {
 	// Stop the unit, not just the shell: include its background descendants.
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	out, stopErr := exec.CommandContext(ctx, "systemctl", "--user", "stop", unitName(id)+".service").CombinedOutput()
+	command, err := managerCommand(ctx, t, "systemctl", "stop", unitName(id)+".service")
+	if err != nil {
+		return t, err
+	}
+	out, stopErr := command.CombinedOutput()
 	if stopErr != nil {
 		if _, e := s.tmuxRun(id, "has-session", "-t", "main"); e == nil {
 			return t, fmt.Errorf("无法终止会话：%s", strings.TrimSpace(string(out)))
@@ -251,7 +280,10 @@ func (s *Sessions) AttachCommand(id string, readonly bool) (*exec.Cmd, error) {
 	if readonly {
 		args = append(args, "-r")
 	}
-	cmd := exec.Command(s.tmux, args...)
+	cmd, err := sessionCommand(context.Background(), t, s.tmux, args...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "LANG=C.UTF-8")
 	return cmd, nil
 }

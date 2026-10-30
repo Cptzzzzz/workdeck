@@ -2,15 +2,16 @@
 
 ## 准备条件
 
-- Linux amd64 或 arm64，已安装 `curl`、`tmux`，并有可用的用户级 systemd。
+- Linux amd64 或 arm64，已安装 `curl`、`tmux`，并有可用的 systemd。
 - 能主动访问 Hub 的 HTTPS/WSS 443 端口；无需公网 IP，也不用在从节点开放入站端口。
-- 使用日常工作用户安装，**不要使用 root**。终端可以访问该用户的文件和已有工具凭证。
+- 使用希望终端实际运行的账户安装：root 创建系统服务，其他账户创建用户服务。新终端继承该服务账户，可以访问该账户的文件和已有工具凭证。
 
 在 Debian / Ubuntu 上安装 tmux：
 
 ```sh
 sudo apt update
 sudo apt install -y tmux curl
+# 普通用户安装时检查用户管理器；root 安装时使用 systemctl show-environment
 systemctl --user show-environment >/dev/null
 ```
 
@@ -18,7 +19,7 @@ systemctl --user show-environment >/dev/null
 
 1. 登录自己的 Hub 页面，点击左侧“接入新节点”。
 2. 点击“生成接入命令”，获得一个 10 分钟有效的令牌。
-3. 在目标机器以工作用户执行界面生成的命令。示例使用占位域名和令牌：
+3. 在目标机器以所选服务账户执行界面生成的命令。示例使用占位域名和令牌：
 
 ```sh
 curl -fsS https://work.example.com/install-agent.sh -o /tmp/workdeck-install.sh
@@ -30,9 +31,9 @@ sh /tmp/workdeck-install.sh \
 
 不要把示例 token 原样使用，也不要公开真实的接入命令。省略 `--name` 时默认使用目标机器的主机名。名称会保存在 Hub 中，应避免使用不希望暴露的个人信息。
 
-安装器会识别架构、下载并校验 Agent、登记节点身份，创建并启动用户级 `workdeck-agent.service`。身份已存在时安装器会停止，不会覆盖旧身份；普通重启不需要重新接入。
+安装器会识别架构、下载并校验 Agent、登记节点身份，根据执行账户创建并启动系统级或用户级 `workdeck-agent.service`。身份已存在时安装器会停止，不会覆盖旧身份；普通重启不需要重新接入。
 
-4. 为了让退出 SSH 后会话继续运行，并在主机开机后自动启动用户服务，执行：
+4. 普通用户安装时，为了让退出 SSH 后会话继续运行，并在主机开机后自动启动用户服务，执行（root 的系统服务不需要此步骤）：
 
 ```sh
 sudo loginctl enable-linger "$(id -un)"
@@ -41,8 +42,12 @@ sudo loginctl enable-linger "$(id -un)"
 5. 检查状态，回到页面等待节点显示在线：
 
 ```sh
+# 普通用户安装
 systemctl --user status workdeck-agent --no-pager
 systemctl --user is-enabled workdeck-agent
+# root 安装则使用
+sudo systemctl status workdeck-agent --no-pager
+sudo systemctl is-enabled workdeck-agent
 ```
 
 安装不需要重启已有终端或其他服务。节点上线后即可在页面选择该节点，创建终端并运行 Shell、Codex 等工具。
@@ -62,7 +67,7 @@ chmod 600 /path/to/join-token
 
 通过 `--token-file` 可避免真实 token 出现在 Agent 的命令行参数中。输入 token 时也需避免把它写进共享 Shell 历史。接入完成后安全移除临时 token 文件。
 
-`agent run` 是前台运行模式；如需退出登录后持续运行，应配置仓库中的用户服务模板，并按实际用户调整路径与 Shell，随后执行：
+`agent run` 是前台运行模式；如需退出登录后持续运行，普通用户使用仓库中的用户服务模板；root 使用 `deploy/workdeck-agent-root.service` 系统服务模板。按实际账户调整路径与 Shell。普通用户执行：
 
 ```sh
 systemctl --user daemon-reload
@@ -81,8 +86,17 @@ systemctl --user enable --now workdeck-agent.service
 
 ## 主服务所在机器也作为计算节点
 
-Hub 和 Agent 可以部署在同一台机器上：Hub 继续负责管理与转发，普通系统用户运行的 Agent 负责终端任务。它使用相同的接入令牌流程，接入后会出现在“计算节点”列表中，可以直接选择它创建终端。
+Hub 和 Agent 可以部署在同一台机器上。终端使用创建 Agent 服务时的系统账户：以 root 执行安装器，会创建 `User=root` 的系统服务；以普通用户执行，会创建该用户的用户服务。
 
-在主服务机器上创建或选择一个普通工作用户，使用该用户执行上面的安装步骤，并启用 linger。建议给节点设置容易识别的名字，例如 `hub-worker`。工作目录和可访问文件由该用户的操作系统权限决定。
+在需要 root 终端的主服务机器上，以 root 执行接入命令，服务文件位于 `/etc/systemd/system/workdeck-agent.service`，数据默认位于 `/root/.local/share/workdeck/`。接入后，页面会显示节点的实际运行用户，可以选择该节点创建 root 终端。
 
-Hub 的 Docker 服务设置为自动启动，Agent 使用用户级 systemd 自启动；两者的持久数据目录需要保留。重装或升级程序时不要清空数据库、Agent 身份或会话记录目录。
+更换服务账户时，应先备份并迁移原身份和会话记录，保持节点 ID。已有进程继续以原账户运行；新建终端使用新的服务账户。root Agent 能保留对迁移前普通用户会话的连接与管理能力，避免切换服务账户时中断已有工作。
+
+更新和重启 root 服务：
+
+```sh
+systemctl restart workdeck-agent
+systemctl status workdeck-agent --no-pager
+```
+
+Hub 的 Docker 服务和对应的 systemd Agent 服务均应设置为自动启动，并保留各自的数据目录。

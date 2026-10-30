@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
@@ -48,7 +47,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 		return nil, err
 	}
 	// Additive migrations preserve existing node identities, sessions, and logins.
-	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''"} {
+	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''", "run_user": "TEXT NOT NULL DEFAULT ''"} {
 		rows, e := db.Query("PRAGMA table_info(nodes)")
 		if e != nil {
 			db.Close()
@@ -91,11 +90,8 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 		if e != nil {
 			return nil, fmt.Errorf("initial administrator password: %w", e)
 		}
-		password := strings.TrimSpace(string(b))
-		if len(password) < 16 {
-			return nil, fmt.Errorf("initial password must contain at least 16 characters")
-		}
-		hash, e := bcrypt.GenerateFromPassword([]byte(password), 12)
+		password := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+		hash, e := hashPassword(password)
 		if e != nil {
 			return nil, e
 		}
@@ -108,6 +104,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 }
 
 type Node struct {
+	RunUser      string   `json:"run_user"`
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	LastSeen     string   `json:"last_seen"`

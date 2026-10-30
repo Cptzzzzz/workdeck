@@ -35,6 +35,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
 type Node = {
+  run_user?: string;
   id: string;
   name: string;
   online: boolean;
@@ -229,6 +230,20 @@ function App() {
       notify((e as Error).message);
     }
   };
+  const renameNode = async (node: Node) => {
+    const name = prompt("节点名称", node.name)?.trim();
+    if (!name || name === node.name) return;
+    try {
+      await api("/nodes/" + node.id, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+      await refresh();
+      notify("节点名称已更新");
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
   const revoke = async (n: Node) => {
     if (
       !confirm(
@@ -324,7 +339,10 @@ function App() {
               <Server size={17} />
               <span className="node-name">
                 {n.name}
-                <small>{n.platform || "等待首次连接"}</small>
+                <small>
+                  {n.platform || "等待首次连接"}
+                  {n.run_user ? " · " + n.run_user : ""}
+                </small>
               </span>
               <i className={"dot " + (n.online ? "online" : "")} />
             </button>
@@ -509,7 +527,16 @@ function App() {
               </span>
               <span>{selected.hostname}</span>
               <span>{selected.platform}</span>
-              <button onClick={() => void revoke(selected)}>撤销接入</button>
+              {selected.run_user && <span>运行用户：{selected.run_user}</span>}
+              <div className="node-actions">
+                <button
+                  aria-label="重命名节点"
+                  onClick={() => void renameNode(selected)}
+                >
+                  重命名
+                </button>
+                <button onClick={() => void revoke(selected)}>撤销接入</button>
+              </div>
             </div>
           )}
           <div className="list-toolbar">
@@ -834,7 +861,6 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required
             />
           </label>
           {error && (
@@ -1144,7 +1170,10 @@ function JoinNode({ notify }: { notify: (s: string) => void }) {
             <span>02</span>
             <div>
               <b>在目标机器上运行</b>
-              <p>以日常工作用户执行，需要 tmux 与用户级 systemd。</p>
+              <p>
+                以希望终端使用的账户执行，需要 tmux 与 systemd；root
+                将创建系统服务。
+              </p>
             </div>
           </div>
           <pre className="install-command">{command}</pre>
@@ -1220,7 +1249,6 @@ function Password({ onSaved }: { onSaved: () => void }) {
           autoComplete="current-password"
           value={current}
           onChange={(e) => setCurrent(e.target.value)}
-          required
         />
       </label>
       <label>
@@ -1230,10 +1258,7 @@ function Password({ onSaved }: { onSaved: () => void }) {
           autoComplete="new-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          minLength={16}
-          required
         />
-        <small>至少 16 个字符。</small>
       </label>
       <label>
         确认新密码
@@ -1242,7 +1267,6 @@ function Password({ onSaved }: { onSaved: () => void }) {
           autoComplete="new-password"
           value={confirmPassword}
           onChange={(e) => setConfirm(e.target.value)}
-          required
         />
       </label>
       {error && <div className="form-error">{error}</div>}

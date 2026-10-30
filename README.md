@@ -3,7 +3,7 @@
 A self-hosted browser workspace for persistent terminals on outbound-only Linux machines.
 
 - **Hub:** Go, SQLite, authenticated browser API, node registry, reverse WebSocket relay.
-- **Agent:** an unprivileged Linux user service, Ed25519 node identity, outbound HTTPS/WSS only.
+- **Agent:** a Linux system/user service selected by its installation account, Ed25519 node identity, outbound HTTPS/WSS only.
 - **Terminal:** xterm.js + PTY + one independent tmux/systemd unit per terminal.
 - **Web:** React/TypeScript, desktop/mobile layout, node directory chooser, one controller plus readonly viewers, explicit takeover.
 - **Recovery:** durable node/terminal records, full-inventory reconciliation, and independent persistent device logins.
@@ -13,12 +13,12 @@ Closing a browser tab or restarting the Hub/Agent does not terminate the actual 
 
 ## Local development
 
-Requires Go 1.25+, Node 22+, tmux, and a working systemd user manager for the Agent. The host user should have lingering enabled if terminals must survive logout.
+Requires Go 1.25+, Node 22+, tmux, and systemd (a user manager for ordinary accounts, or the system manager for root). The host user should have lingering enabled if terminals must survive logout.
 
 ```sh
 mkdir -p .secrets
 chmod 700 .secrets
-# Put a random 16–72 byte initial password in this file (never commit it):
+# Put your chosen initial password in this file (never commit it):
 openssl rand -base64 30 > .secrets/administrator.txt
 chmod 600 .secrets/administrator.txt
 npm ci --prefix web

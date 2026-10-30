@@ -33,15 +33,16 @@ backups/                    private ingress/version backups
 
 The Hub runs as UID/GID 65532 with a read-only root filesystem, dropped capabilities, no-new-privileges, and bounded memory/logs. Its writable bind mount contains SQLite. Administrator secrets are transferred separately, outside images and source archives.
 
-The initial username is `admin`. Before first deployment, place a random 16–72 byte password in local `.secrets/administrator.txt` with mode 0600 and parent directory mode 0700. After a UI password change, the database password hash is authoritative; the initialization file no longer reflects the active password.
+The initial username is `admin`. Before first deployment, place your chosen password in local `.secrets/administrator.txt` with mode 0600 and parent directory mode 0700. After a UI password change, the database password hash is authoritative; the initialization file no longer reflects the active password.
 
 ## Agent service
 
-Each Agent runs as an ordinary work user, never as root:
+The installer uses the account that creates the service: root installs a system service, while other users install a user service. New terminals inherit that account:
 
 - Executable: `~/.local/bin/workdeck`.
 - Private identity and session records: `~/.local/share/workdeck/`.
-- User unit: `~/.config/systemd/user/workdeck-agent.service`.
+- Ordinary account unit: `~/.config/systemd/user/workdeck-agent.service`.
+- Root account unit: `/etc/systemd/system/workdeck-agent.service`.
 - Per-terminal units: `workdeck-session-<terminal-id>.service`.
 
 Unrelated terminal services are outside Workdeck's management. See [node onboarding](agent-setup.md), [operations](operations.md), and [sensitive data](security.md).

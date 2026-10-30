@@ -55,7 +55,7 @@ chown 65532:65532 "$root/data"
 REMOTE
 rsync -az --partial --timeout=60 -e "ssh -o ConnectTimeout=10 -o ServerAliveInterval=15" "$archive" "$server:$deploy_dir/release.tar.gz"
 if ! ssh "$server" "test -f $deploy_dir/secrets/admin_password"; then
-  [ -f .secrets/administrator.txt ] || { echo 'Create a 16+ character password in .secrets/administrator.txt first' >&2; exit 1; }
+  [ -f .secrets/administrator.txt ] || { echo 'Create your initial password in .secrets/administrator.txt first' >&2; exit 1; }
   rsync -az --timeout=60 .secrets/administrator.txt "$server:$deploy_dir/secrets/admin_password"
   ssh "$server" "chown 65532:65532 $deploy_dir/secrets/admin_password; chmod 400 $deploy_dir/secrets/admin_password"
 fi

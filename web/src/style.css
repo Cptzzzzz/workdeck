@@ -1699,3 +1699,11 @@ main {
     font-size: 9px;
   }
 }
+.node-detail .node-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 14px;
+}
+.node-detail .node-actions button {
+  margin-left: 0;
+}

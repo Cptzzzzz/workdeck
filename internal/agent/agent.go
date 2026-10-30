@@ -92,11 +92,15 @@ func (a *Agent) inventory(socket *protocol.Socket) error {
 func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	host, _ := os.Hostname()
 	home, _ := os.UserHomeDir()
-	sessions, err := a.sessions.Inventory()
-	if err != nil {
-		log.Printf("incomplete session inventory: %v", err)
+	sessions, snapshotErr := a.sessions.Inventory()
+	if snapshotErr != nil {
+		log.Printf("incomplete session inventory: %v", snapshotErr)
 	}
-	return socket.JSON(protocol.Message{Type: "inventory", Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: err == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory"}})
+	account, err := serviceUser()
+	if err != nil {
+		return err
+	}
+	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory"}})
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")
