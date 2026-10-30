@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -84,7 +85,20 @@ func (h *Hub) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if proxy, err := netip.ParsePrefix(h.cfg.TrustedProxyCIDR); err == nil {
+		if peer, err := netip.ParseAddr(host); err == nil && proxy.Contains(peer) {
+			chain := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+			if client, err := netip.ParseAddr(strings.TrimSpace(chain[len(chain)-1])); err == nil {
+				host = client.String()
+			}
+		}
+	}
 	h.mu.Lock()
+	for ip, old := range h.attempts {
+		if time.Since(old.Since) > 15*time.Minute {
+			delete(h.attempts, ip)
+		}
+	}
 	a := h.attempts[host]
 	if time.Since(a.Since) > 15*time.Minute {
 		a = attempt{Since: time.Now()}
@@ -232,6 +246,26 @@ func (h *Hub) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	var claimedID, claimedKey string
+	if tx.QueryRow("SELECT node_id,public_key FROM enrollment_claims WHERE hash=? AND expires>?", digest(in.Token), time.Now().Unix()).Scan(&claimedID, &claimedKey) == nil {
+		if claimedKey != in.PublicKey {
+			failure(w, 403, "加入令牌已用于其他节点身份")
+			return
+		}
+		var revoked int
+		if tx.QueryRow("SELECT revoked FROM nodes WHERE id=?", claimedID).Scan(&revoked) != nil || revoked != 0 {
+			failure(w, 403, "节点身份已撤销")
+			return
+		}
+		// Recover a lost HTTP response without creating a second node identity.
+		respond(w, 201, map[string]string{"node_id": claimedID})
+		return
+	}
+	var expires int64
+	if tx.QueryRow("SELECT expires FROM enrollments WHERE hash=? AND expires>?", digest(in.Token), time.Now().Unix()).Scan(&expires) != nil {
+		failure(w, 403, "加入令牌无效、过期或已使用")
+		return
+	}
 	res, err := tx.Exec("DELETE FROM enrollments WHERE hash=? AND expires>?", digest(in.Token), time.Now().Unix())
 	if err != nil {
 		failure(w, 500, "保存失败")
@@ -244,6 +278,9 @@ func (h *Hub) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	id := randomID()
 	_, err = tx.Exec("INSERT INTO nodes(id,name,public_key) VALUES(?,?,?)", id, strings.TrimSpace(in.Name), in.PublicKey)
+	if err == nil {
+		_, err = tx.Exec("INSERT INTO enrollment_claims VALUES(?,?,?,?)", digest(in.Token), id, in.PublicKey, expires)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}

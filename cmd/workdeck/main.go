@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"workdeck/internal/agent"
@@ -40,6 +41,7 @@ func run() error {
 		f.StringVar(&cfg.AssetsDir, "assets-dir", "./web/dist", "built frontend directory")
 		f.StringVar(&cfg.AdminUser, "admin-user", "admin", "initial administrator username")
 		f.StringVar(&cfg.PasswordFile, "admin-password-file", "", "initial administrator password file")
+		f.StringVar(&cfg.TrustedProxyCIDR, "trusted-proxy-cidr", "", "trusted reverse proxy network, for login rate limiting")
 		_ = f.Parse(os.Args[2:])
 		h, err := hub.New(cfg)
 		if err != nil {
@@ -65,7 +67,7 @@ func run() error {
 				if e != nil {
 					return e
 				}
-				*token = string(b)
+				*token = strings.TrimSpace(string(b))
 			}
 			if *name == "" {
 				*name, _ = os.Hostname()

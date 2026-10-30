@@ -39,6 +39,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS accounts(username TEXT PRIMARY KEY,password_hash BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS logins(hash TEXT PRIMARY KEY,username TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS enrollments(hash TEXT PRIMARY KEY,expires INTEGER NOT NULL);
+ CREATE TABLE IF NOT EXISTS enrollment_claims(hash TEXT PRIMARY KEY,node_id TEXT NOT NULL,public_key TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY,name TEXT NOT NULL,public_key TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT NOT NULL DEFAULT '',hostname TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT '',home TEXT NOT NULL DEFAULT '',shell TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS terminals(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),name TEXT NOT NULL,cwd TEXT NOT NULL,desired_state TEXT NOT NULL,observed_state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',exit_code INTEGER);
  CREATE INDEX IF NOT EXISTS terminals_node ON terminals(node_id);`

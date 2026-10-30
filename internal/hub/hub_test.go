@@ -118,8 +118,14 @@ func TestEnrollmentAndReplayProtection(t *testing.T) {
 		t.Fatal(code, out)
 	}
 	node := out["node_id"].(string)
+	if code, retry := x.request(t, "POST", "/api/agent/enroll", payload, false); code != 201 || retry["node_id"] != node {
+		t.Fatal("lost enrollment response could not be recovered", code)
+	}
+	pub2, key2, _ := ed25519.GenerateKey(rand.Reader)
+	payload["public_key"] = base64.StdEncoding.EncodeToString(pub2)
+	payload["proof"] = base64.StdEncoding.EncodeToString(ed25519.Sign(key2, []byte("workdeck-enroll:"+token)))
 	if code, _ = x.request(t, "POST", "/api/agent/enroll", payload, false); code != 403 {
-		t.Fatal("one-time token reused", code)
+		t.Fatal("one-time token enrolled another key", code)
 	}
 
 	// Use identical signed request twice; the second handshake must be rejected.

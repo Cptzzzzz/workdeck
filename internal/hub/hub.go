@@ -20,7 +20,7 @@ import (
 	"workdeck/internal/protocol"
 )
 
-type Config struct{ Addr, PublicURL, DataDir, AssetsDir, AdminUser, PasswordFile string }
+type Config struct{ Addr, PublicURL, DataDir, AssetsDir, AdminUser, PasswordFile, TrustedProxyCIDR string }
 type attempt struct {
 	Since time.Time
 	Count int
@@ -206,6 +206,7 @@ func (h *Hub) newEnrollment(w http.ResponseWriter, r *http.Request, l login) {
 		return
 	}
 	_, _ = h.store.db.Exec("DELETE FROM enrollments WHERE expires<?", time.Now().Unix())
+	_, _ = h.store.db.Exec("DELETE FROM enrollment_claims WHERE expires<?", time.Now().Unix())
 	respond(w, 201, map[string]string{"token": token, "expires_at": expiry.UTC().Format(time.RFC3339), "hub": h.cfg.PublicURL})
 }
 func (h *Hub) nodeOnline(id string) bool {
