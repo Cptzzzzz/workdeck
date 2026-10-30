@@ -156,7 +156,6 @@ test("refresh updates clean files and protects dirty drafts", async ({
     await page.waitForTimeout(2000);
     expect(readFileSync(file, "utf8")).toBe("changed during comparison\n");
     writeFileSync(file, "changed before save\n");
-    await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(
       page
         .locator(".workbench-notice")

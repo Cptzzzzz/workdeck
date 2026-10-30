@@ -45,7 +45,7 @@ func (a *Agent) attachFiles(parent context.Context, pool *fileWorkerPool, msg pr
 	packets := make(chan filePacket, 8)
 	link := fileLink{ctx: ctx, worker: worker, socket: socket, workspace: msg.WorkspaceID, terminal: msg.TerminalID, revision: msg.RootRevision, readers: make(map[string]string), uploads: make(map[string]bool), active: "relay", epoch: 1}
 	link.peer = &filePeer{ctx: ctx, packets: packets, signal: func(id, kind string, value any) error { return link.sendTo("relay", 1, id, kind, value, nil) }}
-	defer func() { cancel(); link.peer.close(); link.closeReaders() }()
+	defer func() { cancel(); link.peer.close(); link.closeReaders(); link.closeWatch() }()
 	directEnabled := os.Getenv("WORKDECK_DIRECT") != "0"
 	if err = link.send(files.NewID(time.Now()), "file.ready", map[string]any{"node_time_ms": time.Now().UnixMilli(), "route": "relay", "direct": directEnabled, "ice_servers": stunURLs()}, nil); err != nil {
 		return err
@@ -155,6 +155,7 @@ type fileLink struct {
 	peer                *filePeer
 	active              string
 	epoch               uint32
+	watch               string
 }
 
 func fileParams(raw json.RawMessage, out any) error {
@@ -227,6 +228,47 @@ func (l *fileLink) write(route string, kind int, data []byte) error {
 func (l *fileLink) control(request fileprotocol.Envelope) error {
 	id := request.RequestID
 	switch request.Type {
+	case "watch.open":
+		var p struct {
+			Paths []string `json:"paths"`
+		}
+		if err := fileParams(request.Payload, &p); err != nil {
+			return l.send(id, "result", nil, err)
+		}
+		if l.watch != "" {
+			return l.send(id, "result", nil, &files.Error{Code: "BUSY", Message: "此连接已有监听"})
+		}
+		l.watch = files.NewID(time.Now())
+		err := l.call("watch.open", map[string]any{"handle": l.watch, "paths": p.Paths}, nil)
+		if err != nil {
+			l.closeWatch()
+		}
+		return l.send(id, "result", map[string]any{"active": err == nil}, err)
+	case "watch.set":
+		var p struct {
+			Paths []string `json:"paths"`
+		}
+		if err := fileParams(request.Payload, &p); err != nil {
+			return l.send(id, "result", nil, err)
+		}
+		if l.watch == "" {
+			return l.send(id, "result", nil, &files.Error{Code: "NOT_FOUND", Message: "监听已关闭"})
+		}
+		err := l.call("watch.set", map[string]any{"handle": l.watch, "paths": p.Paths}, nil)
+		return l.send(id, "result", nil, err)
+	case "watch.poll":
+		var p struct {
+			TimeoutMS int `json:"timeout_ms"`
+		}
+		if err := fileParams(request.Payload, &p); err != nil {
+			return l.send(id, "result", nil, err)
+		}
+		if l.watch == "" {
+			return l.send(id, "result", nil, &files.Error{Code: "NOT_FOUND", Message: "监听已关闭"})
+		}
+		var result files.WatchEvent
+		err := l.call("watch.poll", map[string]any{"handle": l.watch, "timeout_ms": p.TimeoutMS}, &result)
+		return l.send(id, "result", result, err)
 	case "directory.list", "directory.create", "file.stat", "entry.rename", "entry.delete.prepare", "entry.delete.commit", "entry.delete.cancel", "entry.delete.status", "entry.delete.outcomes":
 		var result json.RawMessage
 		err := l.call(request.Type, request.Payload, &result)
@@ -354,4 +396,13 @@ func (l *fileLink) closeReaders() {
 		_ = l.worker.Call(ctx, "read.close", l.workspace, l.revision, map[string]any{"handle": handle}, nil)
 		cancel()
 	}
+}
+func (l *fileLink) closeWatch() {
+	if l.watch == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = l.worker.Call(ctx, "watch.close", l.workspace, l.revision, map[string]any{"handle": l.watch}, nil)
+	l.watch = ""
 }

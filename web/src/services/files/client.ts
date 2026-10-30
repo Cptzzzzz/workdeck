@@ -126,14 +126,18 @@ export class FileClient {
   get route(): Route {
     return this.activeRoute;
   }
-  private constructor(readonly workspace: Workspace) {}
+  private constructor(
+    readonly workspace: Workspace,
+    private readonly allowDirect: boolean,
+  ) {}
 
   static async connect(
     workspace: Workspace,
     signal?: AbortSignal,
+    allowDirect = true,
   ): Promise<FileClient> {
     if (signal?.aborted) throw new DOMException("已取消", "AbortError");
-    const client = new FileClient(workspace);
+    const client = new FileClient(workspace, allowDirect);
     const ticket = await api<{ ticket: string }>(
       `/workspaces/${encodeURIComponent(workspace.id)}/connections`,
       { method: "POST", body: "{}", signal },
@@ -329,6 +333,7 @@ export class FileClient {
           this.publishMetrics();
         }, 1000);
         if (
+          this.allowDirect &&
           result?.direct === true &&
           Array.isArray(result.ice_servers) &&
           result.ice_servers.length <= 4 &&
@@ -563,6 +568,24 @@ export class FileClient {
         offset,
       })
     ).value as DirectoryPage;
+  }
+  async openWatch(paths: string[]): Promise<void> {
+    await this.request("watch.open", { paths });
+  }
+  async pollWatch(
+    timeoutMS: number,
+  ): Promise<{ generation: number; changed: boolean; reset: boolean }> {
+    const result = (await this.request("watch.poll", { timeout_ms: timeoutMS }))
+      .value as { generation?: unknown; changed?: unknown; reset?: unknown };
+    if (
+      !result ||
+      !Number.isSafeInteger(result.generation) ||
+      (result.generation as number) < 1 ||
+      typeof result.changed !== "boolean" ||
+      typeof result.reset !== "boolean"
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "监听响应无效");
+    return result as { generation: number; changed: boolean; reset: boolean };
   }
   async stat(path: string): Promise<FileEntry> {
     return (await this.request("file.stat", { path })).value as FileEntry;

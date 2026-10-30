@@ -36,6 +36,7 @@ type Server struct {
 	engine        *files.Engine
 	mu            sync.Mutex
 	readers       map[string]readHandle
+	watches       map[string]watchHandle
 	snapshots     map[string]directorySnapshot
 	snapshotBytes int
 	closing       bool
@@ -43,12 +44,18 @@ type Server struct {
 	writeMu       sync.Mutex
 	workers       sync.WaitGroup
 	slots         chan struct{}
+	watchSlots    chan struct{}
 }
 
 type readHandle struct {
 	workspace string
 	revision  int64
 	reader    *files.Reader
+}
+type watchHandle struct {
+	workspace string
+	revision  int64
+	watch     *files.DirectoryWatch
 }
 
 type activeRequest struct {
@@ -57,7 +64,7 @@ type activeRequest struct {
 }
 
 func New(engine *files.Engine) *Server {
-	return &Server{engine: engine, readers: make(map[string]readHandle), snapshots: make(map[string]directorySnapshot), active: make(map[string]*activeRequest), slots: make(chan struct{}, 16)}
+	return &Server{engine: engine, readers: make(map[string]readHandle), watches: make(map[string]watchHandle), snapshots: make(map[string]directorySnapshot), active: make(map[string]*activeRequest), slots: make(chan struct{}, 16), watchSlots: make(chan struct{}, 32)}
 }
 
 func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) error {
@@ -72,9 +79,14 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		s.closing = true
 		readers := s.readers
 		s.readers = make(map[string]readHandle)
+		watches := s.watches
+		s.watches = make(map[string]watchHandle)
 		s.mu.Unlock()
 		for _, handle := range readers {
 			_ = handle.reader.Close()
+		}
+		for _, handle := range watches {
+			_ = handle.watch.Close()
 		}
 		s.workers.Wait()
 	}()
@@ -125,10 +137,17 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 		active := &activeRequest{stop: stop, done: make(chan struct{})}
 		s.active[req.ID] = active
 		s.mu.Unlock()
-		// Closing a reader cannot be starved by blocked root-change requests.
-		if req.Method != "read.close" {
+		// Watch waits have a separate bounded pool so they cannot starve file
+		// reads, saves or root changes when several browsers are connected.
+		slots := s.slots
+		if req.Method == "watch.poll" {
+			slots = s.watchSlots
+		}
+		// Cleanup cannot be starved by blocked root-change requests.
+		cleanup := req.Method == "read.close" || req.Method == "watch.close"
+		if !cleanup {
 			select {
-			case s.slots <- struct{}{}:
+			case slots <- struct{}{}:
 			default:
 				stop()
 				s.mu.Lock()
@@ -149,8 +168,8 @@ func (s *Server) Serve(ctx context.Context, input io.Reader, output io.Writer) e
 				delete(s.active, req.ID)
 				s.mu.Unlock()
 				close(active.done)
-				if req.Method != "read.close" {
-					<-s.slots
+				if !cleanup {
+					<-slots
 				}
 			}()
 			defer stop()
@@ -262,6 +281,8 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			return nil, err
 		}
 		return s.listPage(ctx, r, directoryQuery{Path: p.Path, Hidden: p.Hidden, Filter: p.Filter, Snapshot: p.Snapshot, Offset: p.Offset})
+	case "watch.open", "watch.set", "watch.poll", "watch.close":
+		return s.dispatchWatch(ctx, r)
 	case "directory.create":
 		var p struct {
 			OpID string `json:"op_id"`

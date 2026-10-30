@@ -259,6 +259,11 @@ function App() {
         (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
       )
       ?.capabilities?.includes("workspace-delete-v1"),
+    !!data.nodes
+      .find(
+        (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
+      )
+      ?.capabilities?.includes("workspace-watch-v1"),
   );
   const [fileRenameTarget, setFileRenameTarget] = useState("");
   const [deletedSaveTarget, setDeletedSaveTarget] =

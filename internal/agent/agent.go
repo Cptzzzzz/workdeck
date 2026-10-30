@@ -107,7 +107,7 @@ func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1"}})
+	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1"}})
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")

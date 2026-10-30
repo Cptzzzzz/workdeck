@@ -85,6 +85,7 @@ export function useWorkspace(
   supportsCreate: boolean,
   supportsRename: boolean,
   supportsDelete: boolean,
+  supportsWatch: boolean,
 ) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [connection, setConnection] = useState("等待连接");
@@ -463,6 +464,64 @@ export function useWorkspace(
     }, 10000);
     return () => clearInterval(timer);
   }, [enabled, workspace, refresh]);
+  useEffect(() => {
+    if (!enabled || !workspace || !supportsWatch) return;
+    const abort = new AbortController();
+    let stopped = false,
+      watcher: FileClient | undefined,
+      retry = 0,
+      debounce = 0;
+    const paths = Array.from(expanded).slice(0, 64);
+    const invalidate = () => {
+      if (debounce) return;
+      debounce = window.setTimeout(() => {
+        debounce = 0;
+        if (!stopped) void refresh();
+      }, 250);
+    };
+    const run = async () => {
+      try {
+        const opened = await FileClient.connect(workspace, abort.signal, false);
+        if (stopped) {
+          opened.close();
+          return;
+        }
+        watcher = opened;
+        await opened.openWatch(paths);
+        if (stopped) return;
+        invalidate(); // install the watch first, then reconcile changes during installation
+        let generation = 0;
+        while (!stopped) {
+          const event = await opened.pollWatch(5000);
+          if (stopped) return;
+          if (generation && generation !== event.generation) {
+            invalidate();
+            break;
+          }
+          generation = event.generation;
+          if (event.changed || event.reset) invalidate();
+          if (event.reset) break;
+          if (event.changed)
+            await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+      } catch {
+        // The ten-second reconciliation remains available while a watcher
+        // reconnects, or when a filesystem cannot provide notifications.
+      } finally {
+        watcher?.close();
+        watcher = undefined;
+        if (!stopped) retry = window.setTimeout(() => void run(), 2000);
+      }
+    };
+    void run();
+    return () => {
+      stopped = true;
+      abort.abort();
+      watcher?.close();
+      if (retry) clearTimeout(retry);
+      if (debounce) clearTimeout(debounce);
+    };
+  }, [enabled, workspace, supportsWatch, expanded, refresh]);
   useEffect(() => {
     if (enabled && workspace && selected) void refresh();
   }, [enabled, workspace, selected, refresh]);
