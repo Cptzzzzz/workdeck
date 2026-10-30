@@ -1,3 +1,4 @@
+import { selectTestNode } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
@@ -16,11 +17,14 @@ test("installed Codex TUI renders through the public terminal", async ({
   await page.getByLabel("用户名").fill("admin");
   await page.getByLabel("密码", { exact: true }).fill(password);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.locator(".node-item .online")).toHaveCount(1);
+  await expect
+    .poll(() => page.locator(".node-item .online").count())
+    .toBeGreaterThan(0);
   await page
     .getByRole("button", { name: "新建终端", exact: true })
     .first()
     .click();
+  await selectTestNode(page);
   await page.getByLabel("终端名称").fill("Codex TUI 验收");
   if (process.env.WORKDECK_TEST_CWD) {
     await page.getByLabel("工作目录").fill(process.env.WORKDECK_TEST_CWD);

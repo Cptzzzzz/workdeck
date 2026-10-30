@@ -5,7 +5,9 @@ A self-hosted browser workspace for persistent terminals on outbound-only Linux 
 - **Hub:** Go, SQLite, authenticated browser API, node registry, reverse WebSocket relay.
 - **Agent:** an unprivileged Linux user service, Ed25519 node identity, outbound HTTPS/WSS only.
 - **Terminal:** xterm.js + PTY + one independent tmux/systemd unit per terminal.
-- **Web:** React/TypeScript, desktop/mobile layout, one controller plus readonly viewers, explicit takeover.
+- **Web:** React/TypeScript, desktop/mobile layout, node directory chooser, one controller plus readonly viewers, explicit takeover.
+- **Recovery:** durable node/terminal records, full-inventory reconciliation, and independent persistent device logins.
+- **Compute:** the Hub host can enroll an ordinary-user Agent just like any other machine.
 
 Closing a browser tab or restarting the Hub/Agent does not terminate the actual terminal. A node reboot destroys its live processes; metadata survives and marks those sessions lost. No automatic task replay is performed.
 
@@ -59,7 +61,7 @@ npx playwright test
 # Optional: CHROMIUM_PATH=/path/to/chromium npx playwright test
 ```
 
-The browser acceptance test requires a running Hub and exactly one connected test node. It creates and terminates its own terminal; it does not touch pre-existing sessions. Set `WORKDECK_TEST_URL` and `WORKDECK_TEST_PASSWORD_FILE` for a different environment.
+The browser acceptance tests require a running Hub and at least one connected test node. Set `WORKDECK_TEST_NODE_NAME` to select a particular node. It creates and terminates its own terminal; it does not touch pre-existing sessions. Set `WORKDECK_TEST_URL` and `WORKDECK_TEST_PASSWORD_FILE` for a different environment.
 
 Read [architecture](docs/architecture.md), [operations](docs/operations.md), and [deployment](docs/deployment.md) for lifecycle rules and recovery procedures.
 

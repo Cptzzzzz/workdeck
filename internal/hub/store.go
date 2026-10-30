@@ -47,6 +47,40 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Additive migrations preserve existing node identities, sessions, and logins.
+	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''"} {
+		rows, e := db.Query("PRAGMA table_info(nodes)")
+		if e != nil {
+			db.Close()
+			return nil, e
+		}
+		found := false
+		for rows.Next() {
+			var cid, notnull, pk int
+			var col, typ string
+			var value any
+			if e = rows.Scan(&cid, &col, &typ, &notnull, &value, &pk); e != nil {
+				rows.Close()
+				db.Close()
+				return nil, e
+			}
+			if col == name {
+				found = true
+			}
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			db.Close()
+			return nil, e
+		}
+		if !found {
+			if _, e = db.Exec("ALTER TABLE nodes ADD COLUMN " + name + " " + definition); e != nil {
+				db.Close()
+				return nil, e
+			}
+		}
+	}
 	var count int
 	err = db.QueryRow("SELECT count(*) FROM accounts").Scan(&count)
 	if err != nil {
@@ -74,15 +108,16 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 }
 
 type Node struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	LastSeen string `json:"last_seen"`
-	Hostname string `json:"hostname"`
-	Platform string `json:"platform"`
-	Home     string `json:"home"`
-	Shell    string `json:"shell"`
-	Version  string `json:"version"`
-	Online   bool   `json:"online"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	LastSeen     string   `json:"last_seen"`
+	Hostname     string   `json:"hostname"`
+	Platform     string   `json:"platform"`
+	Home         string   `json:"home"`
+	Shell        string   `json:"shell"`
+	Version      string   `json:"version"`
+	Online       bool     `json:"online"`
+	Capabilities []string `json:"capabilities"`
 }
 type Terminal struct {
 	ID        string `json:"id"`

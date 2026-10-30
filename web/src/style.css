@@ -1647,3 +1647,55 @@ main {
     transition: none !important;
   }
 }
+.directory-picker {
+  margin-top: 21px;
+}
+.directory-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.directory-actions > .secondary {
+  padding: 7px 9px;
+  font-size: 10px;
+  gap: 5px;
+}
+.directory-actions .checkbox {
+  margin-left: auto;
+  font-size: 10px;
+}
+.directory-select {
+  margin-top: 14px;
+  font-size: 11px;
+  color: #8c9f8b;
+}
+.directory-select select {
+  font-size: 12px;
+}
+.directory-hint {
+  display: block;
+  font-size: 10px;
+  line-height: 1.8;
+  color: #83957e;
+  margin-top: 10px;
+}
+.login-panel form > .login-persistence {
+  font-size: 10px;
+  line-height: 1.8;
+  text-align: center;
+  color: #708869;
+  margin: 0 0 15px;
+}
+@media (max-width: 760px) {
+  .directory-actions {
+    gap: 6px;
+  }
+  .directory-actions > .secondary {
+    padding: 7px;
+    font-size: 9px;
+  }
+  .directory-actions .checkbox {
+    font-size: 9px;
+  }
+}

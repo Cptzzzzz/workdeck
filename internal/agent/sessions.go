@@ -18,6 +18,7 @@ import (
 
 type Sessions struct {
 	dir, shell, tmux string
+	bootID           string
 	mu               sync.Mutex
 }
 
@@ -54,7 +55,8 @@ set -g window-size latest
 	if err = os.WriteFile(filepath.Join(dir, "tmux.conf"), []byte(config), 0600); err != nil {
 		return nil, err
 	}
-	return &Sessions{dir: dir, shell: shell, tmux: t}, nil
+	bootID, _ := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	return &Sessions{dir: dir, shell: shell, tmux: t, bootID: strings.TrimSpace(string(bootID))}, nil
 }
 func validID(id string) bool {
 	if len(id) != 48 {
@@ -91,9 +93,10 @@ func (s *Sessions) inspect(t protocol.Session) protocol.Session {
 	}
 	out, err := s.tmuxRun(t.ID, "display-message", "-p", "-t", "main:0.0", "#{pane_dead}:#{pane_dead_status}")
 	if err != nil {
-		if t.State != "exited" {
-			t.State = "lost"
-			t.Error = "会话进程已不存在，节点可能重启过"
+		t.State = "lost"
+		t.Error = "会话进程已不存在，节点可能重启过"
+		if t.BootID != "" && s.bootID != "" && t.BootID != s.bootID {
+			t.Error = "节点已重启，原终端进程已结束；可重新创建终端"
 		}
 		return t
 	}
@@ -111,23 +114,47 @@ func (s *Sessions) inspect(t protocol.Session) protocol.Session {
 	}
 	return t
 }
-func (s *Sessions) Inventory() []protocol.Session {
+func (s *Sessions) Inventory() ([]protocol.Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list := []protocol.Session{}
-	files, _ := filepath.Glob(filepath.Join(s.dir, "sessions", "*.json"))
-	for _, p := range files {
+	files, err := os.ReadDir(filepath.Join(s.dir, "sessions"))
+	if err != nil {
+		return list, err
+	}
+	var snapshotErr error
+	for _, entry := range files {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		p := filepath.Join(s.dir, "sessions", entry.Name())
 		id := strings.TrimSuffix(filepath.Base(p), ".json")
 		if !validID(id) {
 			continue
 		}
 		t, e := s.read(id)
-		if e == nil {
-			t = s.inspect(t)
-			list = append(list, t)
+		if e != nil {
+			snapshotErr = errors.New("部分会话记录无法读取，已保留主服务中的原状态")
+			continue
 		}
+		if t.ID != id {
+			snapshotErr = errors.New("会话记录标识不匹配")
+			continue
+		}
+		previous, _ := json.Marshal(t)
+		t = s.inspect(t)
+		if t.State == "running" && t.BootID == "" {
+			t.BootID = s.bootID
+		}
+		updated, _ := json.Marshal(t)
+		if string(previous) != string(updated) {
+			if err := atomicJSON(s.path(t.ID), t); err != nil {
+				snapshotErr = err
+			}
+		}
+		list = append(list, t)
 	}
-	return list
+	return list, snapshotErr
 }
 func (s *Sessions) Create(spec protocol.Session) (protocol.Session, error) {
 	s.mu.Lock()
@@ -148,6 +175,7 @@ func (s *Sessions) Create(spec protocol.Session) (protocol.Session, error) {
 		return spec, errors.New("工作目录不存在或无法访问")
 	}
 	spec.State = "creating"
+	spec.BootID = s.bootID
 	if err = atomicJSON(s.path(spec.ID), spec); err != nil {
 		return spec, err
 	}

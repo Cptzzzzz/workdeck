@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"workdeck/internal/agent"
 	"workdeck/internal/hub"
@@ -42,6 +43,7 @@ func run() error {
 		f.StringVar(&cfg.AdminUser, "admin-user", "admin", "initial administrator username")
 		f.StringVar(&cfg.PasswordFile, "admin-password-file", "", "initial administrator password file")
 		f.StringVar(&cfg.TrustedProxyCIDR, "trusted-proxy-cidr", "", "trusted reverse proxy network, for login rate limiting")
+		f.DurationVar(&cfg.SessionTTL, "session-ttl", 30*24*time.Hour, "persistent browser login lifetime, renewed while active")
 		_ = f.Parse(os.Args[2:])
 		h, err := hub.New(cfg)
 		if err != nil {

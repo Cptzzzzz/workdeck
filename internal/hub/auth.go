@@ -18,6 +18,7 @@ import (
 
 type login struct {
 	Hash, Username, CSRF string
+	Token                string
 	Expires              int64
 }
 
@@ -32,7 +33,7 @@ func (h *Hub) loginFor(r *http.Request) (login, bool) {
 	if err != nil {
 		return login{}, false
 	}
-	l := login{Hash: digest(c.Value), CSRF: digest(c.Value + ":csrf")}
+	l := login{Hash: digest(c.Value), CSRF: digest(c.Value + ":csrf"), Token: c.Value}
 	err = h.store.db.QueryRow("SELECT username,expires FROM logins WHERE hash=?", l.Hash).Scan(&l.Username, &l.Expires)
 	return l, err == nil && l.Expires > time.Now().Unix()
 }
@@ -55,6 +56,7 @@ func (h *Hub) protected(fn func(http.ResponseWriter, *http.Request, login)) http
 			failure(w, 403, "请求校验失败，请刷新后重试")
 			return
 		}
+		h.renewLogin(w, &l)
 		fn(w, r, l)
 	}
 }
@@ -127,14 +129,39 @@ func (h *Hub) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := randomID()
-	expires := time.Now().Add(7 * 24 * time.Hour).Unix()
+	expires := time.Now().Add(h.cfg.SessionTTL).Unix()
 	if _, err = h.store.db.Exec("INSERT INTO logins VALUES(?,?,?)", digest(token), in.Username, expires); err != nil {
 		failure(w, 500, "保存登录状态失败")
 		return
 	}
 	_, _ = h.store.db.Exec("DELETE FROM logins WHERE expires<?", time.Now().Unix())
-	http.SetCookie(w, &http.Cookie{Name: h.cookieName(), Value: token, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(h.cfg.PublicURL, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: 7 * 86400})
+	h.setLoginCookie(w, token, expires)
 	respond(w, 200, map[string]string{"username": in.Username, "csrf": digest(token + ":csrf")})
+}
+
+func (h *Hub) setLoginCookie(w http.ResponseWriter, token string, expires int64) {
+	http.SetCookie(w, &http.Cookie{Name: h.cookieName(), Value: token, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(h.cfg.PublicURL, "https://"), SameSite: http.SameSiteStrictMode, Expires: time.Unix(expires, 0).UTC(), MaxAge: int(time.Until(time.Unix(expires, 0)).Seconds())})
+}
+
+func (h *Hub) renewLogin(w http.ResponseWriter, l *login) {
+	// Keep devices independent. Renew at most once per day (or a quarter of a short TTL).
+	interval := 24 * time.Hour
+	if h.cfg.SessionTTL/4 < interval {
+		interval = h.cfg.SessionTTL / 4
+	}
+	if time.Until(time.Unix(l.Expires, 0)) > h.cfg.SessionTTL-interval {
+		return
+	}
+	expires := time.Now().Add(h.cfg.SessionTTL).Unix()
+	result, err := h.store.db.Exec("UPDATE logins SET expires=? WHERE hash=? AND expires=?", expires, l.Hash, l.Expires)
+	if err != nil {
+		return
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 1 {
+		l.Expires = expires
+		h.setLoginCookie(w, l.Token, expires)
+	}
 }
 func (h *Hub) signOut(w http.ResponseWriter, r *http.Request, l login) {
 	_, _ = h.store.db.Exec("DELETE FROM logins WHERE hash=?", l.Hash)

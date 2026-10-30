@@ -43,6 +43,7 @@ type Node = {
   platform: string;
   last_seen: string;
   shell: string;
+  capabilities?: string[];
 };
 type Term = {
   id: string;
@@ -189,6 +190,32 @@ function App() {
       notify((e as Error).message);
     }
   };
+  const recreate = async (t: Term) => {
+    if (
+      !confirm(
+        `为「${t.name}」在原目录创建新的 Shell？原记录会保留，之前的命令不会自动重跑。`,
+      )
+    )
+      return;
+    try {
+      const created = await api<Term>("/terminals", {
+        method: "POST",
+        body: JSON.stringify({
+          node_id: t.node_id,
+          name: t.name.slice(0, 24) + " · 重建",
+          cwd: t.cwd,
+        }),
+      });
+      await refresh();
+      if (created.state === "error") {
+        notify(created.error || "重新创建失败");
+        return;
+      }
+      open(created.id);
+    } catch (error) {
+      notify((error as Error).message);
+    }
+  };
   const rename = async (t: Term) => {
     const name = prompt("终端名称", t.name);
     if (!name || name === t.name) return;
@@ -243,7 +270,7 @@ function App() {
   const visible = data.terminals.filter(
     (t) =>
       (filter === "all" || t.node_id === filter) &&
-      (showEnded || !["closed", "lost", "error"].includes(t.state)) &&
+      (showEnded || t.state !== "closed") &&
       (
         t.name +
         " " +
@@ -333,8 +360,8 @@ function App() {
               <Settings2 size={17} />
             </button>
             <button
-              title="退出登录"
-              aria-label="退出登录"
+              title="退出此设备"
+              aria-label="退出此设备"
               onClick={async () => {
                 try {
                   await api("/logout", { method: "POST" });
@@ -534,6 +561,13 @@ function App() {
                         </summary>
                         <div>
                           <button onClick={() => void rename(t)}>重命名</button>
+                          {n?.online &&
+                            t.desired_state !== "closed" &&
+                            ["lost", "error", "exited"].includes(t.state) && (
+                              <button onClick={() => void recreate(t)}>
+                                重新创建
+                              </button>
+                            )}
                           {t.desired_state !== "closed" && (
                             <button
                               className="danger-text"
@@ -569,10 +603,25 @@ function App() {
                           ? `${t.viewers} 个连接`
                           : "创建于 " + timeAgo(t.created_at)}
                       </span>
-                      <button disabled={!attachable} onClick={() => open(t.id)}>
-                        {t.state === "exited" ? "查看终端" : "进入终端"}
-                        <ArrowRight size={15} />
-                      </button>
+                      {!attachable &&
+                      ["lost", "error"].includes(t.state) &&
+                      t.desired_state !== "closed" ? (
+                        <button
+                          disabled={!n?.online}
+                          onClick={() => void recreate(t)}
+                        >
+                          重新创建
+                          <ArrowRight size={15} />
+                        </button>
+                      ) : (
+                        <button
+                          disabled={!attachable}
+                          onClick={() => open(t.id)}
+                        >
+                          {t.state === "exited" ? "查看终端" : "进入终端"}
+                          <ArrowRight size={15} />
+                        </button>
+                      )}
                     </div>
                   </article>
                 );
@@ -801,6 +850,9 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
             <ShieldCheck size={15} />
             独立部署 · 加密连接
           </div>
+          <p className="login-persistence">
+            此设备保留登录，多设备可同时使用。仅主动退出或登录过期时需重新登录。
+          </p>
         </form>
         <div className="login-copyright">Workdeck / 让工作不受设备限制</div>
       </div>
@@ -885,15 +937,12 @@ function CreateTerminal({
           autoFocus
         />
       </label>
-      <label>
-        工作目录
-        <input
-          value={cwd}
-          onChange={(e) => setCwd(e.target.value)}
-          placeholder="使用节点的用户主目录"
-        />
-        <small>填写节点上的绝对路径。</small>
-      </label>
+      <DirectoryPicker
+        key={node}
+        node={nodes.find((n) => n.id === node)}
+        value={cwd}
+        onChange={setCwd}
+      />
       {error && <div className="form-error">{error}</div>}
       {!online.length && (
         <div className="form-error">当前没有在线节点，请先接入机器。</div>
@@ -903,6 +952,141 @@ function CreateTerminal({
         <ArrowRight size={17} />
       </button>
     </form>
+  );
+}
+type DirectoryListing = {
+  path: string;
+  parent: string;
+  entries: { name: string; path: string }[];
+  truncated: boolean;
+};
+function DirectoryPicker({
+  node,
+  value,
+  onChange,
+}: {
+  node?: Node;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [listing, setListing] = useState<DirectoryListing | null>(null),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [hidden, setHidden] = useState(false);
+  const supported = node?.capabilities?.includes("directories");
+  useEffect(() => {
+    if (!node?.online || !supported) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    setBusy(true);
+    setError("");
+    setListing(null);
+    const timer = setTimeout(async () => {
+      try {
+        const result = await api<DirectoryListing>(
+          "/nodes/" +
+            node.id +
+            "/directories?" +
+            new URLSearchParams({ path: value, hidden: hidden ? "1" : "0" }),
+          { signal: controller.signal },
+        );
+        if (cancelled) return;
+        setListing(result);
+        if (result.path !== value) onChange(result.path);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [node?.id, node?.online, supported, value, hidden, onChange]);
+  return (
+    <div className="directory-picker">
+      <label>
+        工作目录
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="使用节点的用户主目录"
+        />
+      </label>
+      <div className="directory-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={!node?.home || busy}
+          onClick={() => onChange(node?.home || "")}
+        >
+          <Folder size={13} />
+          主目录
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={!listing || listing.parent === listing.path || busy}
+          onClick={() => listing && onChange(listing.parent)}
+        >
+          <ArrowLeft size={13} />
+          上一级
+        </button>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={hidden}
+            onChange={(e) => setHidden(e.target.checked)}
+          />
+          显示隐藏目录
+        </label>
+      </div>
+      {supported ? (
+        <label className="directory-select">
+          子目录
+          <select
+            aria-label="进入子目录"
+            value=""
+            disabled={busy || !listing?.entries.length}
+            onChange={(e) => {
+              if (e.target.value) onChange(e.target.value);
+            }}
+          >
+            <option value="">
+              {busy
+                ? "正在读取节点目录…"
+                : listing?.entries.length
+                  ? "选择子目录，继续向下浏览"
+                  : "当前目录没有子目录"}
+            </option>
+            {listing?.entries.map((entry) => (
+              <option key={entry.path} value={entry.path}>
+                {entry.name}/
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <p className="form-hint">
+          {node?.online
+            ? "升级此节点 Agent 后可选择子目录；当前可手动输入路径。"
+            : "选择在线节点后可浏览目录。"}
+        </p>
+      )}
+      {listing && (
+        <small className="directory-hint">
+          将在当前所选目录创建终端。
+          {listing.truncated
+            ? "目录过多，仅显示部分结果；可直接输入完整路径。"
+            : "也可在上方直接输入完整路径。"}
+        </small>
+      )}
+      {error && (
+        <div className="form-error">{error}，可以检查或手动输入路径。</div>
+      )}
+    </div>
   );
 }
 function JoinNode({ notify }: { notify: (s: string) => void }) {
@@ -934,7 +1118,9 @@ function JoinNode({ notify }: { notify: (s: string) => void }) {
       </div>
       <h2>接入一台机器</h2>
       <p className="modal-description">
-        在目标 Linux 机器上安装 Agent。只需出站 HTTPS，不需要公网 IP。
+        在目标 Linux 机器上安装
+        Agent。主服务所在机器也可接入，使用相同的终端管理方式。只需出站
+        HTTPS，不需要公网 IP。
       </p>
       <div className="join-steps">
         <span>01</span>

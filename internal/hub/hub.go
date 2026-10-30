@@ -20,7 +20,10 @@ import (
 	"workdeck/internal/protocol"
 )
 
-type Config struct{ Addr, PublicURL, DataDir, AssetsDir, AdminUser, PasswordFile, TrustedProxyCIDR string }
+type Config struct {
+	Addr, PublicURL, DataDir, AssetsDir, AdminUser, PasswordFile, TrustedProxyCIDR string
+	SessionTTL                                                                     time.Duration
+}
 type attempt struct {
 	Since time.Time
 	Count int
@@ -60,6 +63,12 @@ type Hub struct {
 }
 
 func New(cfg Config) (*Hub, error) {
+	if cfg.SessionTTL == 0 {
+		cfg.SessionTTL = 30 * 24 * time.Hour
+	}
+	if cfg.SessionTTL < time.Hour || cfg.SessionTTL > 365*24*time.Hour {
+		return nil, errors.New("session lifetime must be between one hour and one year")
+	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	if !strings.HasPrefix(cfg.PublicURL, "https://") && !strings.HasPrefix(cfg.PublicURL, "http://127.0.0.1:") && !strings.HasPrefix(cfg.PublicURL, "http://localhost:") {
 		return nil, errors.New("public URL must use HTTPS (HTTP allowed only for localhost development)")
@@ -93,6 +102,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("DELETE /api/terminals/{id}", h.protected(h.closeTerminal))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
+	m.HandleFunc("GET /api/nodes/{id}/directories", h.protected(h.directories))
 	m.HandleFunc("POST /api/agent/enroll", h.enroll)
 	m.HandleFunc("GET /api/agent/control", h.controlSocket)
 	m.HandleFunc("GET /api/agent/data", h.dataSocket)
@@ -154,18 +164,21 @@ func (h *Hub) assets(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	nodes := []Node{}
-	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version FROM nodes WHERE revoked=0 ORDER BY name")
+	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities FROM nodes WHERE revoked=0 ORDER BY name")
 	if err != nil {
 		failure(w, 500, "读取节点失败")
 		return
 	}
 	for rows.Next() {
 		var n Node
-		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version); err != nil {
+		var capabilities string
+		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities); err != nil {
 			rows.Close()
 			failure(w, 500, "读取节点失败")
 			return
 		}
+		n.Capabilities = []string{}
+		_ = json.Unmarshal([]byte(capabilities), &n.Capabilities)
 		h.mu.Lock()
 		n.Online = h.agents[n.ID] != nil
 		h.mu.Unlock()
@@ -359,43 +372,103 @@ func (h *Hub) applyResult(id string, msg protocol.Message) {
 	}
 }
 func (h *Hub) applyInventory(node string, msg protocol.Message) {
-	_, err := h.store.db.Exec("UPDATE nodes SET last_seen=?,hostname=?,platform=?,home=?,shell=?,version=? WHERE id=?", now(), msg.Hostname, msg.Platform, msg.Home, msg.Shell, msg.Version, node)
+	tx, err := h.store.db.Begin()
 	if err != nil {
-		log.Printf("inventory: %v", err)
+		log.Printf("inventory database: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	var previousBoot string
+	if err = tx.QueryRow("SELECT boot_id FROM nodes WHERE id=?", node).Scan(&previousBoot); err != nil {
+		return
+	}
+	capabilities, _ := json.Marshal(msg.Capabilities)
+	if msg.Capabilities == nil {
+		capabilities = []byte("[]")
+	}
+	_, err = tx.Exec("UPDATE nodes SET last_seen=?,hostname=?,platform=?,home=?,shell=?,version=?,boot_id=?,capabilities=? WHERE id=?", now(), msg.Hostname, msg.Platform, msg.Home, msg.Shell, msg.Version, msg.BootID, string(capabilities), node)
+	if err != nil {
+		log.Printf("inventory update: %v", err)
 		return
 	}
 	seen := map[string]bool{}
-	for _, s := range msg.Sessions {
-		seen[s.ID] = true
-		_, _ = h.store.db.Exec("UPDATE terminals SET observed_state=?,error=?,exit_code=?,updated_at=? WHERE id=? AND node_id=?", s.State, s.Error, s.ExitCode, now(), s.ID, node)
+	complete := msg.Complete
+	detach := []string{}
+	for _, session := range msg.Sessions {
+		if validateID(session.ID) != nil {
+			complete = false
+			continue
+		}
+		switch session.State {
+		case "creating", "running", "exited", "closed", "lost", "error":
+		default:
+			complete = false
+			continue
+		}
+		seen[session.ID] = true
+		_, err = tx.Exec("UPDATE terminals SET observed_state=?,error=?,exit_code=?,updated_at=? WHERE id=? AND node_id=?", session.State, session.Error, session.ExitCode, now(), session.ID, node)
+		if err != nil {
+			log.Printf("inventory session update: %v", err)
+			return
+		}
+		if session.State == "lost" || session.State == "closed" || session.State == "error" {
+			detach = append(detach, session.ID)
+		}
 	}
-	rows, err := h.store.db.Query("SELECT "+terminalFields+" FROM terminals WHERE node_id=? AND (desired_state='closed' AND observed_state<>'closed' OR observed_state='creating')", node)
+	rows, err := tx.Query("SELECT "+terminalFields+" FROM terminals WHERE node_id=?", node)
 	if err != nil {
 		return
 	}
 	list := []Terminal{}
 	for rows.Next() {
 		t, e := scanTerm(rows)
-		if e == nil {
-			list = append(list, t)
+		if e != nil {
+			rows.Close()
+			return
 		}
+		list = append(list, t)
 	}
+	err = rows.Err()
 	rows.Close()
+	if err != nil {
+		return
+	}
+	commands := []protocol.Message{}
 	for _, t := range list {
-		m := protocol.Message{TerminalID: t.ID}
-		if t.Desired == "closed" {
-			m.Type = "close"
-		} else if !seen[t.ID] {
-			m.Type = "create"
-			m.Session = &protocol.Session{ID: t.ID, Name: t.Name, Cwd: t.Cwd, CreatedAt: t.CreatedAt}
+		if complete && !seen[t.ID] && (t.State == "running" || t.State == "exited") {
+			reason := "节点已同步完整清单，但未发现此会话；记录已保留，可重新创建"
+			if previousBoot != "" && msg.BootID != "" && previousBoot != msg.BootID {
+				reason = "节点已重启，原终端进程已结束；记录已保留，可重新创建"
+			}
+			if _, err = tx.Exec("UPDATE terminals SET observed_state='lost',error=?,updated_at=? WHERE id=?", reason, now(), t.ID); err != nil {
+				return
+			}
+			detach = append(detach, t.ID)
+		}
+		command := protocol.Message{TerminalID: t.ID}
+		if t.Desired == "closed" && t.State != "closed" {
+			command.Type = "close"
+		} else if t.State == "creating" && !seen[t.ID] && complete {
+			command.Type = "create"
+			command.Session = &protocol.Session{ID: t.ID, Name: t.Name, Cwd: t.Cwd, CreatedAt: t.CreatedAt}
 		} else {
 			continue
 		}
+		commands = append(commands, command)
+	}
+	if err = tx.Commit(); err != nil {
+		log.Printf("inventory commit: %v", err)
+		return
+	}
+	for _, id := range detach {
+		h.closeTerminalAttachments(id)
+	}
+	for _, command := range commands {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			if res, e := h.command(ctx, node, m); e == nil {
-				h.applyResult(m.TerminalID, res)
+			if result, e := h.command(ctx, node, command); e == nil {
+				h.applyResult(command.TerminalID, result)
 			}
 		}()
 	}

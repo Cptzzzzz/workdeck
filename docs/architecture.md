@@ -46,3 +46,9 @@ Initial join uses a short-lived token that can enroll one node identity, with Ed
 Browser login uses bcrypt and server-side hashed sessions. Cookies are HttpOnly, SameSite=Strict, and Secure/\_\_Host-prefixed on HTTPS. Mutations require a session-bound CSRF header; browser WebSockets require the configured Origin. Logout/password changes revoke relevant sockets. Static assets are self-hosted; the Hub sends a restrictive CSP and frame denial.
 
 This release is a single-administrator Linux workspace, not a multi-tenant command-execution sandbox. Terminal commands run with the enrolled OS user's existing filesystem and tool credentials. It does not synchronize or upload Codex/API credentials.
+
+## Directory navigation
+
+An authenticated directory request is routed through the selected node's signed control channel. The Agent reads immediate child directories as its OS user; file entries are excluded, hidden directories are optional, and symlink directories resolve to their actual target. Listing is bounded in entry count and duration. The browser can select children, navigate to the parent/home, or enter a path manually. Nodes advertise this capability so older Agents can fall back to manual entry until upgraded.
+
+Directory access follows the enrolled user's existing permissions. It is not confined to the user's home, matching the terminal's filesystem access.

@@ -26,6 +26,7 @@ network="$WORKDECK_DOCKER_NETWORK"
 caddy_dir="$WORKDECK_CADDY_DIR"
 caddy_container="${WORKDECK_CADDY_CONTAINER:-caddy}"
 cidr="${WORKDECK_TRUSTED_PROXY_CIDR:-}"
+session_ttl="${WORKDECK_SESSION_TTL:-720h}"
 case "$public_url" in https://*) domain="${public_url#https://}";; *) echo 'An HTTPS public URL is required' >&2; exit 1;; esac
 case "$domain" in ''|*[!a-zA-Z0-9.-]*|.*|*.) echo 'Use a hostname without paths or ports in WORKDECK_PUBLIC_URL' >&2; exit 1;; esac
 case "$server" in ''|*[!a-zA-Z0-9_.@:-]*) echo 'Invalid SSH target' >&2; exit 1;; esac
@@ -37,6 +38,7 @@ for name in "$network" "$caddy_container"; do
   case "$name" in ''|*[!a-zA-Z0-9_.-]*) echo 'Invalid Docker network or container name' >&2; exit 1;; esac
 done
 case "$cidr" in *[!a-fA-F0-9.:/]*) echo 'Invalid proxy CIDR' >&2; exit 1;; esac
+case "$session_ttl" in ''|*[!0-9hms.]*) echo 'Invalid session lifetime' >&2; exit 1;; esac
 version="$(cat bin/VERSION)"
 case "$version" in ''|*[!a-zA-Z0-9_.-]*) echo 'Invalid build version' >&2; exit 1;; esac
 [ -f bin/workdeck-linux-amd64 ] && [ -f web/dist/index.html ] || { echo 'Run scripts/build.sh first' >&2; exit 1; }
@@ -57,14 +59,14 @@ if ! ssh "$server" "test -f $deploy_dir/secrets/admin_password"; then
   rsync -az --timeout=60 .secrets/administrator.txt "$server:$deploy_dir/secrets/admin_password"
   ssh "$server" "chown 65532:65532 $deploy_dir/secrets/admin_password; chmod 400 $deploy_dir/secrets/admin_password"
 fi
-ssh "$server" sh -s -- "$version" "$deploy_dir" "$public_url" "$network" "$cidr" "$caddy_dir" "$caddy_container" "$domain" <<'REMOTE'
+ssh "$server" sh -s -- "$version" "$deploy_dir" "$public_url" "$network" "$cidr" "$caddy_dir" "$caddy_container" "$domain" "$session_ttl" <<'REMOTE'
 set -eu
-version="$1"; root="$2"; public_url="$3"; network="$4"; cidr="$5"; caddy_dir="$6"; caddy_container="$7"; domain="$8"
+version="$1"; root="$2"; public_url="$3"; network="$4"; cidr="$5"; caddy_dir="$6"; caddy_container="$7"; domain="$8"; session_ttl="$9"
 cd "$root"
 tar -xzf release.tar.gz -C build
 cp build/deploy/compose.yml compose.yml
 if [ -f .env ]; then cp .env "backups/env-$(date +%Y%m%d-%H%M%S)"; fi
-printf 'WORKDECK_VERSION=%s\nWORKDECK_PUBLIC_URL=%s\nWORKDECK_DOCKER_NETWORK=%s\nWORKDECK_TRUSTED_PROXY_CIDR=%s\n' "$version" "$public_url" "$network" "$cidr" > .env
+printf 'WORKDECK_VERSION=%s\nWORKDECK_PUBLIC_URL=%s\nWORKDECK_DOCKER_NETWORK=%s\nWORKDECK_TRUSTED_PROXY_CIDR=%s\nWORKDECK_SESSION_TTL=%s\n' "$version" "$public_url" "$network" "$cidr" "$session_ttl" > .env
 docker build -f build/deploy/Dockerfile -t "workdeck:$version" build
 docker compose config --quiet
 docker compose up -d

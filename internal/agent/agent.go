@@ -24,6 +24,7 @@ type Agent struct {
 	key      ed25519.PrivateKey
 	sessions *Sessions
 	version  string
+	stateMu  sync.Mutex
 }
 
 func New(dir, version string) (*Agent, error) {
@@ -35,7 +36,7 @@ func New(dir, version string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{identity, key, sessions, version}, nil
+	return &Agent{identity: identity, key: key, sessions: sessions, version: version}, nil
 }
 func (a *Agent) dial(path, ticket string) (*protocol.Socket, error) {
 	url := "ws" + strings.TrimPrefix(a.identity.Hub, "http") + path
@@ -83,9 +84,18 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 func (a *Agent) inventory(socket *protocol.Socket) error {
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	return a.sendInventory(socket)
+}
+func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	host, _ := os.Hostname()
 	home, _ := os.UserHomeDir()
-	return socket.JSON(protocol.Message{Type: "inventory", Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: a.sessions.Inventory()})
+	sessions, err := a.sessions.Inventory()
+	if err != nil {
+		log.Printf("incomplete session inventory: %v", err)
+	}
+	return socket.JSON(protocol.Message{Type: "inventory", Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: err == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory"}})
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")
@@ -132,10 +142,25 @@ func (a *Agent) connected(parent context.Context) error {
 					log.Printf("terminal attachment %s: %v", msg.TerminalID, e)
 				}
 			}()
+		case "directories":
+			jobs.Add(1)
+			go func() {
+				defer jobs.Done()
+				ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				listing, e := ListDirectories(ctx, msg.Path, msg.IncludeHidden)
+				result := protocol.Message{Type: "result", RequestID: msg.RequestID, Directory: listing}
+				if e != nil {
+					result.Error = e.Error()
+				}
+				_ = socket.JSON(result)
+			}()
 		case "create", "close":
 			jobs.Add(1)
 			go func() {
 				defer jobs.Done()
+				a.stateMu.Lock()
+				defer a.stateMu.Unlock()
 				result := protocol.Message{Type: "result", RequestID: msg.RequestID, TerminalID: msg.TerminalID}
 				var t protocol.Session
 				var e error
@@ -157,7 +182,7 @@ func (a *Agent) connected(parent context.Context) error {
 				}
 				result.Session = &t
 				_ = socket.JSON(result)
-				_ = a.inventory(socket)
+				_ = a.sendInventory(socket)
 			}()
 		}
 	}

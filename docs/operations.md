@@ -64,3 +64,17 @@ Revoking a node disables its identity and disconnects management access, while l
 ## Release limits
 
 Linux with systemd user services; one administrator; one Hub. No full output recording/export, native Windows Agent, process checkpointing, or high availability. tmux screen/history lives in memory; metadata lives on disk. Node power loss destroys running terminal processes.
+
+## Reboot recovery and inventory reconciliation
+
+Hub node records, terminal metadata, and browser sessions are stored on the persistent data volume. A Hub restart loads them before Agents reconnect. Nodes initially appear offline with their last observed terminal state; the next Agent inventory refreshes actual state. Complete inventories also mark previously running sessions missing from the node as lost. An incomplete inventory never treats omitted records as lost.
+
+Agent identities and per-terminal records persist on disk. State changes discovered by the Agent are saved atomically. A node boot identifier distinguishes a node reboot from a network reconnection. The Agent and Hub services can start automatically after boot when Docker and the user's lingering systemd manager are enabled.
+
+A Hub or Agent service restart preserves independently supervised terminal processes. A host OS reboot ends its processes: Workdeck retains the terminal records and synchronizes them to `lost`, with an explicit recreate action in the UI. Recreate opens a new Shell in the recorded directory and preserves the old record; it does not rerun the old commands or restore an application's in-memory state.
+
+## Persistent browser sessions
+
+Each device receives an independent HttpOnly persistent cookie and server-side session record. Default lifetime is 30 days, renewed during active authenticated use. The Hub flag `--session-ttl` accepts a lifetime such as `720h`; Compose exposes this as `WORKDECK_SESSION_TTL`. Closing a normal browser and reopening the same profile retains login. Private browsing, clearing cookies, expiration, or explicit logout requires another login.
+
+Logging into another device does not revoke existing devices. Logout affects the current device only. Changing the password intentionally revokes the other sessions. Cookies remain protected by Secure and SameSite=Strict in HTTPS deployments; no login token is stored in JavaScript localStorage.

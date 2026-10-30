@@ -1,3 +1,4 @@
+import { selectTestNode } from "./helpers";
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 const password = readFileSync(
@@ -36,12 +37,15 @@ test("persistent terminal, mobile resize, readonly and takeover", async ({
     path: "../test-results/dashboard-desktop.png",
     fullPage: true,
   });
-  await expect(page.locator(".node-item .online")).toHaveCount(1);
+  await expect
+    .poll(() => page.locator(".node-item .online").count())
+    .toBeGreaterThan(0);
   const name = "验收终端-" + Date.now();
   await page
     .getByRole("button", { name: "新建终端", exact: true })
     .first()
     .click();
+  await selectTestNode(page);
   await page.getByLabel("终端名称").fill(name);
   await page.getByRole("button", { name: "创建并连接" }).click();
   await expect(page.locator(".terminal-state")).toContainText("控制中");

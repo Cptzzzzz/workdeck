@@ -13,6 +13,7 @@ services:
       - --assets-dir=/web
       - --admin-password-file=/run/secrets/admin_password
       - --trusted-proxy-cidr=${WORKDECK_TRUSTED_PROXY_CIDR:-}
+      - --session-ttl=${WORKDECK_SESSION_TTL:-720h}
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
