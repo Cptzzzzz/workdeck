@@ -34,6 +34,8 @@ import {
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import { TerminalTransport, type TransportStatus } from "./terminal-transport";
+import { initialTransportStatus, formatLatency } from "./network-metrics";
+import { NetworkPanel } from "./network-panel";
 
 type Node = {
   run_user?: string;
@@ -1517,10 +1519,9 @@ function TerminalView({
     [size, setSize] = useState(""),
     [failure, setFailure] = useState(""),
     [ctrl, setCtrl] = useState(false);
-  const [transport, setTransport] = useState<TransportStatus>({
-    route: "relay",
-    detail: "自动选择连接链路",
-  });
+  const [transport, setTransport] = useState<TransportStatus>(
+    initialTransportStatus,
+  );
   const stopped =
     terminal.desired_state === "closed" ||
     ["closed", "lost", "error"].includes(terminal.state);
@@ -1710,7 +1711,7 @@ function TerminalView({
             >
               {transport.route === "direct" ? "直连" : "中转"}
               {transport.latency !== undefined
-                ? ` · ${Math.round(transport.latency)} ms`
+                ? ` · ${formatLatency(transport.latency)}`
                 : ""}
             </span>
           )}
@@ -1755,6 +1756,9 @@ function TerminalView({
             <ArrowRight size={14} />
           </button>
         </div>
+      )}
+      {!stopped && connection === "connected" && (
+        <NetworkPanel status={transport} nodeName={node?.name} />
       )}
       {(failure || stopped || !node?.online) && (
         <div className="terminal-notice">

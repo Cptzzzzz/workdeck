@@ -63,7 +63,9 @@ Revoking a node disables its identity and disconnects management access, while l
 
 ## Automatic terminal transport selection
 
-The terminal header shows `直连` or `中转`, with measured RTT when available. Hovering explains the latest selection. Connections start on the relay so WebRTC probing never delays terminal access. When direct delivery is faster, or similarly responsive and consistent, it can bypass the Hub for terminal bytes. Slower/unavailable direct paths retain the relay; a failed active direct path reconnects through it. Terminal processes remain on the node.
+The terminal header shows `直连` or `中转`, with measured RTT when available. The network strip below it shows WebSocket and WebRTC RTT together, marks the path actually carrying terminal bytes as `当前`, and displays browser download/upload rates. Expand it for the route diagram, comparative latency improvement, jitter, recent probe timeouts, and per-path transferred totals. Values refresh without restarting the terminal; unmeasured, unavailable, unsupported and stale paths are labeled explicitly.
+
+Both available paths receive small end-to-end probes every five seconds, even when unused for terminal data. Rates update about once a second from actual terminal input/output; they exclude signaling, probes and protocol overhead, are not interface-wide bandwidth or capacity, and reset on browser attachment reconnection. Probe timeouts are not packet loss measurements. Connections start on the relay so WebRTC probing never delays terminal access. When direct delivery is faster, or similarly responsive and consistent, it can bypass the Hub for terminal bytes. Slower/unavailable direct paths retain the relay; a failed active direct path reconnects through it. Terminal processes remain on the node.
 
 Agent environment options (restart only the Agent after editing its systemd override):
 

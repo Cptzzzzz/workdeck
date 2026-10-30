@@ -1,6 +1,7 @@
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { readState, selectTestNode, terminateCurrentTerminal } from "./helpers";
+import { formatBytes } from "../src/network-metrics";
 
 const password = readFileSync(
   process.env.WORKDECK_TEST_PASSWORD_FILE || "../.secrets/administrator.txt",
@@ -61,6 +62,8 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     const Native = window.RTCPeerConnection;
     (window as any).__peers = [];
     (window as any).__directBinary = 0;
+    (window as any).__directReceived = 0;
+    (window as any).__directSent = 0;
     window.RTCPeerConnection = class extends Native {
       constructor(config?: RTCConfiguration) {
         super(config);
@@ -69,8 +72,17 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       createDataChannel(label: string, options?: RTCDataChannelInit) {
         const channel = super.createDataChannel(label, options);
         channel.addEventListener("message", (event) => {
-          if (typeof event.data !== "string") (window as any).__directBinary++;
+          if (typeof event.data !== "string") {
+            (window as any).__directBinary++;
+            (window as any).__directReceived += event.data.byteLength;
+          }
         });
+        const originalSend = channel.send.bind(channel);
+        channel.send = ((data: any) => {
+          if (typeof data !== "string")
+            (window as any).__directSent += data.byteLength;
+          originalSend(data);
+        }) as typeof channel.send;
         return channel;
       }
     };
@@ -122,6 +134,64 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     expect(
       await page.evaluate(() => (window as any).__directBinary),
     ).toBeGreaterThan(directAtStart);
+    const network = page.locator(".terminal-network");
+    await expect(network.locator('[data-path="relay"]')).toContainText(/ms/);
+    await expect(network.locator('[data-path="direct"]')).toContainText(/ms/);
+    await network.locator("summary").click();
+    await expect(network.locator(".network-current-route")).toHaveAttribute(
+      "data-route",
+      "direct",
+    );
+    await expect(network.locator(".network-current-route")).toContainText(
+      "WebRTC 直连",
+    );
+    await expect(network.locator(".network-current-route")).not.toContainText(
+      "公网主服务",
+    );
+    const trafficProgram =
+      "import sys,time\nfor i in range(25):\n print('network-data-'+('x'*1000),flush=True)\n time.sleep(.1)\nprint('network-traffic-done',flush=True)\n";
+    await type(
+      page,
+      `python3 -u -c "exec(__import__('base64').b64decode('${Buffer.from(trafficProgram).toString("base64")}'))"`,
+    );
+    await expect(network.locator(".network-download")).not.toHaveText("0 B/s");
+    await expect(page.locator(".xterm-screen")).toContainText(
+      "network-traffic-done",
+    );
+    const directCard = network.getByRole("region", { name: "WebRTC 直连指标" });
+    const downloaded = directCard
+      .getByText("累计下行", { exact: true })
+      .locator("..")
+      .locator("dd");
+    const uploaded = directCard
+      .getByText("累计上行", { exact: true })
+      .locator("..")
+      .locator("dd");
+    await expect
+      .poll(async () => {
+        const count = await page.evaluate(
+          () => (window as any).__directReceived,
+        );
+        return (await downloaded.textContent()) === formatBytes(count);
+      })
+      .toBe(true);
+    await expect
+      .poll(async () => {
+        const count = await page.evaluate(() => (window as any).__directSent);
+        return (await uploaded.textContent()) === formatBytes(count);
+      })
+      .toBe(true);
+    const relayCard = network.getByRole("region", {
+      name: "WebSocket 中转指标",
+    });
+    const probeTime = Number(await relayCard.getAttribute("data-updated-at"));
+    await expect
+      .poll(async () => Number(await relayCard.getAttribute("data-updated-at")))
+      .toBeGreaterThan(probeTime);
+    await page.screenshot({
+      path: "../test-results/network-metrics-desktop.png",
+    });
+    await network.locator("summary").click();
     // A separate authenticated device gets readonly access and can take over.
     const other = await browser.newContext();
     try {
@@ -281,6 +351,19 @@ test("a working but slower direct path leaves terminal traffic on the relay", as
       /自动比较/,
     );
     await expect(page.locator(".transport-state")).toContainText("中转");
+    const network = page.locator(".terminal-network");
+    await network.locator("summary").click();
+    await expect(network.locator(".network-current-route")).toHaveAttribute(
+      "data-route",
+      "relay",
+    );
+    await expect(network.locator(".network-comparison")).toContainText(
+      /WebRTC 比 WebSocket 高/,
+    );
+    await page.screenshot({
+      path: "../test-results/network-metrics-comparison.png",
+    });
+    await network.locator("summary").click();
     await type(page, "printf 'better-relay-selected\\n'");
     await expect(page.locator(".xterm-screen")).toContainText(
       "better-relay-selected",
@@ -301,6 +384,37 @@ test("a browser without WebRTC keeps a usable relay terminal", async ({
   const id = await create(page);
   try {
     await expect(page.locator(".transport-state")).toContainText("中转");
+    const network = page.locator(".terminal-network");
+    await expect(network.locator('[data-path="relay"]')).toContainText(/ms/);
+    await expect(network.locator('[data-path="direct"]')).toContainText(
+      "不支持",
+    );
+    await network.locator("summary").click();
+    await expect(network.locator(".network-current-route")).toHaveAttribute(
+      "data-route",
+      "relay",
+    );
+    await expect(network.locator(".network-current-route")).toContainText(
+      "公网主服务",
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(() =>
+        page
+          .locator(".sidebar")
+          .evaluate((element) => element.getBoundingClientRect().right),
+      )
+      .toBeLessThanOrEqual(0);
+    await page.screenshot({
+      path: "../test-results/network-metrics-mobile.png",
+      animations: "disabled",
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > innerWidth,
+      ),
+    ).toBe(false);
+    await network.locator("summary").click();
     await type(page, "printf 'relay-only-works\\n'");
     await expect(page.locator(".xterm-screen")).toContainText(
       "relay-only-works",
