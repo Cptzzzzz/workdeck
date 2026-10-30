@@ -2,6 +2,9 @@
 // through offsetWidth. Dividing the rounded sample produces a per-cell error;
 // the resulting letter-spacing accumulates and clips the final column.
 // Preserve fractional CSS pixels instead, for all four font variants.
+// Independently position styled runs at their logical cell boundary as well:
+// inline-block layout rounds each run separately, accumulating another error
+// on ANSI-colored/bold TUI rows even after the width measurement is fixed.
 // Keep the pinned dependency and fail closed when its implementation changes.
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -20,7 +23,28 @@ const patches = [
     "return el.offsetWidth / WidthCacheSettings.REPEAT;",
     "return el.getBoundingClientRect().width / WidthCacheSettings.REPEAT;",
   ],
+  [
+    "lib/xterm.js",
+    "g.push(C),M=P",
+    'C.style.position="absolute",C.style.left=`${M*l}px`,g.push(C),M=P',
+  ],
+  [
+    "src/browser/renderer/dom/DomRendererRowFactory.ts",
+    "      elements.push(charElement);",
+    '      charElement.style.position = "absolute";\n      charElement.style.left = `${x * cellWidth}px`;\n      elements.push(charElement);',
+  ],
+  [
+    "lib/xterm.js",
+    'const e=this._document.createElement("div");this._rowContainer.appendChild(e),this._rowElements.push(e)',
+    'const e=this._document.createElement("div");e.style.position="relative",this._rowContainer.appendChild(e),this._rowElements.push(e)',
+  ],
+  [
+    "src/browser/renderer/dom/DomRenderer.ts",
+    "      this._rowContainer.appendChild(row);",
+    '      row.style.position = "relative";\n      this._rowContainer.appendChild(row);',
+  ],
 ];
+const changes = [];
 for (const [path, before, after] of patches) {
   const file = new URL(path, root),
     source = readFileSync(file, "utf8");
@@ -29,5 +53,9 @@ for (const [path, before, after] of patches) {
     throw new Error(
       `Unexpected xterm width measurement implementation in ${path}`,
     );
-  writeFileSync(file, source.replace(before, after));
+  // Validate every replacement before changing either the source or bundle.
+  const previous = changes.find((change) => change.file.href === file.href);
+  if (previous) previous.source = previous.source.replace(before, after);
+  else changes.push({ file, source: source.replace(before, after) });
 }
+for (const { file, source } of changes) writeFileSync(file, source);

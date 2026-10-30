@@ -36,7 +36,7 @@ for (const dpr of [1, 1.25, 2])
         (t: { name: string }) => t.name === name,
       ).id;
       const program =
-        "import curses\ndef main(s):\n s.timeout(50)\n while True:\n  h,w=s.getmaxyx();s.erase()\n  prefix='WIDTH=%d '%w\n  s.addstr(0,0,prefix+'-'*(w-len(prefix)-1)+'R')\n  s.addstr(1,0,'中'+'-'*(w-4)+'文')\n  s.addstr(2,0,'B'+'-'*(w-2)+'W',curses.A_BOLD)\n  s.refresh()\n  if s.getch()==ord('q'):break\ncurses.wrapper(main)\n";
+        "import curses\ndef main(s):\n curses.start_color()\n curses.init_pair(1,curses.COLOR_RED,curses.COLOR_BLACK)\n curses.init_pair(2,curses.COLOR_GREEN,curses.COLOR_BLACK)\n s.timeout(50)\n while True:\n  h,w=s.getmaxyx();s.erase()\n  prefix='WIDTH=%d '%w\n  s.addstr(0,0,prefix+'-'*(w-len(prefix)-1)+'R')\n  s.addstr(1,0,'中'+'-'*(w-4)+'文')\n  s.addstr(2,0,'B'+'-'*(w-2)+'W',curses.A_BOLD)\n  for x in range(w):\n   s.addstr(3,x,'W',curses.color_pair(x%2+1))\n   s.addstr(4,x,'W',curses.A_BOLD if x%2 else 0)\n  s.addstr(5,0,'文'*(w//2)+('R' if w%2 else ''))\n  s.refresh()\n  if s.getch()==ord('q'):break\ncurses.wrapper(main)\n";
       await page.locator(".xterm-helper-textarea").focus();
       await page.keyboard.insertText(
         `python3 -c "exec(__import__('base64').b64decode('${Buffer.from(program).toString("base64")}'))"`,
@@ -75,7 +75,7 @@ for (const dpr of [1, 1.25, 2])
                 ?.textContent?.match(/(\d+) × (\d+)/)?.[1];
               const cols = Number(declared);
               const rows = [...element.querySelectorAll(".xterm-rows > div")]
-                .slice(0, 3)
+                .slice(0, 6)
                 .map((row) => {
                   const walker = document.createTreeWalker(
                     row,
@@ -138,7 +138,14 @@ for (const dpr of [1, 1.25, 2])
           const reading = await measure();
           readings.push({ dpr, width, font, ...reading });
           await test.step(`width ${width}, font ${font}: last glyphs fit`, async () => {
-            expect(reading.rows.map((r) => r.last)).toEqual(["R", "文", "W"]);
+            expect(reading.rows.map((r) => r.last)).toEqual([
+              "R",
+              "文",
+              "W",
+              "W",
+              "W",
+              Number(reading.declared) % 2 ? "R" : "文",
+            ]);
             expect(
               Math.max(...reading.rows.map((r) => r.overflow)),
             ).toBeLessThanOrEqual(0.75);

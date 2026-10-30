@@ -109,3 +109,11 @@ Font controls offer 10–24 px with a 13 px default, down from 14 px. Three rele
 Browser reproduction confirmed that the backing TUI and browser agreed on column count, while the last glyph extended about 2.19 CSS pixels past the row's clipping edge. xterm 5.5's DOM WidthCache samples 32 glyphs through integer `offsetWidth`; rounding introduces a per-cell spacing error which accumulates across the row. The pinned installation patch replaces that measurement with fractional `getBoundingClientRect().width` in both the runtime bundle and its source, preserving the current renderer and transport. It is idempotent and checks the exact version and replacement site so dependency upgrades require an explicit review.
 
 A real curses fixture paints ASCII, bold ASCII and a two-column Chinese glyph at its actual rightmost columns, and reports its live width. Three browser cases cover 72 combinations of four viewport widths, six font sizes and device scale factors 1, 1.25 and 2. All pass with maximum measured overflow only 0.032 CSS pixels, within browser subpixel rounding. The fixture locates the last logical column, excluding intentionally retained offscreen cells in alternate buffers after a shrink. Font persistence and bottom-row/fullscreen regression also pass; screenshots were inspected. No terminal process or Agent changes are required.
+
+## 多样式文字片段的末列显示
+
+补充复现发现：即使字宽测量已经使用小数，DOM 渲染器的多个 inline-block 文字片段仍会分别取整。在频繁变色、逐字切换粗体或混合样式的 TUI 中，误差会继续累积；140 列复现样例可超出约 1.75 CSS 像素。原先单一长片段的测试未覆盖这一情况。
+
+补丁现在同时将每个文字片段定位到其逻辑列坐标，避免片段的布局误差逐段叠加，保留原有字宽测量、文字合并及颜色、光标渲染。依赖版本和替换位置继续严格校验；所有替换通过检查后才写入文件。
+
+新增无需 Hub 的浏览器回归覆盖三种字体栈、六种字号和四种设备像素比例，检查彩色逐字片段、粗细交替、中文和真彩色混排的末列及片段起点。该回归已在上一版补丁上验证失败，应用本次补丁后通过。真实 curses 端到端用例也补充逐字变色、粗细交替及整行中文。测试环境为 Linux Chromium；Mac Chrome 的用户反馈是本次排查的触发条件，尚未在真实 Mac 上运行自动测试。
