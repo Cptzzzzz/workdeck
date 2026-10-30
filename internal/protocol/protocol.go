@@ -52,10 +52,15 @@ type Message struct {
 }
 
 type Frame struct {
-	Type     string `json:"type"`
-	Cols     uint16 `json:"cols,omitempty"`
-	Rows     uint16 `json:"rows,omitempty"`
-	Bytes    int    `json:"bytes,omitempty"`
-	ReadOnly bool   `json:"readonly"`
-	Message  string `json:"message,omitempty"`
+	Type       string   `json:"type"`
+	Cols       uint16   `json:"cols,omitempty"`
+	Rows       uint16   `json:"rows,omitempty"`
+	Bytes      int      `json:"bytes,omitempty"`
+	ReadOnly   bool     `json:"readonly"`
+	Message    string   `json:"message,omitempty"`
+	ID         string   `json:"id,omitempty"`
+	SDP        string   `json:"sdp,omitempty"`
+	Route      string   `json:"route,omitempty"`
+	Padding    string   `json:"padding,omitempty"`
+	ICEServers []string `json:"ice_servers,omitempty"`
 }

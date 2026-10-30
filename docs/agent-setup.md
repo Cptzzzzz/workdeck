@@ -4,6 +4,7 @@
 
 - Linux amd64 或 arm64，已安装 `curl`、`tmux`，并有可用的 systemd。
 - 能主动访问 Hub 的 HTTPS/WSS 443 端口；无需公网 IP，也不用在从节点开放入站端口。
+- 终端默认先走中转，并在后台检测浏览器与节点能否直接通信。UDP 与 NAT 条件允许、且实际延迟和稳定性合适时会自动直连；否则继续中转，无需额外配置。外部 STUN 仅用于地址发现，可通过 Agent 环境变量关闭或替换，见 [运维说明](operations.md#automatic-terminal-transport-selection)。
 - 使用希望终端实际运行的账户安装：root 创建系统服务，其他账户创建用户服务。新终端继承该服务账户，可以访问该账户的文件和已有工具凭证。
 
 在 Debian / Ubuntu 上安装 tmux：

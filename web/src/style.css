@@ -1761,3 +1761,21 @@ main {
   color: #c5b58e;
   line-height: 1.8;
 }
+.transport-state {
+  color: #91a08c;
+  font-size: 10px;
+  white-space: nowrap;
+  padding: 4px 7px;
+  border: 1px solid #394438;
+  border-radius: 5px;
+}
+.transport-state.direct {
+  color: #b4d2a4;
+  border-color: #52674a;
+}
+@media (max-width: 600px) {
+  .transport-state {
+    font-size: 9px;
+    padding: 3px 4px;
+  }
+}

@@ -61,6 +61,25 @@ systemctl --user stop workdeck-session-TERMINAL_ID.service
 
 Revoking a node disables its identity and disconnects management access, while leaving local tasks running. Reenroll with a new identity only after preserving needed records. Reenrollment under a new node ID does not automatically migrate old terminal ownership.
 
+## Automatic terminal transport selection
+
+The terminal header shows `直连` or `中转`, with measured RTT when available. Hovering explains the latest selection. Connections start on the relay so WebRTC probing never delays terminal access. When direct delivery is faster, or similarly responsive and consistent, it can bypass the Hub for terminal bytes. Slower/unavailable direct paths retain the relay; a failed active direct path reconnects through it. Terminal processes remain on the node.
+
+Agent environment options (restart only the Agent after editing its systemd override):
+
+```ini
+[Service]
+# Optional: completely disable direct negotiation on this node.
+Environment=WORKDECK_DIRECT=0
+# Optional alternative: comma-separated STUN URLs. An explicitly empty value
+# disables external STUN discovery, retaining local/IPv6 host candidates.
+Environment=WORKDECK_STUN_URLS=stun:stun.example.com:3478
+```
+
+Without an override, the Agent advertises `stun:stun.cloudflare.com:3478`, which both endpoints use only for address discovery. STUN does not relay terminal contents. Unreachable STUN, blocked UDP, and restrictive NATs are normal fallback conditions; do not open broad inbound firewall ranges just to enable this optimization. TURN is not configured, and browsers reject a relay candidate as a direct optimization. For diagnostics, opening the workbench with `?transport=relay` suppresses browser direct probing for that page.
+
+Direct delivery to an Agent hosted on the Hub machine still uses that machine's public connection. Other nodes can avoid Hub terminal relay bandwidth; control, signaling, page downloads, and low-volume probes still use the Hub.
+
 ## Release limits
 
 Linux with systemd user services; one administrator; one Hub. No full output recording/export, native Windows Agent, process checkpointing, or high availability. tmux screen/history lives in memory; metadata lives on disk. Node power loss destroys running terminal processes.

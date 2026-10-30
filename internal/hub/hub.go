@@ -736,6 +736,12 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 					continue
 				}
 				switch f.Type {
+				case "probe", "rtc-offer", "route-request", "route-commit":
+					// Signaling shares this authenticated attachment. Its lifetime
+					// remains the authority for any direct data channel as well.
+					if len(f.ID) <= 64 && len(f.SDP) <= 60000 && len(f.Padding) <= 1024 {
+						e = data.JSON(f)
+					}
 				case "resize":
 					h.mu.Lock()
 					controlling := h.controllers[t.ID] == a.id

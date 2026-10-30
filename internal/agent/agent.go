@@ -19,11 +19,13 @@ import (
 )
 
 type Agent struct {
-	identity Identity
-	key      ed25519.PrivateKey
-	sessions *Sessions
-	version  string
-	stateMu  sync.Mutex
+	identity    Identity
+	key         ed25519.PrivateKey
+	sessions    *Sessions
+	version     string
+	stateMu     sync.Mutex
+	controlMu   sync.Mutex
+	controllers map[string]string
 }
 
 func New(dir, version string) (*Agent, error) {
@@ -138,6 +140,14 @@ func (a *Agent) connected(parent context.Context) error {
 		}
 		switch msg.Type {
 		case "attach":
+			if !msg.ReadOnly {
+				a.controlMu.Lock()
+				if a.controllers == nil {
+					a.controllers = map[string]string{}
+				}
+				a.controllers[msg.TerminalID] = msg.Ticket
+				a.controlMu.Unlock()
+			}
 			jobs.Add(1)
 			go func() {
 				defer jobs.Done()
@@ -206,8 +216,10 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
+	link := newTerminalLink(ctx, cancel, socket)
 	defer func() {
 		cancel()
+		link.close()
 		socket.Close()
 		stopAttachment(cmd, f)
 	}()
@@ -217,14 +229,21 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 	errorsCh := make(chan error, 2)
 	go func() {
 		for {
-			kind, b, e := socket.Conn.ReadMessage()
-			if e != nil {
-				errorsCh <- e
+			var packet linkPacket
+			select {
+			case packet = <-link.incoming:
+			case <-ctx.Done():
 				return
 			}
+			kind, b := packet.kind, packet.data
+			var e error
 			if kind == websocket.BinaryMessage {
-				if msg.ReadOnly {
+				if !a.isController(msg) || !link.accepts(packet.route) {
 					continue
+				}
+				if len(b) > 32768 {
+					errorsCh <- errors.New("input too large")
+					return
 				}
 				_, e = f.Write(b)
 			} else if kind == websocket.TextMessage {
@@ -233,8 +252,21 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 					continue
 				}
 				switch frame.Type {
+				case "rtc-offer":
+					if packet.route == "relay" {
+						link.negotiate(frame.SDP)
+					}
+				case "probe":
+					e = link.probe(packet.route, frame)
+				case "route-request":
+					e = link.requestRoute(packet.route, frame)
+				case "route-commit":
+					e = link.commitRoute(packet.route, frame)
 				case "resize":
 					{
+						if !link.accepts(packet.route) {
+							continue
+						}
 						cols, rows := frame.Cols, frame.Rows
 						if cols < 10 {
 							cols = 10
@@ -249,7 +281,7 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 							rows = 250
 						}
 						e = resizeAttachment(f, cols, rows)
-						if e == nil && !msg.ReadOnly {
+						if e == nil && a.isController(msg) {
 							// Set the pane's canonical size explicitly: old tmux versions do not
 							// support latest/ignore-size, and viewers must never resize a TUI.
 							_, e = a.sessions.tmuxRun(msg.TerminalID, "resize-window", "-t", "main", "-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows)))
@@ -300,7 +332,7 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 			}
 			n, e := f.Read(buf)
 			if n > 0 {
-				if e2 := socket.Write(websocket.BinaryMessage, buf[:n]); e2 != nil {
+				if e2 := link.write(websocket.BinaryMessage, buf[:n]); e2 != nil {
 					errorsCh <- e2
 					return
 				}

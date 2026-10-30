@@ -71,3 +71,11 @@ A production Agent stack dump identified control reconnection waiting indefinite
 Attachment cleanup now cancels transport first and terminates the viewer's separate process group, escalating after two seconds. The persistent tmux server and terminal are outside that group. PTY reads use nonblocking polling, and resize uses `SyscallConn` without changing descriptor mode.
 
 Regression tests disconnect the control connection three times with an attached idle, resized terminal, verify automatic reconnection, and verify the original pane PID survives. They also cover a wrapper that ignores termination. Both cases passed locally with the race detector and on the deployment host with a root Agent attaching to a different account. The complete Go test suite and `go vet` passed.
+
+## Optional measured direct transport
+
+Ten browser acceptance cases passed against an isolated Hub and a real local Agent. New coverage verifies actual terminal bytes arrive over a browser WebRTC DataChannel while Hub WebSockets carry no corresponding binary output; a continuous numbered output stream crosses the route switch without lost or duplicate lines. A deliberately delayed but reachable direct path retains relay delivery. Browsers without WebRTC retain working terminals.
+
+The same acceptance verifies direct readonly access rejects injected binary input, another device can take control, logout closes that device's direct peer, and a closed active peer reconnects over relay with the original shell environment and terminal record intact. Existing mobile resize, directory selection, persistent login, rename, and styled termination cases also pass. Screenshots include the mobile direct indicator and relay recovery.
+
+Go tests cover the output fence and matching commit, stale/readonly controller tickets, failed speculative probes leaving the relay intact, and existing Agent reconnect behavior. The complete Go suite passed with the race detector, and `go vet` passed. Deployment-host tests also pass under root with a separate terminal owner, retaining the original pane PID through three control disconnects. These tests demonstrate the selection and fallback mechanism; NAT traversal success on other networks is environment-dependent and does not gate terminal access.

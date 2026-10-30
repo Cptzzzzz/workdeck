@@ -64,8 +64,14 @@ func TestReconnectWithIdleResizedTerminal(t *testing.T) {
 		} else {
 			_ = conn.WriteJSON(protocol.Frame{Type: "resize", Cols: 90, Rows: 25})
 			// A tmux redraw proves the resize has reached the idle attachment.
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
+			for {
+				kind, _, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				if kind == websocket.BinaryMessage {
+					break
+				}
 			}
 			resized <- struct{}{}
 		}

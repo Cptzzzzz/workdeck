@@ -8,6 +8,7 @@ A self-hosted browser workspace for persistent terminals on outbound-only Linux 
 - **Web:** React/TypeScript, desktop/mobile layout, node directory chooser, one controller plus readonly viewers, explicit takeover.
 - **Recovery:** durable node/terminal records, full-inventory reconciliation, and independent persistent device logins.
 - **Compute:** the Hub host can enroll an ordinary-user Agent just like any other machine.
+- **Transport:** instant WebSocket relay with optional, measured WebRTC direct delivery; automatic selection and relay fallback preserve running tasks.
 
 Closing a browser tab or restarting the Hub/Agent does not terminate the actual terminal. A node reboot destroys its live processes; metadata survives and marks those sessions lost. No automatic task replay is performed.
 

@@ -6,6 +6,14 @@ The Agent initiates a signed WSS control connection to the Hub. Heartbeat invent
 
 For each browser attachment, the Hub issues a 15-second one-time ticket. The Agent initiates a separate authenticated data WSS connection carrying that ticket. The Hub pairs the two sockets. Binary frames transport PTY bytes; text frames transport resize events and processed-output acknowledgments. The control socket is independent of noisy terminal output.
 
+The relay is immediately usable. New browsers and Agents optionally negotiate a reliable, ordered WebRTC DataChannel over that same authenticated attachment. Six paired, small end-to-end probes compare relay/direct median RTT, tail latency, and failures. A materially faster direct path wins; nearly equivalent paths prefer direct to save relay bandwidth. A slower or inconsistent direct path leaves terminal traffic on the relay. This is an interactive-latency heuristic, not a throughput benchmark or a guarantee of a globally optimal route.
+
+The browser repeats comparisons approximately once a minute while visible and monitors an active direct path every five seconds. Hysteresis and a minimum switch interval prevent small fluctuations from continually changing routes. Failed direct attempts have a two-minute browser cooldown; unsupported browsers and older Agents keep using the original relay. Returning a backgrounded page to the foreground requests another comparison when a peer is available.
+
+Path changes preserve the same PTY. The Agent fences output on the old ordered channel, pauses output, and waits for a matching commit on the target channel before resuming. The browser buffers a bounded amount of input only during this live handshake; it never replays unconfirmed input after a connection failure. A broken direct connection reattaches through the relay and redraws the existing tmux session. Backpressure and controller/readonly rules apply to both transports.
+
+The browser↔Hub and Agent↔Hub WebSockets remain open as the authorization lease and signaling path. Logout, node revocation, terminal closure, Hub/Agent reconnection, or takeover closes the corresponding direct attachment too. The Agent independently checks the current per-terminal controller ticket for direct input and canonical resizing. No TURN service is required: direct candidates are attempted, and WebSocket remains the fallback. No stable inbound terminal port or manual router mapping is required; successful direct traffic requires suitable UDP/NAT/firewall conditions.
+
 The creating service account is recorded with each terminal; root Agents can retain access to migrated sessions owned by an earlier account. Each attachment launches `tmux attach-session` inside its own PTY. The actual shell belongs to a separate, per-terminal tmux server supervised by a separate systemd unit (system scope for root, user scope for ordinary accounts). Disconnecting or upgrading the Agent destroys attachments but not session units.
 
 ## Ownership and size
@@ -39,7 +47,7 @@ Data uses a bounded output acknowledgment window (256 KiB plus one chunk). A slo
 
 ## Trust and authentication
 
-The Hub is trusted with terminal data. HTTPS/WSS encrypt browser↔Hub and Agent↔Hub hops; this is not end-to-end encryption through an untrusted Hub.
+The Hub remains trusted for authentication, signaling, and serving browser code. HTTPS/WSS encrypt the relayed hops. Selected direct terminal data travels over WebRTC DTLS without being relayed by the Hub, but this does not provide protection against a malicious Hub supplying browser code or signaling. ICE/SDP may reveal endpoint addresses and is not stored in the database or ordinary logs.
 
 Initial join uses a short-lived token that can enroll one node identity, with Ed25519 proof of key possession. The same key can retry a lost enrollment response during the token validity window; a different key cannot reuse it. Subsequent Agent handshakes sign method, request URI, timestamp, and nonce. Timestamp windows and a nonce cache reject replay. Nodes can be revoked independently.
 

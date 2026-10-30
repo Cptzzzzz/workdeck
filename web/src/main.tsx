@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
+import { TerminalTransport, type TransportStatus } from "./terminal-transport";
 
 type Node = {
   run_user?: string;
@@ -64,7 +65,7 @@ type User = { username: string; csrf: string };
 type Modal = "create" | "join" | "password" | "rename" | "terminate" | null;
 type RenameTarget = { kind: "node" | "terminal"; id: string; name: string };
 let csrf = "";
-function sendInput(socket: WebSocket | null, bytes: Uint8Array) {
+function sendInput(socket: TerminalTransport | null, bytes: Uint8Array) {
   if (socket?.readyState !== WebSocket.OPEN) return;
   for (let offset = 0; offset < bytes.length; offset += 16384)
     socket.send(bytes.subarray(offset, offset + 16384));
@@ -1508,7 +1509,7 @@ function TerminalView({
   const container = useRef<HTMLDivElement>(null),
     panel = useRef<HTMLElement>(null),
     instance = useRef<XTerminal | null>(null),
-    socket = useRef<WebSocket | null>(null),
+    socket = useRef<TerminalTransport | null>(null),
     connectRef = useRef<(takeover?: boolean) => void>(() => {}),
     fitRef = useRef<() => void>(() => {});
   const [connection, setConnection] = useState("connecting"),
@@ -1516,6 +1517,10 @@ function TerminalView({
     [size, setSize] = useState(""),
     [failure, setFailure] = useState(""),
     [ctrl, setCtrl] = useState(false);
+  const [transport, setTransport] = useState<TransportStatus>({
+    route: "relay",
+    detail: "自动选择连接链路",
+  });
   const stopped =
     terminal.desired_state === "closed" ||
     ["closed", "lost", "error"].includes(terminal.state);
@@ -1579,10 +1584,11 @@ function TerminalView({
       socket.current?.close();
       setConnection("connecting");
       setFailure("");
-      const ws = new WebSocket(
+      const ws = new TerminalTransport(
         `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/terminals/${terminal.id}/ws${takeover ? "?takeover=1" : ""}`,
+        setTransport,
+        terminal.node_id,
       );
-      ws.binaryType = "arraybuffer";
       socket.current = ws;
       ws.onmessage = (e) => {
         if (gen !== generation) return;
@@ -1697,6 +1703,17 @@ function TerminalView({
                   : "控制中"
                 : "重新连接中…"}
           </span>
+          {connection === "connected" && (
+            <span
+              className={"transport-state " + transport.route}
+              title={transport.detail}
+            >
+              {transport.route === "direct" ? "直连" : "中转"}
+              {transport.latency !== undefined
+                ? ` · ${Math.round(transport.latency)} ms`
+                : ""}
+            </span>
+          )}
           <button
             className="icon-button"
             title="重新连接"
