@@ -57,6 +57,7 @@ export type Document = {
   deleted?: boolean;
   unavailable?: boolean;
   manualSaveRequired?: boolean;
+  closing?: boolean;
 };
 export type BinaryPreview = {
   identity: DraftIdentity;
@@ -348,7 +349,8 @@ export function useWorkspace(
         !doc.deleted &&
         !doc.conflict &&
         !doc.pending &&
-        !doc.saving
+        !doc.saving &&
+        !doc.closing
       ) {
         const version = doc.version,
           sequence = doc.sequence;
@@ -359,6 +361,7 @@ export function useWorkspace(
           doc.version === version &&
           doc.sequence === sequence &&
           !doc.saving &&
+          !doc.closing &&
           !doc.pending &&
           !doc.deleted &&
           !doc.conflict &&
@@ -1185,7 +1188,8 @@ export function useWorkspace(
         renameLock.current ||
         doc.deleted ||
         doc.conflict ||
-        doc.warning
+        doc.warning ||
+        doc.closing
       )
         return;
       doc.saving = true;
@@ -1263,6 +1267,7 @@ export function useWorkspace(
           doc.message ||
           doc.persistenceError ||
           doc.manualSaveRequired ||
+          doc.closing ||
           renameLock.current
         )
           continue;
@@ -1286,6 +1291,7 @@ export function useWorkspace(
             !doc.message &&
             !doc.persistenceError &&
             !doc.manualSaveRequired &&
+            !doc.closing &&
             !renameLock.current
           )
             void save(doc);
@@ -1317,6 +1323,147 @@ export function useWorkspace(
     [],
   );
   const retry = useCallback(() => setReconnect((n) => n + 1), []);
+  const closeDocument = useCallback(
+    async (doc: Document, action: "clean" | "save" | "discard" | "keep") => {
+      const id = documentKey(doc.identity);
+      if (
+        docs.current.get(id) !== doc ||
+        doc.identity.account !== account ||
+        doc.closing ||
+        doc.saving ||
+        renameLock.current
+      )
+        throw new Error("文件状态已改变或操作尚未完成");
+      if (action === "save") {
+        if (
+          doc.pending ||
+          doc.conflict ||
+          doc.deleted ||
+          doc.unavailable ||
+          doc.warning ||
+          doc.persistenceError ||
+          !clientRef.current
+        )
+          throw new Error("请先处理冲突、待确认保存或草稿存储错误");
+        await save(doc);
+        if (
+          docs.current.get(id) !== doc ||
+          doc.saving ||
+          doc.pending ||
+          doc.conflict ||
+          doc.text !== doc.base ||
+          doc.persistenceError
+        )
+          throw new Error(doc.message || "文件尚未完整保存，请检查后重试");
+      }
+      if (
+        action === "clean" &&
+        (doc.text !== doc.base ||
+          doc.pending ||
+          doc.conflict ||
+          doc.deleted ||
+          doc.unavailable ||
+          doc.persistenceError)
+      )
+        throw new Error("文件仍有未处理的草稿，请选择处理方式");
+      if (action === "discard" && doc.pending)
+        throw new Error("保存结果待确认，请先核对或保留草稿");
+      doc.closing = true;
+      const sequence = doc.sequence;
+      const timer = timers.current.get(id);
+      if (timer) {
+        clearTimeout(timer);
+        timers.current.delete(id);
+      }
+      update();
+      try {
+        await queues.current.get(id)?.catch(() => {});
+        if (
+          doc.sequence !== sequence ||
+          docs.current.get(id) !== doc ||
+          (doc.pending && action !== "keep")
+        )
+          throw new Error("文件内容或保存状态已改变，请重新处理");
+        if (action === "keep") {
+          await persist(doc);
+          if (doc.sequence !== sequence)
+            throw new Error("文件内容已改变，请重新处理");
+          if (doc.deleted)
+            setDeletedDrafts((old) =>
+              old.some((d) => documentKey(d) === id)
+                ? old
+                : [...old, doc.identity],
+            );
+          else
+            setRecoverableDrafts((old) =>
+              old.some((d) => documentKey(d) === id)
+                ? old
+                : [...old, doc.identity],
+            );
+        } else if (action === "discard") {
+          if (doc.token) {
+            await deleteDraft(doc.identity, doc.token);
+            doc.token = null;
+            if (doc.sequence !== sequence) {
+              await persist(doc).catch(() => {});
+              throw new Error("文件内容已改变，请重新处理");
+            }
+          }
+          setDeletedDrafts((old) => old.filter((d) => documentKey(d) !== id));
+          setRecoverableDrafts((old) =>
+            old.filter((d) => documentKey(d) !== id),
+          );
+        }
+        docs.current.delete(id);
+        const next =
+          [...docs.current.entries(), ...previews.current.entries()]
+            .filter(
+              ([, item]) =>
+                item.identity.account === doc.identity.account &&
+                item.identity.workspaceID === doc.identity.workspaceID &&
+                item.identity.rootRevision === doc.identity.rootRevision,
+            )
+            .at(-1)?.[0] || null;
+        if (selections.current.get(doc.identity.workspaceID) === id) {
+          if (next) selections.current.set(doc.identity.workspaceID, next);
+          else selections.current.delete(doc.identity.workspaceID);
+        }
+        setSelected((current) => (current === id ? next : current));
+      } finally {
+        doc.closing = false;
+        update();
+      }
+    },
+    [account, persist, save, update],
+  );
+  const closePreview = useCallback(
+    (id: string) => {
+      const preview = previews.current.get(id);
+      if (
+        !preview ||
+        preview.identity.account !== account ||
+        renameLock.current
+      )
+        return;
+      previews.current.delete(id);
+      const next =
+        [...docs.current.entries(), ...previews.current.entries()]
+          .filter(
+            ([, item]) =>
+              item.identity.account === preview.identity.account &&
+              item.identity.workspaceID === preview.identity.workspaceID &&
+              item.identity.rootRevision === preview.identity.rootRevision,
+          )
+          .at(-1)?.[0] || null;
+      if (selections.current.get(preview.identity.workspaceID) === id) {
+        if (next) selections.current.set(preview.identity.workspaceID, next);
+        else selections.current.delete(preview.identity.workspaceID);
+      }
+      setSelected((current) => (current === id ? next : current));
+      update();
+    },
+    [account, update],
+  );
   const runCreateIntent = useCallback(
     async (intent: CreateIntent) => {
       if (intent.kind === "upload" || intent.kind === "rename")
@@ -2542,6 +2689,8 @@ export function useWorkspace(
     acceptConflictBase,
     save,
     checkPendingSave,
+    closeDocument,
+    closePreview,
     retry,
     select: (id: string) => {
       if (workspace) selections.current.set(workspace.id, id);

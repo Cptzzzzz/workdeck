@@ -2415,19 +2415,39 @@ main {
   border-bottom: 1px solid #2b372d;
   overflow: auto;
 }
-.workbench-tabs button {
+.workbench-tab {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 250px;
+  border-right: 1px solid #2b372d;
+}
+.workbench-tabs .workbench-tab-select {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 13px;
+  padding: 0 5px 0 13px;
   max-width: 230px;
   color: #87998a;
   font-size: 11px;
-  border-right: 1px solid #2b372d;
 }
-.workbench-tabs button.active {
+.workbench-tab.active {
   background: #202a22;
+}
+.workbench-tab.active .workbench-tab-select {
   color: #dce4da;
+}
+.workbench-tabs .workbench-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 30px;
+  color: #87998a;
+  flex-shrink: 0;
+}
+.workbench-tabs .workbench-tab-close:hover {
+  color: #e7e9e6;
 }
 .workbench-tabs button span {
   overflow: hidden;
@@ -2437,6 +2457,9 @@ main {
 .workbench-tabs i {
   color: var(--accent);
   font-style: normal;
+}
+.close-document-actions {
+  flex-wrap: wrap;
 }
 .workbench-editor-toolbar {
   min-height: 40px;

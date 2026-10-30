@@ -15,6 +15,7 @@ import {
   Settings2,
   UserRound,
   TerminalSquare,
+  X,
 } from "lucide-react";
 import type {
   WorkspaceController,
@@ -270,6 +271,7 @@ export function WorkspaceSidebar({
             <div key={JSON.stringify(d)}>
               <span title={d.path}>{d.path}</span>
               <button
+                disabled={!controller.fileReady}
                 onClick={() =>
                   void controller
                     .openDeletedDraft(d)
@@ -289,6 +291,7 @@ export function WorkspaceSidebar({
             <div key={JSON.stringify(d)}>
               <span title={d.path}>{d.path}</span>
               <button
+                disabled={!controller.fileReady}
                 onClick={() =>
                   void controller
                     .openRecoverableDraft(d)
@@ -411,10 +414,12 @@ function exportDraft(doc: Document) {
 }
 export function WorkspaceEditor({
   controller,
+  onCloseDocument,
   onSaveDeletedAs,
   onDiscardDeleted,
 }: {
   controller: WorkspaceController;
+  onCloseDocument: (doc: Document) => void;
   onSaveDeletedAs: (doc: Document) => void;
   onDiscardDeleted: (doc: Document) => void;
 }) {
@@ -460,27 +465,55 @@ export function WorkspaceEditor({
     <section className="workbench-editor" aria-label="文件工作区">
       <div className="workbench-tabs">
         {controller.documents.map(([id, item]) => (
-          <button
+          <div
             key={id}
-            className={id === controller.selected ? "active" : ""}
-            onClick={() => controller.select(id)}
-            title={item.path}
+            className={
+              "workbench-tab " + (id === controller.selected ? "active" : "")
+            }
           >
-            <File size={14} />
-            <span>{item.path.split("/").pop()}</span>
-            {item.text !== item.base && <i aria-label="未保存">●</i>}
-          </button>
+            <button
+              className="workbench-tab-select"
+              onClick={() => controller.select(id)}
+              title={item.path}
+            >
+              <File size={14} />
+              <span>{item.path.split("/").pop()}</span>
+              {item.text !== item.base && <i aria-label="未保存">●</i>}
+            </button>
+            <button
+              className="workbench-tab-close"
+              aria-label={`关闭文件 ${item.path}`}
+              title="关闭文件"
+              onClick={() => onCloseDocument(item)}
+            >
+              <X size={13} />
+            </button>
+          </div>
         ))}
         {controller.previews.map(([id, item]) => (
-          <button
+          <div
             key={id}
-            className={id === controller.selected ? "active" : ""}
-            onClick={() => controller.select(id)}
-            title={item.path}
+            className={
+              "workbench-tab " + (id === controller.selected ? "active" : "")
+            }
           >
-            <File size={14} />
-            <span>{item.path.split("/").pop()}</span>
-          </button>
+            <button
+              className="workbench-tab-select"
+              onClick={() => controller.select(id)}
+              title={item.path}
+            >
+              <File size={14} />
+              <span>{item.path.split("/").pop()}</span>
+            </button>
+            <button
+              className="workbench-tab-close"
+              aria-label={`关闭文件 ${item.path}`}
+              title="关闭文件"
+              onClick={() => controller.closePreview(id)}
+            >
+              <X size={13} />
+            </button>
+          </div>
         ))}
       </div>
       <div className="workbench-editor-toolbar">
@@ -705,7 +738,7 @@ export function WorkspaceEditor({
             >
               <MonacoEditor
                 document={doc}
-                readOnly={controller.renaming}
+                readOnly={controller.renaming || !!doc.closing}
                 onChange={(text) => controller.edit(doc, text)}
                 onSave={() => void controller.save(doc)}
               />
@@ -760,6 +793,103 @@ export function WorkspaceEditor({
         </div>
       )}
     </section>
+  );
+}
+
+export function CloseDocumentForm({
+  controller,
+  doc,
+  onClose,
+}: {
+  controller: WorkspaceController;
+  doc: Document;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const act = async (action: "save" | "discard" | "keep") => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await controller.closeDocument(doc, action);
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const blocked = busy || doc.saving || !!doc.closing;
+  return (
+    <div>
+      <div className="modal-symbol">
+        <File size={24} />
+      </div>
+      <h2>关闭文件</h2>
+      <p className="modal-description">
+        {doc.path}{" "}
+        有未处理的内容。可以保存、放弃修改，或将草稿保留在此浏览器中。
+      </p>
+      {doc.pending && (
+        <div className="form-hint">
+          保存结果待确认，不能放弃该操作；可保留草稿并稍后核对。
+        </div>
+      )}
+      {doc.conflict && (
+        <div className="form-hint">
+          文件存在冲突或不可访问；请先比较或另存，才能保存到原路径。
+        </div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions close-document-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={blocked}
+          onClick={onClose}
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={blocked || !!doc.pending}
+          onClick={() => void act("discard")}
+        >
+          放弃修改
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={blocked}
+          onClick={() => void act("keep")}
+        >
+          保留草稿并关闭
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={
+            blocked ||
+            !!doc.pending ||
+            doc.conflict ||
+            !!doc.deleted ||
+            !!doc.unavailable ||
+            !!doc.warning ||
+            !!doc.persistenceError ||
+            !controller.fileReady
+          }
+          onClick={() => void act("save")}
+        >
+          保存并关闭
+        </button>
+      </div>
+    </div>
   );
 }
 
