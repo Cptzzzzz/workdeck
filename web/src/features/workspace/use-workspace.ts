@@ -19,9 +19,11 @@ import {
 import type {
   FileEntry,
   SaveTransaction,
+  UploadTransaction,
   Workspace,
 } from "../../services/files/types";
 import type { TerminalRecord } from "../../types";
+import { downloadFile } from "../../services/files/download";
 import { previewKind } from "./preview-utils";
 
 type Directory = { entries: FileEntry[]; truncated: boolean };
@@ -74,6 +76,7 @@ export function useWorkspace(
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedDirectory, setSelectedDirectory] = useState(".");
   const [intents, setIntents] = useState<CreateIntent[]>([]);
+  const [transfer, setTransfer] = useState("");
   const [reconnect, setReconnect] = useState(0);
   const clientRef = useRef<FileClient | null>(null),
     generation = useRef(0);
@@ -503,6 +506,8 @@ export function useWorkspace(
   const retry = useCallback(() => setReconnect((n) => n + 1), []);
   const runCreateIntent = useCallback(
     async (intent: CreateIntent) => {
+      if (intent.kind === "upload")
+        throw new Error("请重新选择原文件以核对并继续上传");
       const client = clientRef.current;
       if (
         !client ||
@@ -588,6 +593,116 @@ export function useWorkspace(
     },
     [refresh],
   );
+  const uploadFile = useCallback(
+    async (
+      file: File,
+      parent: string,
+      expectedWorkspace: string,
+      expectedRevision: number,
+      existing?: CreateIntent,
+    ) => {
+      const client = clientRef.current,
+        w = workspace,
+        gen = generation.current;
+      if (
+        !client ||
+        !w ||
+        !terminal ||
+        w.id !== expectedWorkspace ||
+        w.root_revision !== expectedRevision
+      )
+        throw new Error("工作区已改变，请重新选择文件");
+      if (
+        !file.name ||
+        file.name === "." ||
+        file.name === ".." ||
+        /[\/\\\u0000-\u001f]/.test(file.name) ||
+        new TextEncoder().encode(file.name).length > 255
+      )
+        throw new Error("文件名无效");
+      let tx: UploadTransaction;
+      if (existing) {
+        if (
+          existing.kind !== "upload" ||
+          existing.workspaceID !== w.id ||
+          existing.rootRevision !== w.root_revision ||
+          !Number.isSafeInteger(existing.size) ||
+          !existing.sha256 ||
+          !/^[0-9a-f]{64}$/.test(existing.sha256)
+        )
+          throw new Error("上传记录无效，请检查目标文件");
+        tx = {
+          opID: existing.opID,
+          spec: {
+            path: existing.path,
+            create: true,
+            size: existing.size!,
+            sha256: existing.sha256,
+          },
+          sourceName: existing.sourceName || file.name,
+        };
+      } else {
+        setTransfer("正在校验本地文件");
+        tx = await client.prepareUpload(
+          childPath(parent, file.name),
+          file,
+          undefined,
+          (done, total) => setTransfer(`正在校验 ${done} / ${total} 字节`),
+        );
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，请重新选择文件");
+        const intent: CreateIntent = {
+          account,
+          nodeID: terminal.node_id,
+          workspaceID: w.id,
+          rootRevision: w.root_revision,
+          opID: tx.opID,
+          kind: "upload",
+          path: tx.spec.path,
+          createdAt: Date.now(),
+          size: tx.spec.size,
+          sha256: tx.spec.sha256,
+          sourceName: file.name,
+        };
+        await recordCreateIntent(intent);
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，上传记录已保存，请返回原工作区核对");
+        setIntents((old) => [...old, intent]);
+      }
+      if (activeIntents.current.has(tx.opID)) throw new Error("此上传正在进行");
+      activeIntents.current.add(tx.opID);
+      try {
+        const result = await client.upload(tx, file, {
+          onHash: (done, total) =>
+            setTransfer(`正在校验 ${done} / ${total} 字节`),
+          onProgress: (done, total) =>
+            setTransfer(`正在上传 ${done} / ${total} 字节`),
+        });
+        if (result.state !== "committed") throw new Error("上传结果尚未确认");
+        await removeCreateIntent(tx.opID);
+        setIntents((old) => old.filter((item) => item.opID !== tx.opID));
+        if (clientRef.current === client) await refresh();
+      } catch (e) {
+        if (
+          e instanceof FileServiceError &&
+          [
+            "ALREADY_EXISTS",
+            "CONFLICT",
+            "ID_REUSED",
+            "OPERATION_EXPIRED",
+          ].includes(e.code)
+        ) {
+          await removeCreateIntent(tx.opID);
+          setIntents((old) => old.filter((item) => item.opID !== tx.opID));
+        }
+        throw e;
+      } finally {
+        activeIntents.current.delete(tx.opID);
+        setTransfer("");
+      }
+    },
+    [account, workspace, terminal?.id, terminal?.node_id, refresh],
+  );
   const createItem = useCallback(
     async (
       name: string,
@@ -645,6 +760,16 @@ export function useWorkspace(
     selectedDirectory,
     selectDirectory: setSelectedDirectory,
     intents,
+    transfer,
+    clearTransfer: () => setTransfer(""),
+    uploadFile,
+    download: (path: string) => {
+      const client = clientRef.current;
+      if (!client) return Promise.reject(new Error("文件连接未就绪"));
+      return downloadFile(client, path, undefined, (done, total) =>
+        setTransfer(`正在下载 ${done} / ${total} 字节`),
+      ).finally(() => setTransfer(""));
+    },
     createItem,
     supportsCreate,
     retryCreate: runCreateIntent,

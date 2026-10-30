@@ -34,9 +34,12 @@ export type CreateIntent = {
   workspaceID: string;
   rootRevision: number;
   opID: string;
-  kind: "file" | "directory";
+  kind: "file" | "directory" | "upload";
   path: string;
   createdAt: number;
+  size?: number;
+  sha256?: string;
+  sourceName?: string;
 };
 const intentScope = (
   v: Pick<CreateIntent, "account" | "nodeID" | "workspaceID" | "rootRevision">,

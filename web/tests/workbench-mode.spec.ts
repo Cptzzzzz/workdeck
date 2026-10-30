@@ -20,6 +20,17 @@ test("modes share the terminal and the workspace edits and saves files", async (
   page.on("pageerror", (error) => errors.push(error.message));
   const name = `workbench fixture ${Date.now()}`;
   try {
+    await page.addInitScript(() => {
+      (window as any).__download = [];
+      (window as any).showSaveFilePicker = async () => ({
+        createWritable: async () => ({
+          write: async (chunk: Uint8Array) =>
+            (window as any).__download.push(...chunk),
+          close: async () => {},
+          abort: async () => {},
+        }),
+      });
+    });
     await page.goto("/?transport=relay");
     await page.getByLabel("用户名").fill("admin");
     await page
@@ -78,10 +89,39 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await expect(
       page.getByRole("button", { name: "example.txt", exact: true }),
     ).toBeVisible();
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "上传文件到所选目录" }).click();
+    await (
+      await chooserPromise
+    ).setFiles({
+      name: "uploaded.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("upload from browser\n"),
+    });
+    await expect
+      .poll(() => {
+        try {
+          return readFileSync(path.join(dir, "uploaded.txt"), "utf8");
+        } catch {
+          return "";
+        }
+      })
+      .toBe("upload from browser\n");
+    await expect(
+      page.getByRole("button", { name: "uploaded.txt", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "下载 uploaded.txt" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          new TextDecoder().decode(new Uint8Array((window as any).__download)),
+        ),
+      )
+      .toBe("upload from browser\n");
     writeFileSync(path.join(dir, "added-after-open.txt"), "new\n");
     await page.getByRole("button", { name: "刷新文件树" }).click();
     await expect(
-      page.getByRole("button", { name: "added-after-open.txt" }),
+      page.getByRole("button", { name: "added-after-open.txt", exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "example.txt", exact: true })

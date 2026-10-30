@@ -51,3 +51,8 @@ export type SaveTransaction = {
   spec: SaveSpec;
   content: Uint8Array;
 };
+export type UploadTransaction = {
+  opID: string;
+  spec: SaveSpec;
+  sourceName: string;
+};

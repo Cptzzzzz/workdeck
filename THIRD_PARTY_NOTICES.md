@@ -40,6 +40,7 @@ xterm.js 5.5.0 包含本项目的字宽测量与逻辑列定位补丁，见 `scr
 | modernc.org/mathutil | v1.7.1 | [LICENSE](third_party/licenses/modernc.org_mathutil--LICENSE.txt) |
 | modernc.org/memory | v1.11.0 | [LICENSE](third_party/licenses/modernc.org_memory--LICENSE.txt), [LICENSE-GO](third_party/licenses/modernc.org_memory--LICENSE-GO.txt), [LICENSE-LOGO](third_party/licenses/modernc.org_memory--LICENSE-LOGO.txt), [LICENSE-MMAP-GO](third_party/licenses/modernc.org_memory--LICENSE-MMAP-GO.txt) |
 | modernc.org/sqlite | v1.40.1 | [LICENSE](third_party/licenses/modernc.org_sqlite--LICENSE.txt) |
+| @noble/hashes | 1.8.0 | [LICENSE](third_party/licenses/_noble_hashes--LICENSE.txt) |
 | @xterm/addon-fit | 0.10.0 | [LICENSE](third_party/licenses/_xterm_addon-fit--LICENSE.txt) |
 | @xterm/xterm | 5.5.0 | [LICENSE](third_party/licenses/_xterm_xterm--LICENSE.txt) |
 | lucide-react | 0.468.0 | [LICENSE](third_party/licenses/lucide-react--LICENSE.txt) |

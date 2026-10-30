@@ -1,4 +1,5 @@
 import { api } from "../api";
+import { checkTransferAbort, hashBlob } from "./transfer";
 import {
   decodeChunk,
   encodeChunk,
@@ -13,6 +14,7 @@ import type {
   FileEntry,
   FileOperation,
   SaveTransaction,
+  UploadTransaction,
   Workspace,
   WorkspaceView,
 } from "./types";
@@ -430,6 +432,111 @@ export class FileClient {
       },
       content: snapshot,
     };
+  }
+  async prepareUpload(
+    path: string,
+    file: File,
+    signal?: AbortSignal,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<UploadTransaction> {
+    const digest = await hashBlob(file, signal, onProgress);
+    checkTransferAbort(signal);
+    return {
+      opID: this.id(),
+      spec: { path, size: file.size, sha256: digest, create: true },
+      sourceName: file.name,
+    };
+  }
+  async upload(
+    transaction: UploadTransaction,
+    file: File,
+    options: {
+      signal?: AbortSignal;
+      onHash?: (done: number, total: number) => void;
+      onProgress?: (done: number, total: number) => void;
+    } = {},
+  ): Promise<FileOperation> {
+    const { signal, onHash, onProgress } = options;
+    if (
+      file.size !== transaction.spec.size ||
+      (await hashBlob(file, signal, onHash)) !== transaction.spec.sha256
+    )
+      throw new FileServiceError(
+        "SOURCE_MISMATCH",
+        "所选文件与原上传文件不一致",
+      );
+    checkTransferAbort(signal);
+    let op = this.checkOperation(
+      (
+        await this.request("file.write.begin", {
+          op_id: transaction.opID,
+          spec: transaction.spec,
+        })
+      ).value,
+      transaction.opID,
+    );
+    if (op.state === "committed") {
+      if (!op.version)
+        throw new FileServiceError("PROTOCOL_ERROR", "节点未返回文件版本");
+      return op;
+    }
+    if (
+      (op.state !== "receiving" && op.state !== "ready") ||
+      op.offset > file.size
+    )
+      throw new FileServiceError("INVALID_STATE", "此上传操作无法继续");
+    onProgress?.(op.offset, file.size);
+    while (op.offset < file.size) {
+      checkTransferAbort(signal);
+      const start = op.offset;
+      const bytes = new Uint8Array(
+        await file.slice(start, start + MAX_CHUNK).arrayBuffer(),
+      );
+      checkTransferAbort(signal);
+      op = this.checkOperation(
+        (
+          await this.request("file.write.chunk", null, {
+            id: transaction.opID,
+            binary: encodeChunk(transaction.opID, start, 1, bytes),
+          })
+        ).value,
+        transaction.opID,
+      );
+      if (
+        op.offset !== start + bytes.length ||
+        (op.state !== "receiving" && op.state !== "ready")
+      )
+        throw new FileServiceError("PROTOCOL_ERROR", "节点返回的上传确认无效");
+      onProgress?.(op.offset, file.size);
+    }
+    checkTransferAbort(signal);
+    if (op.state !== "ready")
+      throw new FileServiceError("NOT_READY", "文件内容尚未得到完整确认");
+    op = this.checkOperation(
+      (await this.request("file.write.commit", { op_id: transaction.opID }))
+        .value,
+      transaction.opID,
+    );
+    if (op.state !== "committed" || !op.version)
+      throw new FileServiceError("PROTOCOL_ERROR", "节点未确认文件提交");
+    return op;
+  }
+  async abortUpload(transaction: UploadTransaction): Promise<FileOperation> {
+    const op = this.checkOperation(
+      (
+        await this.request("file.write.begin", {
+          op_id: transaction.opID,
+          spec: transaction.spec,
+        })
+      ).value,
+      transaction.opID,
+    );
+    if (op.state === "committed" || op.state === "aborted") return op;
+    return this.checkOperation(
+      (await this.request("file.write.abort", { op_id: transaction.opID }))
+        .value,
+      transaction.opID,
+    );
   }
   newOperationID(): string {
     return this.id();

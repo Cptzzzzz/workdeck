@@ -10,6 +10,7 @@
     "format": "prettier --write src tests *.ts *.json index.html"
   },
   "dependencies": {
+    "@noble/hashes": "1.8.0",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
     "lucide-react": "^0.468.0",

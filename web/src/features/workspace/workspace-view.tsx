@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -8,6 +8,7 @@ import {
   Save,
   Download,
   Plus,
+  Upload,
   Server,
   Settings2,
   LogOut,
@@ -42,6 +43,23 @@ export function WorkspaceSidebar({
   onLogout: () => void;
   onNewItem: () => void;
 }) {
+  const uploadInput = useRef<HTMLInputElement>(null);
+  const uploadTarget = useRef<{
+    parent: string;
+    workspace: string;
+    revision: number;
+    intent?: (typeof controller.intents)[number];
+  } | null>(null);
+  const chooseUpload = (intent?: (typeof controller.intents)[number]) => {
+    if (!controller.workspace) return;
+    uploadTarget.current = {
+      parent: controller.selectedDirectory,
+      workspace: controller.workspace.id,
+      revision: controller.workspace.root_revision,
+      intent,
+    };
+    uploadInput.current?.click();
+  };
   const renderDirectory = (path: string, depth: number): React.ReactNode => {
     const listing = controller.directories[path];
     if (!listing) return null;
@@ -53,34 +71,52 @@ export function WorkspaceSidebar({
             open = controller.expanded.has(child);
           return (
             <div key={child}>
-              <button
-                className={
-                  "file-tree-row " +
-                  (folder && controller.selectedDirectory === child
-                    ? "selected-directory"
-                    : "")
-                }
-                style={{ paddingLeft: 12 + depth * 15 }}
-                disabled={entry.restricted}
-                title={entry.restricted ? "此文件类型暂不可操作" : child}
-                onClick={() =>
-                  void (folder
-                    ? controller.toggle(child)
-                    : controller.openFile(child))
-                }
-              >
-                {folder ? (
-                  open ? (
-                    <ChevronDown size={13} />
+              <div className="file-tree-entry">
+                <button
+                  className={
+                    "file-tree-row " +
+                    (folder && controller.selectedDirectory === child
+                      ? "selected-directory"
+                      : "")
+                  }
+                  style={{ paddingLeft: 12 + depth * 15 }}
+                  disabled={entry.restricted}
+                  title={entry.restricted ? "此文件类型暂不可操作" : child}
+                  onClick={() =>
+                    void (folder
+                      ? controller.toggle(child)
+                      : controller.openFile(child))
+                  }
+                >
+                  {folder ? (
+                    open ? (
+                      <ChevronDown size={13} />
+                    ) : (
+                      <ChevronRight size={13} />
+                    )
                   ) : (
-                    <ChevronRight size={13} />
-                  )
-                ) : (
-                  <span className="file-tree-spacer" />
+                    <span className="file-tree-spacer" />
+                  )}
+                  {folder ? <Folder size={15} /> : <File size={15} />}
+                  <span>{entry.name}</span>
+                </button>
+                {!folder && entry.kind === "file" && !entry.restricted && (
+                  <button
+                    className="file-tree-download"
+                    title={`下载 ${entry.name}`}
+                    aria-label={`下载 ${entry.name}`}
+                    disabled={!!controller.transfer}
+                    onClick={() =>
+                      void controller.download(child).catch((e) => {
+                        if ((e as Error).name !== "AbortError")
+                          controller.reportError((e as Error).message);
+                      })
+                    }
+                  >
+                    <Download size={14} />
+                  </button>
                 )}
-                {folder ? <Folder size={15} /> : <File size={15} />}
-                <span>{entry.name}</span>
-              </button>
+              </div>
               {folder && open && renderDirectory(child, depth + 1)}
             </div>
           );
@@ -96,6 +132,43 @@ export function WorkspaceSidebar({
       <div className="workbench-sidebar-title">
         <span>资源管理器</span>
         <div className="workbench-tree-actions">
+          <input
+            ref={uploadInput}
+            type="file"
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0],
+                target = uploadTarget.current;
+              event.currentTarget.value = "";
+              if (file && target)
+                void controller
+                  .uploadFile(
+                    file,
+                    target.parent,
+                    target.workspace,
+                    target.revision,
+                    target.intent,
+                  )
+                  .catch((e) => {
+                    controller.clearTransfer();
+                    controller.reportError((e as Error).message);
+                  });
+            }}
+          />
+          <button
+            className="icon-button"
+            title="上传文件到所选目录"
+            aria-label="上传文件到所选目录"
+            disabled={
+              !controller.supportsCreate ||
+              !controller.workspace ||
+              controller.connection !== "中转连接" ||
+              !!controller.transfer
+            }
+            onClick={() => chooseUpload()}
+          >
+            <Upload size={16} />
+          </button>
           <button
             className="icon-button"
             title={
@@ -139,6 +212,11 @@ export function WorkspaceSidebar({
         <div className="workbench-hint">选择一个终端以浏览其工作目录</div>
       )}
       <div className="file-tree">{renderDirectory(".", 0)}</div>
+      {controller.transfer && (
+        <div className="workbench-hint" role="status">
+          {controller.transfer}
+        </div>
+      )}
       {controller.intents.length > 0 && (
         <div className="workbench-intents">
           <b>待确认的创建操作</b>
@@ -151,12 +229,16 @@ export function WorkspaceSidebar({
                   controller.connection !== "中转连接"
                 }
                 onClick={() =>
-                  void controller
-                    .retryCreate(intent)
-                    .catch((e) => controller.reportError((e as Error).message))
+                  intent.kind === "upload"
+                    ? chooseUpload(intent)
+                    : void controller
+                        .retryCreate(intent)
+                        .catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
                 }
               >
-                核对并继续
+                {intent.kind === "upload" ? "选择原文件继续" : "核对并继续"}
               </button>
             </div>
           ))}

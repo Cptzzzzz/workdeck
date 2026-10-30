@@ -2190,6 +2190,10 @@ main {
   font-size: 12px;
   color: #acbab0;
 }
+.file-tree-entry { display: flex; align-items: center; }
+.file-tree-entry .file-tree-row { min-width: 0; flex: 1; }
+.file-tree-download { flex: none; padding: 5px 8px; color: var(--muted); }
+.file-tree-download:hover { color: #eff3eb; }
 .file-tree-row:hover:not(:disabled) {
   background: #28352b;
   color: #eff3eb;

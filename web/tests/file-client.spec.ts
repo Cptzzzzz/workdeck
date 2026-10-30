@@ -154,6 +154,52 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
           loaded.bytes.some((b: number, i: number) => b !== bytes[i])
         )
           throw new Error("roundtrip mismatch");
+        const fileBytes = new Uint8Array(1024 * 1024 + 123);
+        for (let i = 0; i < fileBytes.length; i++) fileBytes[i] = i % 251;
+        const file = new File([fileBytes], "upload.bin");
+        const upload = await client.prepareUpload("upload.bin", file);
+        let chunks = 0;
+        WebSocket.prototype.send = function (data: any) {
+          if (data instanceof ArrayBuffer && ++chunks === 3) {
+            this.close();
+            return;
+          }
+          return originalSend.call(this, data);
+        };
+        let disconnected = false;
+        try {
+          await client.upload(upload, file);
+        } catch {
+          disconnected = true;
+        } finally {
+          WebSocket.prototype.send = originalSend;
+        }
+        if (!disconnected) throw new Error("upload did not disconnect");
+        client = await harness.FileClient.connect(workspace);
+        const uploadStatus = await client.operationStatus(upload.opID);
+        if (uploadStatus.offset <= 0 || uploadStatus.offset >= file.size)
+          throw new Error("upload offset was not persisted");
+        let mismatch = false;
+        try {
+          await client.upload(
+            upload,
+            new File([new Uint8Array(file.size)], file.name),
+          );
+        } catch (error) {
+          mismatch = (error as any).code === "SOURCE_MISMATCH";
+        }
+        if (!mismatch) throw new Error("different source was accepted");
+        const uploaded = await client.upload(upload, file);
+        const roundtrip = await client.readBytes(
+          "upload.bin",
+          uploaded.version,
+          file.size,
+        );
+        if (
+          roundtrip.bytes.length !== fileBytes.length ||
+          roundtrip.bytes.some((b: number, i: number) => b !== fileBytes[i])
+        )
+          throw new Error("resumed upload mismatch");
         const stale = await client.prepareSave(
           "source.txt",
           new TextEncoder().encode("changed"),
@@ -203,6 +249,83 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
         { id: terminalID, csrf },
       );
     rmSync(root, { recursive: true, force: true });
+    rmSync(bundleDir, { recursive: true, force: true });
+  }
+});
+
+test("downloads stream in bounded chunks and reject oversized browser fallback", async ({
+  page,
+}) => {
+  const bundleDir = mkdtempSync(
+    path.join(os.tmpdir(), "workdeck-download-test-"),
+  );
+  const bundle = path.join(bundleDir, "client.js");
+  try {
+    await build({
+      entryPoints: [path.resolve("tests/fixtures/file-client-harness.ts")],
+      bundle: true,
+      format: "iife",
+      platform: "browser",
+      outfile: bundle,
+    });
+    await page.goto("/");
+    await page.route("**/__download-harness.js", (route) =>
+      route.fulfill({ path: bundle, contentType: "text/javascript" }),
+    );
+    await page.addScriptTag({ url: "/__download-harness.js" });
+    const result = await page.evaluate(async () => {
+      const { downloadFile } = (window as any).workdeckFileTest;
+      let size = 1024 * 1024 + 7,
+        total = 0,
+        largest = 0,
+        closed = 0,
+        reads = 0;
+      const client = {
+        openRead: async () => ({ id: "read", entry: { size } }),
+        readChunk: async (_id: string, _offset: number, length: number) => {
+          reads++;
+          return new Uint8Array(length);
+        },
+        closeRead: async () => {
+          closed++;
+        },
+      };
+      (window as any).showSaveFilePicker = async () => ({
+        createWritable: async () => ({
+          write: async (chunk: Uint8Array) => {
+            total += chunk.length;
+            largest = Math.max(largest, chunk.length);
+          },
+          close: async () => {},
+          abort: async () => {},
+        }),
+      });
+      await downloadFile(client, "large.bin");
+      delete (window as any).showSaveFilePicker;
+      size = 21 * 1024 * 1024;
+      const before = reads;
+      let rejected = false;
+      try {
+        await downloadFile(client, "large.bin");
+      } catch (error) {
+        rejected = (error as any).code === "FILE_TOO_LARGE";
+      }
+      return {
+        total,
+        largest,
+        closed,
+        rejected,
+        fallbackReads: reads - before,
+      };
+    });
+    expect(result).toEqual({
+      total: 1024 * 1024 + 7,
+      largest: 32768,
+      closed: 2,
+      rejected: true,
+      fallbackReads: 0,
+    });
+  } finally {
     rmSync(bundleDir, { recursive: true, force: true });
   }
 });
