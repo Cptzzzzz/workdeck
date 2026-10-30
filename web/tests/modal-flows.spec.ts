@@ -39,11 +39,9 @@ test("rename and terminate use site forms; cancellation keeps the task alive", a
     await page.keyboard.insertText("export WORKDECK_MODAL_TASK=still-running");
     await page.keyboard.press("Enter");
     await page.getByRole("button", { name: "返回概览", exact: true }).click();
-    const card = page
-      .locator(".terminal-card")
-      .filter({
-        has: page.getByRole("heading", { name: initial, exact: true }),
-      });
+    const card = page.locator(".terminal-card").filter({
+      has: page.getByRole("heading", { name: initial, exact: true }),
+    });
     const openRename = async () => {
       if ((await card.locator("details").getAttribute("open")) === null)
         await card.locator("summary").click();
@@ -82,11 +80,18 @@ test("rename and terminate use site forms; cancellation keeps the task alive", a
       )
         deletions++;
     });
+    await page.getByRole("button", { name: "全屏", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => Boolean(document.fullscreenElement)))
+      .toBe(true);
     await page.getByRole("button", { name: "终止终端", exact: true }).click();
     const confirmation = page.getByRole("dialog", {
       name: "终止终端",
       exact: true,
     });
+    await expect
+      .poll(() => page.evaluate(() => Boolean(document.fullscreenElement)))
+      .toBe(false);
     await expect(confirmation).toContainText(renamed);
     await expect(confirmation).toContainText("后台任务将被结束");
     await page.screenshot({

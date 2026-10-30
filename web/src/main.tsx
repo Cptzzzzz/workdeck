@@ -178,7 +178,9 @@ function App() {
     setTabs(next);
     if (active === id) setActive(next.at(-1) || null);
   };
-  const stop = (terminal: Term) => {
+  const stop = async (terminal: Term) => {
+    if (document.fullscreenElement)
+      await document.exitFullscreen().catch(() => {});
     setTerminationTarget(terminal);
     setModal("terminate");
   };
@@ -956,6 +958,7 @@ function TerminateForm({
       <div className="form-actions">
         <button
           type="button"
+          autoFocus
           className="secondary"
           disabled={busy}
           onClick={onCancel}
