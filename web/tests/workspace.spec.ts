@@ -69,6 +69,23 @@ test("persistent terminal, mobile resize, readonly and takeover", async ({
   await type(page, "echo $WORKDECK_PERSIST; cat /tmp/workdeck-e2e-" + id);
   await screen(page, "survived-browser-reconnect");
   await screen(page, "background-task-complete");
+  // A Unicode paste larger than one allowed input frame must arrive intact.
+  await page.locator(".xterm-helper-textarea").evaluate(
+    (element, text) => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", text);
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          bubbles: true,
+          cancelable: true,
+          clipboardData,
+        }),
+      );
+    },
+    `python3 -c "print('paste-characters=' + str(len('${"汉".repeat(18000)}')))"`,
+  );
+  await page.keyboard.press("Enter");
+  await screen(page, "paste-characters=18000");
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     isMobile: true,

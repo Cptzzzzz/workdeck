@@ -3,7 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 server="${WORKDECK_SSH_TARGET:-root@server.example.com}"
-version="$(git rev-parse --short HEAD)"
+version="$(cat bin/VERSION)"
 [ -f bin/workdeck-linux-amd64 ] && [ -f web/dist/index.html ] || { echo 'Run scripts/build.sh first' >&2; exit 1; }
 cp /etc/ssl/certs/ca-certificates.crt deploy/ca-certificates.crt
 archive="$(mktemp)"

@@ -10,6 +10,16 @@ test("terminal process survives Agent and Hub service restart", async ({
     "Explicitly enable this test in the deployed acceptance environment",
   );
   test.setTimeout(150000);
+  let readyCount = 0;
+  page.on("websocket", (ws) =>
+    ws.on("framereceived", (frame) => {
+      if (typeof frame.payload === "string") {
+        try {
+          if (JSON.parse(frame.payload).type === "ready") readyCount++;
+        } catch {}
+      }
+    }),
+  );
   const password = readFileSync(
     process.env.WORKDECK_TEST_PASSWORD_FILE || "../.secrets/administrator.txt",
     "utf8",
@@ -37,18 +47,30 @@ test("terminal process survives Agent and Hub service restart", async ({
   const marker = "WORKDECK_RECOVERY_" + Date.now();
   await type(`export WORKDECK_RECOVERY=${marker}`);
   // Exercise a real alternate-screen TUI and its resize handler, not only line-oriented output.
-  const program =
-    "import curses; curses.wrapper(lambda s: (s.addstr(0,0,'TUI-ALIVE: resize and reconnect'),s.refresh(),s.getch()))";
-  await type("python3 -c " + JSON.stringify(program));
+  const program = `import curses
+def main(s):
+ while True:
+  s.erase()
+  s.addstr(0,0,'TUI-ALIVE '+str(s.getmaxyx()))
+  s.refresh()
+  if s.getch()==ord('q'): break
+curses.wrapper(main)
+`;
+  await type(
+    `python3 -c "exec(__import__('base64').b64decode('${Buffer.from(program).toString("base64")}'))"`,
+  );
   await expect(page.locator(".xterm-screen")).toContainText("TUI-ALIVE");
   await page.setViewportSize({ width: 1024, height: 768 });
+  let before = readyCount;
   execFileSync("systemctl", ["--user", "restart", "workdeck-agent.service"], {
     timeout: 20000,
   });
-  await expect(page.locator(".terminal-state")).toContainText("控制中", {
-    timeout: 45000,
-  });
+  await expect
+    .poll(() => readyCount, { timeout: 45000 })
+    .toBeGreaterThan(before);
+  await expect(page.locator(".terminal-state")).toContainText("控制中");
   await expect(page.locator(".xterm-screen")).toContainText("TUI-ALIVE");
+  before = readyCount;
   execFileSync(
     "ssh",
     [
@@ -57,9 +79,10 @@ test("terminal process survives Agent and Hub service restart", async ({
     ],
     { timeout: 30000, stdio: "pipe" },
   );
-  await expect(page.locator(".terminal-state")).toContainText("控制中", {
-    timeout: 60000,
-  });
+  await expect
+    .poll(() => readyCount, { timeout: 60000 })
+    .toBeGreaterThan(before);
+  await expect(page.locator(".terminal-state")).toContainText("控制中");
   await expect(page.locator(".xterm-screen")).toContainText("TUI-ALIVE");
   // Exit only the test TUI and verify its original parent shell still has its environment.
   await page.locator(".xterm-helper-textarea").focus();

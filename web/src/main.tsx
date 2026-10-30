@@ -72,6 +72,7 @@ async function api<T = any>(
 ): Promise<T> {
   const res = await fetch("/api" + path, {
     ...options,
+    signal: options.signal || AbortSignal.timeout(20000),
     headers: {
       "Content-Type": "application/json",
       "X-Workdeck-CSRF": csrf,
@@ -1372,7 +1373,8 @@ function TerminalView({
           disabled={readonly}
           onClick={async () => {
             try {
-              send(await navigator.clipboard.readText());
+              instance.current?.paste(await navigator.clipboard.readText());
+              instance.current?.focus();
             } catch {
               notify("请使用浏览器的粘贴功能");
             }
