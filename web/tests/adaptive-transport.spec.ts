@@ -1,5 +1,6 @@
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import {
   readState,
   selectTestNode,
@@ -353,6 +354,7 @@ test("a working but slower direct path leaves terminal traffic on the relay", as
     "requires a directly reachable test Agent",
   );
   await page.addInitScript(() => {
+    localStorage.setItem("workdeck.transport.preference.v1", "balanced");
     (window as any).__directReplies = 0;
     const Native = window.RTCPeerConnection;
     window.RTCPeerConnection = class extends Native {
@@ -408,6 +410,86 @@ test("a working but slower direct path leaves terminal traffic on the relay", as
     await expect(page.locator(".xterm-screen")).toContainText(
       "better-relay-selected",
     );
+    await terminateCurrentTerminal(page);
+  } finally {
+    await cleanup(page, id);
+  }
+});
+
+test("switching to direct preference moves a stable slower path without restarting the session", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.WORKDECK_DIRECT_ACCEPTANCE !== "1",
+    "requires a directly reachable test Agent",
+  );
+  await page.addInitScript(() => {
+    localStorage.setItem("workdeck.transport.preference.v1", "balanced");
+    const Native = window.RTCPeerConnection;
+    window.RTCPeerConnection = class extends Native {
+      createDataChannel(label: string, options?: RTCDataChannelInit) {
+        const channel = super.createDataChannel(label, options);
+        Object.defineProperty(channel, "onmessage", {
+          set(handler: (event: MessageEvent) => void) {
+            channel.addEventListener("message", (event) => {
+              let probe = false;
+              try {
+                probe = JSON.parse(event.data).type === "probe-reply";
+              } catch {}
+              if (probe) setTimeout(() => handler(event), 45);
+              else handler(event);
+            });
+          },
+        });
+        return channel;
+      }
+    };
+  });
+  let attachments = 0;
+  page.on("websocket", (socket) => {
+    if (socket.url().includes("/api/terminals/")) attachments++;
+  });
+  await login(page);
+  const id = await create(page);
+  const pane = () =>
+    execFileSync(
+      "tmux",
+      [
+        "-L",
+        `workdeck-${id}`,
+        "display-message",
+        "-p",
+        "-t",
+        "main",
+        "#{pane_pid}",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+  const pid = pane();
+  try {
+    const network = page.locator(".terminal-network");
+    await expect(network.locator("summary")).toHaveAttribute(
+      "title",
+      /自动比较/,
+      { timeout: 25000 },
+    );
+    await expect(network.locator("summary")).toContainText("WebSocket");
+    await network.locator("summary").click();
+    await network.getByLabel("链路策略").selectOption("prefer-direct");
+    await expect(network.getByLabel("链路策略")).toHaveValue("prefer-direct");
+    await page.waitForTimeout(200);
+    await page.evaluate(() =>
+      document.dispatchEvent(new Event("visibilitychange")),
+    );
+    await expect(network.locator("summary")).toContainText("WebRTC", {
+      timeout: 25000,
+    });
+    await type(page, "printf 'direct-preference-session-kept\\n'");
+    await expect(page.locator(".xterm-screen")).toContainText(
+      "direct-preference-session-kept",
+    );
+    expect(pane()).toBe(pid);
+    expect(attachments).toBe(1);
     await terminateCurrentTerminal(page);
   } finally {
     await cleanup(page, id);

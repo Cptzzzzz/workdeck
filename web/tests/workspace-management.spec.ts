@@ -129,6 +129,23 @@ test("workspace management navigates existing forms without terminating sessions
     const settings = page.getByRole("dialog", { name: "设置" });
     await settings.getByLabel("终端字号").selectOption("14");
     await expect(settings.getByLabel("终端字号")).toHaveValue("14");
+    await expect(settings.getByLabel("链路策略")).toHaveValue("prefer-direct");
+    await settings.getByLabel("链路策略").selectOption("balanced");
+    await settings.getByRole("button", { name: "关闭对话框" }).click();
+    const network = page.locator(".terminal-network");
+    await network.locator("summary").click();
+    await expect(network.getByLabel("链路策略")).toHaveValue("balanced");
+    await network.getByLabel("链路策略").selectOption("prefer-direct");
+    await network.locator("summary").click();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(settings.getByLabel("链路策略")).toHaveValue("prefer-direct");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          localStorage.getItem("workdeck.transport.preference.v1"),
+        ),
+      )
+      .toBe("prefer-direct");
     await settings.getByRole("button", { name: "关闭对话框" }).click();
     await page.getByRole("button", { name: "终端模式" }).click();
     await expect(

@@ -35,6 +35,7 @@ import type {
 } from "./types";
 import { api, setCSRF } from "./services/api";
 import { TerminalView } from "./features/terminal/terminal-view";
+import { formatBytes } from "./network-metrics";
 import {
   useWorkspace,
   type Document as WorkspaceDocument,
@@ -130,7 +131,114 @@ function status(t: Term, node?: Node) {
   };
   return states[t.state] || { text: t.state, kind: "muted" };
 }
+function RelayDownloadDialog({
+  size,
+  onClose,
+}: {
+  size: number;
+  onClose: (allow: boolean) => void;
+}) {
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    panel.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose(false);
+      }
+      if (event.key === "Tab") {
+        const buttons = Array.from(
+          panel.current?.querySelectorAll<HTMLButtonElement>(
+            "button:not(:disabled)",
+          ) || [],
+        );
+        if (!buttons.length) return;
+        if (event.shiftKey && document.activeElement === buttons[0]) {
+          event.preventDefault();
+          buttons.at(-1)?.focus();
+        } else if (
+          !event.shiftKey &&
+          document.activeElement === buttons.at(-1)
+        ) {
+          event.preventDefault();
+          buttons[0].focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("keydown", key);
+      previous?.focus();
+    };
+  }, [onClose]);
+  return (
+    <div
+      className="modal-shade"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose(false);
+      }}
+    >
+      <section
+        ref={panel}
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="确认中转下载"
+      >
+        <h2>确认中转下载</h2>
+        <p className="modal-description">
+          当前浏览器无法直接流式保存此文件。下载 {formatBytes(size)}{" "}
+          将经过主服务器，可能占用较多带宽；关闭页面后浏览器仍可能继续下载。
+        </p>
+        <div className="form-actions">
+          <button className="secondary" onClick={() => onClose(false)}>
+            取消
+          </button>
+          <button className="primary" onClick={() => onClose(true)}>
+            使用中转下载
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function App() {
+  const [relayDownload, setRelayDownload] = useState<{
+    size: number;
+    done: (allow: boolean) => void;
+  } | null>(null);
+  const relayDownloadRef = useRef(relayDownload);
+  relayDownloadRef.current = relayDownload;
+  const confirmRelayDownload = useCallback(
+    (size: number, signal?: AbortSignal) =>
+      new Promise<boolean>((resolve) => {
+        if (signal?.aborted) {
+          resolve(false);
+          return;
+        }
+        let settled = false;
+        const aborted = () => done(false);
+        const done = (allow: boolean) => {
+          if (settled) return;
+          settled = true;
+          signal?.removeEventListener("abort", aborted);
+          setRelayDownload((current) =>
+            current?.done === done ? null : current,
+          );
+          resolve(allow);
+        };
+        setRelayDownload({ size, done });
+        signal?.addEventListener("abort", aborted, { once: true });
+        if (signal?.aborted) aborted();
+      }),
+    [],
+  );
+  useEffect(() => () => relayDownloadRef.current?.done(false), []);
   const [fontSize, setFontSize] = useState(readFontSize);
   const [autoSave, setAutoSave] = useState(() => {
     try {
@@ -614,6 +722,7 @@ function App() {
         {mode === "workspace" && (
           <WorkspaceSidebar
             controller={workspace}
+            onConfirmRelayDownload={confirmRelayDownload}
             supportsPending={
               !!data.nodes
                 .find((n) => n.id === current?.node_id)
@@ -1006,6 +1115,7 @@ function App() {
         >
           {mode === "workspace" && (
             <WorkspaceEditor
+              onConfirmRelayDownload={confirmRelayDownload}
               layoutActions={
                 <div
                   className="workbench-layout-actions"
@@ -1198,6 +1308,12 @@ function App() {
             <X size={14} />
           </button>
         </div>
+      )}
+      {relayDownload && (
+        <RelayDownloadDialog
+          size={relayDownload.size}
+          onClose={relayDownload.done}
+        />
       )}
       {modal && (
         <div

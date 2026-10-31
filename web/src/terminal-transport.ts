@@ -4,6 +4,7 @@ import {
   type Route,
   type Samples,
 } from "./transport-policy";
+import { readRoutePreference } from "./transport-preferences";
 import {
   describeSamples,
   initialTransportStatus,
@@ -571,11 +572,12 @@ export class TerminalTransport {
         await new Promise((resolve) => setTimeout(resolve, 80));
       }
       if (document.hidden || this.pending) return;
-      const target = chooseRoute(relay, direct, this.active);
+      const preference = readRoutePreference();
+      const target = chooseRoute(relay, direct, this.active, preference);
       const summary = summarize(this.active === "direct" ? direct : relay);
       const rs = summarize(relay),
         ds = summarize(direct);
-      const detail = `自动比较：中转 ${rs ? Math.round(rs.median) + " ms" : "不稳定"}，直连 ${ds ? Math.round(ds.median) + " ms" : "不稳定"}；综合延迟、抖动与探测成功率选择`;
+      const detail = `${preference === "prefer-direct" ? "优先直连" : "自动比较"}：中转 ${rs ? Math.round(rs.median) + " ms" : "不稳定"}，直连 ${ds ? Math.round(ds.median) + " ms" : "不稳定"}；综合延迟、抖动与探测成功率选择`;
       this.publish({ route: this.active, latency: summary?.median, detail });
       if (target !== this.active && Date.now() - this.lastSwitch > 30000) {
         const id = crypto.randomUUID();

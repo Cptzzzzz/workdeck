@@ -466,9 +466,16 @@ test("downloads stream in bounded chunks and use a bounded browser fallback", as
         launched = this.getAttribute("href") || "";
       };
       try {
-        await downloadFile(client, "large.bin", undefined, undefined, () => {
-          browserNotice = true;
-        });
+        await downloadFile(
+          client,
+          "large.bin",
+          undefined,
+          undefined,
+          () => {
+            browserNotice = true;
+          },
+          async () => true,
+        );
       } finally {
         window.fetch = oldFetch;
         HTMLAnchorElement.prototype.click = oldClick;

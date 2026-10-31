@@ -1941,6 +1941,22 @@ main {
   max-height: min(45dvh, max(0px, calc(100dvh - 360px)));
   overflow: auto;
 }
+.network-route-preference {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+.network-route-preference select {
+  padding: 4px 7px;
+  color: #d7ded2;
+  border: 1px solid #435344;
+  border-radius: 4px;
+  background: #202a22;
+}
+.network-details > .network-measurement-note {
+  margin-bottom: 12px;
+}
 .network-current-route {
   display: flex;
   justify-content: space-between;

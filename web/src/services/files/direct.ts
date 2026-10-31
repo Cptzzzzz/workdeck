@@ -1,4 +1,5 @@
 import { chooseRoute, type Route, type Samples } from "../../transport-policy";
+import { readRoutePreference } from "../../transport-preferences";
 import { encodeControl, type Envelope } from "./protocol";
 import type { Workspace } from "./types";
 
@@ -270,7 +271,7 @@ export class FileDirect {
         new URLSearchParams(location.search).get("file_transport") ===
           "direct" && direct.every((v) => v !== null)
           ? "direct"
-          : chooseRoute(relay, direct, this.cb.route());
+          : chooseRoute(relay, direct, this.cb.route(), readRoutePreference());
       if (target !== this.cb.route() && Date.now() - this.lastSwitch > 30000) {
         await this.cb.switchRoute(target);
         this.lastSwitch = Date.now();

@@ -89,14 +89,36 @@ test("large browser-managed download uses a single-use relay ticket", async ({
       await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
-    const event = page.waitForEvent("download");
+    let tickets = 0;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        /\/api\/workspaces\/[^/]+\/downloads$/.test(request.url())
+      )
+        tickets++;
+    });
     await page
       .getByRole("button", { name: "large.bin", exact: true })
       .click({ button: "right" });
     await page
       .getByRole("menuitem", { name: "下载 large.bin", exact: true })
       .click();
+    const warning = page.getByRole("dialog", { name: "确认中转下载" });
+    await expect(warning).toContainText("关闭页面后浏览器仍可能继续下载");
+    await warning.getByRole("button", { name: "取消" }).click();
+    await expect(warning).toBeHidden();
+    expect(tickets).toBe(0);
+    await page
+      .getByRole("button", { name: "large.bin", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "下载 large.bin", exact: true })
+      .click();
+    await expect(warning).toBeVisible();
+    const event = page.waitForEvent("download");
+    await warning.getByRole("button", { name: "使用中转下载" }).click();
     const download = await event;
+    expect(tickets).toBe(1);
     await expect(
       page.getByText(/大文件下载已交给浏览器，通过服务器中转/),
     ).toBeVisible();

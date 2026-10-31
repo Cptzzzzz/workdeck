@@ -77,6 +77,7 @@ export function WorkspaceSidebar({
   onArchivedSave,
   onPendingWrites,
   onSwitchMode,
+  onConfirmRelayDownload,
   supportsPending,
 }: {
   controller: WorkspaceController;
@@ -96,6 +97,10 @@ export function WorkspaceSidebar({
   onArchivedSave: (identity: DraftIdentity, source: "page" | "stored") => void;
   onPendingWrites: () => void;
   onSwitchMode: () => void;
+  onConfirmRelayDownload: (
+    size: number,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   supportsPending: boolean;
 }) {
   const [filterInput, setFilterInput] = useState("");
@@ -742,10 +747,12 @@ export function WorkspaceSidebar({
                 onClick={() => {
                   const path = contextMenu.path;
                   setContextMenu(null);
-                  void controller.download(path).catch((e) => {
-                    if ((e as Error).name !== "AbortError")
-                      controller.reportError((e as Error).message);
-                  });
+                  void controller
+                    .download(path, onConfirmRelayDownload)
+                    .catch((e) => {
+                      if ((e as Error).name !== "AbortError")
+                        controller.reportError((e as Error).message);
+                    });
                 }}
               >
                 <Download size={14} />
@@ -1676,12 +1683,17 @@ export function WorkspaceRootForm({
 export function WorkspaceEditor({
   controller,
   layoutActions,
+  onConfirmRelayDownload,
   onCloseDocument,
   onSaveDeletedAs,
   onDiscardDeleted,
 }: {
   controller: WorkspaceController;
   layoutActions: React.ReactNode;
+  onConfirmRelayDownload: (
+    size: number,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
   onCloseDocument: (doc: Document) => void;
   onSaveDeletedAs: (doc: Document) => void;
   onDiscardDeleted: (doc: Document) => void;
@@ -2069,8 +2081,11 @@ export function WorkspaceEditor({
               preview={preview}
               onDownload={() =>
                 void controller
-                  .download(preview.path)
-                  .catch((e) => controller.reportError((e as Error).message))
+                  .download(preview.path, onConfirmRelayDownload)
+                  .catch((e) => {
+                    if ((e as Error).name !== "AbortError")
+                      controller.reportError((e as Error).message);
+                  })
               }
             />
           )}

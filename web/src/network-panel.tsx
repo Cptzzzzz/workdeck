@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { ArrowRight, ChevronDown, Radio } from "lucide-react";
 import {
   formatBytes,
@@ -9,6 +9,11 @@ import {
   type TransportStatus,
 } from "./network-metrics";
 import type { Route } from "./transport-policy";
+import {
+  readRoutePreference,
+  saveRoutePreference,
+  subscribeRoutePreference,
+} from "./transport-preferences";
 
 const stateLabel: Record<PathState, string> = {
   pending: "等待测量",
@@ -45,6 +50,10 @@ export function NetworkPanel({
   nodeName?: string;
 }) {
   const details = useRef<HTMLDetailsElement>(null);
+  const preference = useSyncExternalStore(
+    subscribeRoutePreference,
+    readRoutePreference,
+  );
   useEffect(() => {
     const dismiss = (event: PointerEvent) => {
       if (details.current && !details.current.contains(event.target as Node))
@@ -86,6 +95,25 @@ export function NetworkPanel({
         <ChevronDown className="network-expand" size={14} />
       </summary>
       <div className="network-details">
+        <label className="network-route-preference">
+          链路策略
+          <select
+            value={preference}
+            onChange={(event) =>
+              saveRoutePreference(
+                event.target.value === "balanced"
+                  ? "balanced"
+                  : "prefer-direct",
+              )
+            }
+          >
+            <option value="prefer-direct">优先直连</option>
+            <option value="balanced">平衡延迟</option>
+          </select>
+        </label>
+        <p className="network-measurement-note">
+          策略同时用于终端和文件连接；直连不稳定或延迟过高时仍自动中转，下一轮检测时生效。
+        </p>
         <div className="network-current-route" data-route={status.route}>
           <div>
             <Radio size={14} />

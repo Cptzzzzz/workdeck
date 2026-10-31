@@ -3489,7 +3489,13 @@ export function useWorkspace(
       transferAbort.current?.abort();
       setTransfer("正在取消，请等待当前数据块确认");
     },
-    download: (path: string) => {
+    download: (
+      path: string,
+      confirmRelayDownload?: (
+        size: number,
+        signal?: AbortSignal,
+      ) => Promise<boolean>,
+    ) => {
       const client = clientRef.current;
       if (renameLock.current)
         return Promise.reject(new Error("重命名期间不能开始下载"));
@@ -3509,6 +3515,10 @@ export function useWorkspace(
           setDownloadMessage(
             "大文件下载已交给浏览器，通过服务器中转；请在浏览器下载列表查看进度或取消。",
           ),
+        async (size, signal) =>
+          !!confirmRelayDownload &&
+          (await confirmRelayDownload(size, signal)) &&
+          clientRef.current === client,
       ).finally(() => {
         if (transferAbort.current === controller) transferAbort.current = null;
         setTransfer("");

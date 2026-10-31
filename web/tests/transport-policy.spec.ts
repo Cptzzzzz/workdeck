@@ -25,3 +25,53 @@ test("choose by latency and consistency, prefer direct only when competitive", (
   ).toBe("relay");
   expect(summarize([null, 1, 2])).toBeNull();
 });
+
+test("prefer direct conservatively saves relay bandwidth and still protects responsiveness", () => {
+  const fastRelay = [10, 11, 10, 11, 10, 11];
+  expect(
+    chooseRoute(fastRelay, [55, 54, 58, 52, 57, 55], "relay", "prefer-direct"),
+  ).toBe("direct");
+  expect(
+    chooseRoute(
+      fastRelay,
+      [200, 200, 201, 200, 202, 201],
+      "relay",
+      "prefer-direct",
+    ),
+  ).toBe("relay");
+  expect(
+    chooseRoute(
+      fastRelay,
+      [20, 21, 20, 21, 20, null],
+      "direct",
+      "prefer-direct",
+    ),
+  ).toBe("relay");
+  expect(
+    chooseRoute(fastRelay, [20, 20, 20, 20, 20, 500], "relay", "prefer-direct"),
+  ).toBe("relay");
+  expect(
+    chooseRoute(
+      fastRelay,
+      [110, 110, 110, 110, 110, 110],
+      "relay",
+      "prefer-direct",
+    ),
+  ).toBe("relay");
+  expect(
+    chooseRoute(
+      fastRelay,
+      [110, 110, 110, 110, 110, 110],
+      "direct",
+      "prefer-direct",
+    ),
+  ).toBe("direct");
+  expect(
+    chooseRoute(
+      [null, null, null],
+      [40, 40, 40, 40, 40, 40],
+      "relay",
+      "prefer-direct",
+    ),
+  ).toBe("direct");
+});

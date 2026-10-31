@@ -1,4 +1,5 @@
 export type Route = "relay" | "direct";
+export type RoutePreference = "balanced" | "prefer-direct";
 export type Samples = Array<number | null>;
 export function summarize(samples: Samples) {
   const values = samples
@@ -19,11 +20,27 @@ export function chooseRoute(
   relay: Samples,
   direct: Samples,
   current: Route,
+  preference: RoutePreference = "balanced",
 ): Route {
   const r = summarize(relay),
     d = summarize(direct);
   if (!d || d.failures > 0) return "relay";
   if (!r) return "direct";
+  if (preference === "prefer-direct") {
+    // Give direct connections room to be slower than a cheap relay, while
+    // refusing long or erratic paths. Wider retention limits avoid flapping.
+    const retaining = current === "direct";
+    const maxMedian = retaining ? 350 : 250;
+    const maxTail = retaining ? 500 : 400;
+    const medianMargin = retaining ? 120 : 80;
+    const tailMargin = retaining ? 180 : 120;
+    return d.median <= maxMedian &&
+      d.tail <= maxTail &&
+      d.median <= r.median + medianMargin &&
+      d.tail <= r.tail + tailMargin
+      ? "direct"
+      : "relay";
+  }
   if (current === "direct") {
     return d.median > r.median + Math.max(12, r.median * 0.3) ||
       d.tail > r.tail + Math.max(20, r.tail * 0.5)

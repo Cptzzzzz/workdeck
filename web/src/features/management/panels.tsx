@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
   LogOut,
   Plus,
@@ -13,6 +13,11 @@ import {
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
 } from "../../terminal-preferences";
+import {
+  readRoutePreference,
+  saveRoutePreference,
+  subscribeRoutePreference,
+} from "../../transport-preferences";
 
 export function SessionsPanel({
   nodes,
@@ -243,6 +248,10 @@ export function SettingsPanel({
   autoSave: boolean;
   onAutoSave: (enabled: boolean) => void;
 }) {
+  const routePreference = useSyncExternalStore(
+    subscribeRoutePreference,
+    readRoutePreference,
+  );
   return (
     <div className="management-panel">
       <div className="modal-symbol">
@@ -266,6 +275,23 @@ export function SettingsPanel({
           ))}
         </select>
       </label>
+      <label className="management-setting">
+        链路策略
+        <select
+          value={routePreference}
+          onChange={(event) =>
+            saveRoutePreference(
+              event.target.value === "balanced" ? "balanced" : "prefer-direct",
+            )
+          }
+        >
+          <option value="prefer-direct">优先直连</option>
+          <option value="balanced">平衡延迟</option>
+        </select>
+      </label>
+      <p className="modal-description">
+        优先直连允许适度增加延迟以节省主服务器带宽；不稳定或延迟过高时仍会中转。策略在下一轮检测生效。
+      </p>
       <label className="management-check">
         <input
           type="checkbox"

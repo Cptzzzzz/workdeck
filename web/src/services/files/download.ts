@@ -21,6 +21,10 @@ export async function downloadFile(
   signal?: AbortSignal,
   progress?: (done: number, total: number) => void,
   onBrowserDownload?: () => void,
+  confirmRelayDownload?: (
+    size: number,
+    signal?: AbortSignal,
+  ) => Promise<boolean>,
 ): Promise<void> {
   const name = path.split("/").pop() || "download";
   const picker = (window as Window & { showSaveFilePicker?: Picker })
@@ -37,6 +41,12 @@ export async function downloadFile(
       throw new FileServiceError("PROTOCOL_ERROR", "文件大小无效");
     if (!handle) {
       if (read.entry.size > BLOB_LIMIT) {
+        if (
+          !confirmRelayDownload ||
+          !(await confirmRelayDownload(read.entry.size, signal))
+        )
+          throw new DOMException("已取消", "AbortError");
+        checkTransferAbort(signal);
         if (!read.entry.version)
           throw new FileServiceError("PROTOCOL_ERROR", "文件版本无效");
         const ticket = await api<{ ticket: string }>(
