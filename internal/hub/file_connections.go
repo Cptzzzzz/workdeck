@@ -50,6 +50,11 @@ func (h *Hub) removeFileTicketsLocked(match func(*fileBrowserTicket) bool) {
 			delete(h.fileTickets, id)
 		}
 	}
+	for id, t := range h.downloadResumes {
+		if match(t) {
+			delete(h.downloadResumes, id)
+		}
+	}
 }
 func (h *Hub) revokeWorkspaceFiles(id string) {
 	h.mu.Lock()

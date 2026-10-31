@@ -91,6 +91,24 @@ test("large browser-managed download uses a single-use relay ticket", async ({
     );
     const replay = await page.request.get(download.url());
     expect(replay.status()).toBe(403);
+    const resumed = await page.request.get(download.url(), {
+      headers: { Range: "bytes=20971520-" },
+    });
+    expect(resumed.status()).toBe(206);
+    expect(resumed.headers()["content-range"]).toBe(
+      `bytes 20971520-${bytes.length - 1}/${bytes.length}`,
+    );
+    expect(await resumed.body()).toEqual(bytes.subarray(20971520));
+    const bounded = await page.request.get(download.url(), {
+      headers: { Range: "bytes=10-50" },
+    });
+    expect(bounded.status()).toBe(206);
+    expect(await bounded.body()).toEqual(bytes.subarray(10, 51));
+    const suffix = await page.request.get(download.url(), {
+      headers: { Range: "bytes=-31" },
+    });
+    expect(suffix.status()).toBe(206);
+    expect(await suffix.body()).toEqual(bytes.subarray(-31));
     expect(pane()).toBe(pid);
   } finally {
     if (id && csrf)

@@ -27,6 +27,43 @@ type downloadInput struct {
 	Size    int64  `json:"size"`
 }
 
+// Only one byte range is supported; each response remains bound to the
+// originally authorized file version and size.
+func downloadRange(header string, size int64) (int64, int64, bool) {
+	if size <= 0 || !strings.HasPrefix(header, "bytes=") || strings.Contains(header, ",") {
+		return 0, 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(header, "bytes="), "-")
+	if len(parts) != 2 || (parts[0] == "" && parts[1] == "") || strings.Trim(parts[0], "0123456789") != "" || strings.Trim(parts[1], "0123456789") != "" {
+		return 0, 0, false
+	}
+	if parts[0] == "" {
+		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || suffix <= 0 {
+			return 0, 0, false
+		}
+		if suffix > size {
+			suffix = size
+		}
+		return size - suffix, size, true
+	}
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, false
+	}
+	end := size - 1
+	if parts[1] != "" {
+		end, err = strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || end < start {
+			return 0, 0, false
+		}
+		if end >= size {
+			end = size - 1
+		}
+	}
+	return start, end + 1, true
+}
+
 func (h *Hub) newDownloadTicket(w http.ResponseWriter, r *http.Request, l login) {
 	var input downloadInput
 	if !decode(w, r, &input) {
@@ -116,14 +153,44 @@ func (h *Hub) downloadFile(w http.ResponseWriter, r *http.Request, l login) {
 		return
 	}
 	h.mu.Lock()
-	ticket := h.fileTickets[digest(token)]
-	delete(h.fileTickets, digest(token))
+	tokenHash := digest(token)
+	rangeHeader := r.Header.Get("Range")
+	isResume := rangeHeader != ""
+	var ticket *fileBrowserTicket
+	if isResume {
+		ticket = h.downloadResumes[tokenHash]
+	} else {
+		ticket = h.fileTickets[tokenHash]
+	}
 	if ticket == nil || ticket.mode != "download" || ticket.workspaceID != workspace.ID || ticket.terminalID != workspace.TerminalID || ticket.nodeID != workspace.NodeID || ticket.revision != workspace.Revision || ticket.loginHash != l.Hash || !ticket.expires.After(time.Now()) || h.agents[workspace.NodeID] != ticket.agent {
 		h.mu.Unlock()
 		h.authMu.Unlock()
 		lock.Unlock()
 		failure(w, 403, "下载凭证失效")
 		return
+	}
+	if !isResume {
+		delete(h.fileTickets, tokenHash)
+	}
+	start, end := int64(0), ticket.size
+	if isResume {
+		var valid bool
+		start, end, valid = downloadRange(rangeHeader, ticket.size)
+		if !valid {
+			h.mu.Unlock()
+			h.authMu.Unlock()
+			lock.Unlock()
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", ticket.size))
+			failure(w, http.StatusRequestedRangeNotSatisfiable, "下载范围无效")
+			return
+		}
+		if value := r.Header.Get("If-Range"); value != "" && value != `"`+ticket.version+`"` {
+			h.mu.Unlock()
+			h.authMu.Unlock()
+			lock.Unlock()
+			failure(w, http.StatusPreconditionFailed, "下载版本不匹配")
+			return
+		}
 	}
 	if h.fileConnections == nil {
 		h.fileConnections = make(map[string]*fileConnection)
@@ -143,6 +210,27 @@ func (h *Hub) downloadFile(w http.ResponseWriter, r *http.Request, l login) {
 		lock.Unlock()
 		failure(w, 429, "文件连接过多")
 		return
+	}
+	if !isResume {
+		if h.downloadResumes == nil {
+			h.downloadResumes = make(map[string]*fileBrowserTicket)
+		}
+		now := time.Now()
+		h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return !t.expires.After(now) })
+		// Bound retained credentials independently of short-lived connect tickets.
+		for len(h.downloadResumes) >= 1024 {
+			var oldest string
+			var expiry time.Time
+			for id, item := range h.downloadResumes {
+				if oldest == "" || item.expires.Before(expiry) {
+					oldest, expiry = id, item.expires
+				}
+			}
+			delete(h.downloadResumes, oldest)
+		}
+		resume := *ticket
+		resume.expires = now.Add(time.Hour)
+		h.downloadResumes[tokenHash] = &resume
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	c := &fileConnection{id: randomID(), workspaceID: workspace.ID, terminalID: workspace.TerminalID, nodeID: workspace.NodeID, loginHash: l.Hash, revision: workspace.Revision, agent: ticket.agent, ctx: ctx, cancel: cancel}
@@ -219,15 +307,21 @@ func (h *Hub) downloadFile(w http.ResponseWriter, r *http.Request, l login) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", disposition)
-	w.Header().Set("Content-Length", strconv.FormatInt(meta.Size, 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(end-start, 10))
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("ETag", `"`+ticket.version+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	for offset := int64(0); offset < meta.Size; {
+	if isResume {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end-1, meta.Size))
+		w.WriteHeader(http.StatusPartialContent)
+	}
+	for offset := start; offset < end; {
 		if ctx.Err() != nil {
 			return
 		}
-		length := int(min(int64(fileprotocol.MaxChunk), meta.Size-offset))
+		length := int(min(int64(fileprotocol.MaxChunk), end-offset))
 		data, err := reader.chunk(readID, offset, length)
 		if err != nil || len(data) != length {
 			return

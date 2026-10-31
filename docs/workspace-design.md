@@ -138,7 +138,7 @@ Agent 记录根目录身份并持有目录句柄。目录移动、替换或重�
 | `GET /api/agent/files`                        | Agent 带节点签名和 Hub 票据主动建立文件中转连接                       |
 | `GET /api/workspaces/{id}/operations/{opId}`  | 认证后查询变更操作结果；Hub 经控制请求转发，支持数据连接重建后的恢复  |
 | `POST /api/workspaces/{id}/downloads`         | 仅在浏览器无法流式落盘时，明确申请兼容下载票据；不替代正常文件连接    |
-| `GET /api/workspaces/{id}/downloads/{ticket}` | 一次性、需登录的兼容下载，Hub 从 Agent 流式转发，并明确显示服务器中转 |
+| `GET /api/workspaces/{id}/downloads/{ticket}` | 需登录的兼容下载，首次完整请求只能使用一次；随后允许受限范围续传，Hub 从 Agent 流式转发，并明确显示服务器中转 |
 
 浏览器票据和 Agent 票据分别生成，15 秒有效、单次使用，不可互用；绑定登录、节点、终端来源、工作区、根目录修订和连接代次。票据只用于握手，不写入普通日志。文件连接不依赖浏览器成为终端控制者，也不依赖终端必须处于 running。
 
@@ -235,6 +235,8 @@ PDF 通过 `PDFDataRangeTransport` 把范围请求映射到 FileClient，而不�
 图片通过 FileClient 读取为 Blob URL，限制文件及解码尺寸，在切换或缓存淘汰时释放。Monaco、PDF.js 及 worker 均延迟加载并自托管。CSP 按所需增加本站 worker 和受控 Blob 资源，不使用全局放宽策略。
 
 下载不能把任意大小的文件全部拼成 Blob。支持文件选择和可写流的桌面浏览器可由用户选择目标后，把 FileClient 的数据块直接写盘；相关 API 尚非所有浏览器通用，需能力检测。无该能力时，小文件使用有上限的 Blob，大文件提供明确的兼容中转下载，不宣称该次下载节省了 Hub 流量。[浏览器文件选择接口](https://developer.mozilla.org/en-US/docs/Web/API/Window/showSaveFilePicker)
+
+兼容下载首次请求后，Hub 在内存中保留最多一小时的范围续传授权，绑定原登录、节点连接、工作区修订、文件版本和大小；普通完整请求不能重放。续传请求支持单个字节范围，每次重新打开文件并验证版本；浏览器提供的 `If-Range` 不匹配时拒绝，避免拼接不同版本。退出登录、节点撤权、工作区切换和 Hub 重启会使授权失效；下载管理器是否自动续传取决于浏览器，授权失效时需要重新下载。
 
 ## 编辑保存和并发冲突
 

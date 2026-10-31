@@ -65,6 +65,7 @@ type Hub struct {
 	workspaceLocks      [64]sync.Mutex
 	workspaceRecovering map[string]bool
 	fileTickets         map[string]*fileBrowserTicket
+	downloadResumes     map[string]*fileBrowserTicket
 	filePending         map[string]*fileAgentTicket
 	fileConnections     map[string]*fileConnection
 }
