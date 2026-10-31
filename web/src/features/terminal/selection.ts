@@ -94,6 +94,16 @@ export function installTerminalSelection(term: Terminal): () => void {
     const copyShortcut = mac
       ? event.metaKey && !event.ctrlKey
       : event.ctrlKey && !event.metaKey;
+    // Let the browser's native paste event deliver the local clipboard text;
+    // sending Ctrl+V to a remote Codex makes it inspect the node's clipboard.
+    if (
+      event.type === "keydown" &&
+      event.key.toLowerCase() === "v" &&
+      copyShortcut &&
+      !event.altKey &&
+      !event.shiftKey
+    )
+      return false;
     if (
       event.type === "keydown" &&
       event.key.toLowerCase() === "c" &&
