@@ -12,6 +12,8 @@ export type EditorViewState = {
   scrollTop: number;
   scrollLeft: number;
 };
+export type WorkspaceViewScope = Omit<DraftIdentity, "path">;
+export type WorkspaceTabs = { paths: string[]; selected: string | null };
 const database = "workdeck-workspace-views",
   store = "pdf-views";
 const queues = new Map<string, Promise<void>>();
@@ -191,6 +193,104 @@ export function writeEditorView(
           tx.oncomplete = () => resolve();
           tx.onabort = () =>
             reject(tx.error || new Error("保存编辑器视图失败"));
+          tx.onerror = () => {};
+        });
+      } finally {
+        db.close();
+      }
+    });
+  queues.set(id, next);
+  void next
+    .finally(() => {
+      if (queues.get(id) === next) queues.delete(id);
+    })
+    .catch(() => {});
+  return next;
+}
+
+function tabsKey(scope: WorkspaceViewScope): string {
+  return (
+    "tabs:" +
+    JSON.stringify([
+      scope.account,
+      scope.nodeID,
+      scope.workspaceID,
+      scope.rootRevision,
+    ])
+  );
+}
+function validTabs(value: unknown): value is WorkspaceTabs {
+  const v = value as WorkspaceTabs | null;
+  const validPath = (p: unknown) =>
+    typeof p === "string" &&
+    p.length > 0 &&
+    p.length <= 4096 &&
+    !p.includes("\0") &&
+    !p.startsWith("/") &&
+    p.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+  return (
+    !!v &&
+    Array.isArray(v.paths) &&
+    v.paths.length <= 1000 &&
+    v.paths.every(validPath) &&
+    new Set(v.paths).size === v.paths.length &&
+    (v.selected === null ||
+      (validPath(v.selected) && v.paths.includes(v.selected)))
+  );
+}
+export async function readWorkspaceTabs(
+  scope: WorkspaceViewScope,
+): Promise<WorkspaceTabs | undefined> {
+  const id = tabsKey(scope);
+  try {
+    const session = sessionStorage.getItem("workdeck-view:" + id);
+    if (session) {
+      const value: unknown = JSON.parse(session);
+      if (validTabs(value)) return value;
+    }
+  } catch {
+    /* IndexedDB remains the fallback. */
+  }
+  await queues.get(id)?.catch(() => {});
+  const db = await open();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(store, "readonly"),
+        request = tx.objectStore(store).get(id);
+      request.onsuccess = () =>
+        resolve(validTabs(request.result) ? request.result : undefined);
+      request.onerror = () =>
+        reject(request.error || new Error("读取文件标签失败"));
+      tx.onabort = () => reject(tx.error || new Error("读取文件标签失败"));
+    });
+  } finally {
+    db.close();
+  }
+}
+export function writeWorkspaceTabs(
+  scope: WorkspaceViewScope,
+  value: WorkspaceTabs,
+): Promise<void> {
+  if (!validTabs(value))
+    return Promise.reject(new Error("文件标签状态无效或数量超过限制"));
+  const id = tabsKey(scope),
+    snapshot = { paths: [...value.paths], selected: value.selected };
+  try {
+    sessionStorage.setItem("workdeck-view:" + id, JSON.stringify(snapshot));
+  } catch {
+    /* IndexedDB remains the fallback. */
+  }
+  const prior = queues.get(id) || Promise.resolve();
+  const next = prior
+    .catch(() => {})
+    .then(async () => {
+      const db = await open();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(store, "readwrite");
+          tx.objectStore(store).put(snapshot, id);
+          tx.oncomplete = () => resolve();
+          tx.onabort = () => reject(tx.error || new Error("保存文件标签失败"));
           tx.onerror = () => {};
         });
       } finally {

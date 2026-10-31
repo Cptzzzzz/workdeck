@@ -33,6 +33,12 @@ test("automatic save is opt-in and stops on external conflict", async ({
         send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
           if (
             typeof data === "string" &&
+            this.url.includes("/api/workspaces/") &&
+            JSON.parse(data).type === "file.write.commit"
+          )
+            (window as any).__activeFileSocket = this;
+          if (
+            typeof data === "string" &&
             (window as any).__delayNextCommit &&
             JSON.parse(data).type === "file.write.commit"
           ) {
@@ -124,7 +130,7 @@ test("automatic save is opt-in and stops on external conflict", async ({
     await expect
       .poll(() => readFileSync(file, "utf8"), { timeout: 15000 })
       .toBe("newer edit\n");
-    await page.evaluate(() => (window as any).__fileSockets.at(-1).close());
+    await page.evaluate(() => (window as any).__activeFileSocket.close());
     await expect(page.getByText("文件连接已断开，正在尝试恢复")).toBeVisible();
     await replace("offline draft\n");
     await page.waitForTimeout(1800);

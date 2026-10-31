@@ -35,6 +35,12 @@ import type {
 import type { TerminalRecord } from "../../types";
 import { downloadFile } from "../../services/files/download";
 import { previewKind } from "./preview-utils";
+import {
+  readWorkspaceTabs,
+  writeWorkspaceTabs,
+  type WorkspaceViewScope,
+  type WorkspaceTabs,
+} from "../../services/files/view-state";
 
 type Directory = { entries: FileEntry[]; truncated: boolean };
 export type Document = {
@@ -117,6 +123,19 @@ export function useWorkspace(
   const activeIntents = useRef(new Set<string>());
   const transferAbort = useRef<AbortController | null>(null);
   const renameLock = useRef(false);
+  const tabInteraction = useRef(0);
+  const restoringTabs = useRef<{ scope: string; closed: Set<string> } | null>(
+    null,
+  );
+  const [tabsReady, setTabsReady] = useState("");
+  const lastTabs = useRef("");
+  const [unrestoredTabs, setUnrestoredTabs] = useState<string[]>([]);
+  const pendingTabs = useRef<{
+    scope: string;
+    paths: string[];
+    selected: string | null;
+    interaction: number;
+  } | null>(null);
   const [revision, render] = useReducer((n: number) => n + 1, 0);
   const update = useCallback(() => render(), []);
 
@@ -564,7 +583,7 @@ export function useWorkspace(
     [expanded, loadDirectory],
   );
   const openFile = useCallback(
-    async (path: string) => {
+    async (path: string, restore = false) => {
       if (renameLock.current) return;
       const client = clientRef.current,
         w = workspace;
@@ -578,18 +597,48 @@ export function useWorkspace(
         path,
       };
       const key = documentKey(identity);
+      const resolvePending = () => {
+        const scope = JSON.stringify({
+          account,
+          nodeID: terminal.node_id,
+          workspaceID: w.id,
+          rootRevision: w.root_revision,
+        });
+        const pending = pendingTabs.current;
+        if (
+          !restore &&
+          pending?.scope === scope &&
+          pending.paths.includes(path)
+        ) {
+          pending.paths = pending.paths.filter((item) => item !== path);
+          if (pending.selected === path) pending.selected = null;
+          setUnrestoredTabs([...pending.paths]);
+        }
+      };
+      const restoration = restore ? restoringTabs.current : null;
+      if (!restore) tabInteraction.current++;
+      const allowed = () =>
+        gen === generation.current &&
+        (!restore ||
+          (!!restoration &&
+            restoringTabs.current === restoration &&
+            !restoration.closed.has(path)));
       if (docs.current.has(key)) {
-        selections.current.set(w.id, key);
-        setSelected(key);
+        if (!restore) {
+          resolvePending();
+          selections.current.set(w.id, key);
+          setSelected(key);
+        }
         return;
       }
       try {
         const kind = previewKind(path);
         if (kind) {
           const entry = await client.stat(path);
-          if (gen !== generation.current) return;
+          if (!allowed()) return;
           if (entry.kind !== "file" || !entry.version)
             throw new Error("文件无法预览");
+          if (previews.current.has(key) && restore) return;
           previews.current.set(key, {
             identity,
             path,
@@ -597,8 +646,11 @@ export function useWorkspace(
             version: entry.version,
             size: entry.size,
           });
-          selections.current.set(w.id, key);
-          setSelected(key);
+          if (!restore) {
+            resolvePending();
+            selections.current.set(w.id, key);
+            setSelected(key);
+          }
           update();
           return;
         }
@@ -669,7 +721,15 @@ export function useWorkspace(
           saved.encoding = bom ? "utf8-bom" : "utf8";
           saved.newline = crlf ? "crlf" : "lf";
         }
-        if (gen !== generation.current) return;
+        if (!allowed()) return;
+        if (docs.current.has(key)) {
+          if (!restore) {
+            resolvePending();
+            selections.current.set(w.id, key);
+            setSelected(key);
+          }
+          return;
+        }
         const doc: Document = {
           identity,
           path,
@@ -691,18 +751,185 @@ export function useWorkspace(
           persistenceError,
         };
         docs.current.set(key, doc);
-        selections.current.set(w.id, key);
-        setSelected(key);
+        if (!restore) {
+          resolvePending();
+          selections.current.set(w.id, key);
+          setSelected(key);
+        }
         update();
       } catch (e) {
-        if (gen === generation.current) setError((e as Error).message);
+        if (!restore && gen === generation.current)
+          setError((e as Error).message);
       }
     },
     [workspace, terminal?.id, terminal?.node_id, account, update],
   );
+  const tabScope: WorkspaceViewScope | null =
+    workspace && terminal && account
+      ? {
+          account,
+          nodeID: terminal.node_id,
+          workspaceID: workspace.id,
+          rootRevision: workspace.root_revision,
+        }
+      : null;
+  const tabScopeKey = tabScope ? JSON.stringify(tabScope) : "";
+  useEffect(() => {
+    setTabsReady("");
+    setUnrestoredTabs([]);
+    lastTabs.current = "";
+    if (!enabled || !tabScope || !workspace || !clientRef.current) return;
+    const scope = tabScope;
+    const current = { scope: tabScopeKey, closed: new Set<string>() };
+    restoringTabs.current = current;
+    const startInteraction = tabInteraction.current;
+    let cancelled = false;
+    let loaded = false;
+    let previous: WorkspaceTabs | undefined;
+    const flushRestoring = () => {
+      if (!loaded || cancelled || restoringTabs.current !== current) return;
+      const items = [
+        ...docs.current.values(),
+        ...previews.current.values(),
+      ].filter(
+        (item) =>
+          item.identity.account === scope.account &&
+          item.identity.nodeID === scope.nodeID &&
+          item.identity.workspaceID === scope.workspaceID &&
+          item.identity.rootRevision === scope.rootRevision,
+      );
+      const paths = Array.from(
+        new Set([
+          ...(previous?.paths || []).filter(
+            (path) => !current.closed.has(path),
+          ),
+          ...items.map((item) => item.path),
+        ]),
+      );
+      const selectedID = selections.current.get(scope.workspaceID);
+      const selected =
+        tabInteraction.current === startInteraction &&
+        previous?.selected &&
+        paths.includes(previous.selected)
+          ? previous.selected
+          : items.find((item) => documentKey(item.identity) === selectedID)
+              ?.path || null;
+      void writeWorkspaceTabs(scope, { paths, selected }).catch((e) =>
+        setError("无法保存文件标签状态：" + (e as Error).message),
+      );
+    };
+    window.addEventListener("pagehide", flushRestoring);
+    const run = async () => {
+      try {
+        const saved = await readWorkspaceTabs(scope);
+        if (cancelled || restoringTabs.current !== current) return;
+        previous = saved;
+        loaded = true;
+        const failed: string[] = [];
+        for (const path of saved?.paths || []) {
+          if (cancelled || restoringTabs.current !== current) return;
+          if (current.closed.has(path)) continue;
+          await openFile(path, true);
+          if (cancelled || restoringTabs.current !== current) return;
+          const id = documentKey({ ...scope, path });
+          if (
+            !current.closed.has(path) &&
+            !docs.current.has(id) &&
+            !previews.current.has(id)
+          )
+            failed.push(path);
+        }
+        if (cancelled || restoringTabs.current !== current) return;
+        const selectedID = saved?.selected
+          ? documentKey({ ...scope, path: saved.selected })
+          : null;
+        if (
+          tabInteraction.current === startInteraction &&
+          selectedID &&
+          (docs.current.has(selectedID) || previews.current.has(selectedID))
+        ) {
+          selections.current.set(scope.workspaceID, selectedID);
+          setSelected(selectedID);
+        }
+        const missing = failed.filter((path) => {
+          const id = documentKey({ ...scope, path });
+          return (
+            !current.closed.has(path) &&
+            !docs.current.has(id) &&
+            !previews.current.has(id)
+          );
+        });
+        pendingTabs.current = {
+          scope: tabScopeKey,
+          paths: missing,
+          selected: missing.includes(saved?.selected || "")
+            ? saved!.selected
+            : null,
+          interaction: startInteraction,
+        };
+        setUnrestoredTabs(missing);
+        restoringTabs.current = null;
+        setTabsReady(tabScopeKey);
+      } catch (e) {
+        if (!cancelled && restoringTabs.current === current) {
+          restoringTabs.current = null;
+          setError("无法读取文件标签状态：" + (e as Error).message);
+        }
+      }
+    };
+    void run();
+    return () => {
+      flushRestoring();
+      cancelled = true;
+      window.removeEventListener("pagehide", flushRestoring);
+      if (restoringTabs.current === current) restoringTabs.current = null;
+    };
+  }, [enabled, tabScopeKey, openFile]);
+  useEffect(() => {
+    if (!tabScope || !tabScopeKey || tabsReady !== tabScopeKey) return;
+    const scope = tabScope;
+    const saveTabs = () => {
+      const items = [
+        ...docs.current.values(),
+        ...previews.current.values(),
+      ].filter(
+        (item) =>
+          item.identity.account === scope.account &&
+          item.identity.nodeID === scope.nodeID &&
+          item.identity.workspaceID === scope.workspaceID &&
+          item.identity.rootRevision === scope.rootRevision,
+      );
+      const missing =
+        pendingTabs.current?.scope === tabScopeKey ? pendingTabs.current : null;
+      const paths = Array.from(
+        new Set([...items.map((item) => item.path), ...(missing?.paths || [])]),
+      );
+      const selectedID = selections.current.get(scope.workspaceID);
+      const selectedPath =
+        items.find((item) => documentKey(item.identity) === selectedID)?.path ||
+        (missing && missing.interaction === tabInteraction.current
+          ? missing.selected
+          : null);
+      const state = { paths, selected: selectedPath };
+      const snapshot = JSON.stringify(state);
+      if (lastTabs.current === snapshot) return;
+      lastTabs.current = snapshot;
+      void writeWorkspaceTabs(scope, state).catch((e) => {
+        if (lastTabs.current === snapshot) lastTabs.current = "";
+        setError("无法保存文件标签状态：" + (e as Error).message);
+      });
+    };
+    saveTabs();
+    window.addEventListener("pagehide", saveTabs);
+    return () => {
+      window.removeEventListener("pagehide", saveTabs);
+      saveTabs();
+    };
+  }, [tabScopeKey, tabsReady, selected, revision]);
   const selectedDocument = selected ? docs.current.get(selected) : undefined;
   const openDeletedDraft = useCallback(
     async (identity: DraftIdentity) => {
+      tabInteraction.current++;
       const w = workspace;
       if (
         !w ||
@@ -747,6 +974,7 @@ export function useWorkspace(
   );
   const openRecoverableDraft = useCallback(
     async (identity: DraftIdentity) => {
+      tabInteraction.current++;
       const client = clientRef.current,
         w = workspace,
         gen = generation.current;
@@ -916,6 +1144,8 @@ export function useWorkspace(
         await queues.current.get(id)?.catch(() => {});
         if (!doc.token) throw new Error("草稿令牌不可用");
         await deleteDraft(doc.identity, doc.token);
+        tabInteraction.current++;
+        restoringTabs.current?.closed.add(doc.path);
         docs.current.delete(id);
         if (selections.current.get(doc.identity.workspaceID) === id)
           selections.current.delete(doc.identity.workspaceID);
@@ -1414,6 +1644,8 @@ export function useWorkspace(
             old.filter((d) => documentKey(d) !== id),
           );
         }
+        tabInteraction.current++;
+        restoringTabs.current?.closed.add(doc.path);
         docs.current.delete(id);
         const next =
           [...docs.current.entries(), ...previews.current.entries()]
@@ -1445,6 +1677,8 @@ export function useWorkspace(
         renameLock.current
       )
         return;
+      tabInteraction.current++;
+      restoringTabs.current?.closed.add(preview.path);
       previews.current.delete(id);
       const next =
         [...docs.current.entries(), ...previews.current.entries()]
@@ -2666,6 +2900,14 @@ export function useWorkspace(
     retryCreate: runCreateIntent,
     reportError: setError,
     selected,
+    unrestoredTabs,
+    forgetUnrestoredTabs: () => {
+      if (pendingTabs.current?.scope !== tabScopeKey) return;
+      pendingTabs.current.paths = [];
+      pendingTabs.current.selected = null;
+      setUnrestoredTabs([]);
+      update();
+    },
     document,
     preview,
     client: clientRef.current,
@@ -2693,6 +2935,7 @@ export function useWorkspace(
     closePreview,
     retry,
     select: (id: string) => {
+      tabInteraction.current++;
       if (workspace) selections.current.set(workspace.id, id);
       setSelected(id);
     },

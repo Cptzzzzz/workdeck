@@ -588,13 +588,46 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       } catch {
         editorRejected = true;
       }
+      const scope = {
+        account: id.account,
+        nodeID: id.nodeID,
+        workspaceID: id.workspaceID,
+        rootRevision: id.rootRevision,
+      };
+      await Promise.all([
+        views.writeWorkspaceTabs(scope, {
+          paths: ["first.txt"],
+          selected: "first.txt",
+        }),
+        views.writeWorkspaceTabs(scope, {
+          paths: ["first.txt", "dir/second.pdf"],
+          selected: "dir/second.pdf",
+        }),
+      ]);
+      let tabsRejected = false;
+      try {
+        await views.writeWorkspaceTabs(scope, {
+          paths: ["../outside"],
+          selected: null,
+        });
+      } catch {
+        tabsRejected = true;
+      }
+      const editor = await views.readEditorView(id),
+        tabs = await views.readWorkspaceTabs(scope);
+      sessionStorage.clear();
       return {
         a: await views.readPDFView(id),
         b: await views.readPDFView(other),
         rejected,
-        editor: await views.readEditorView(id),
+        editor,
+        editorFromDatabase: await views.readEditorView(id),
         editorOther: await views.readEditorView(other),
         editorRejected,
+        tabs,
+        tabsFromDatabase: await views.readWorkspaceTabs(scope),
+        tabsOther: await views.readWorkspaceTabs({ ...scope, rootRevision: 2 }),
+        tabsRejected,
       };
     });
     expect(viewState).toEqual({
@@ -602,8 +635,19 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       b: { page: 1, zoom: 1, scrollTop: 0, scrollLeft: 0 },
       rejected: true,
       editor: { line: 8, column: 9, scrollTop: 10, scrollLeft: 11 },
+      editorFromDatabase: { line: 8, column: 9, scrollTop: 10, scrollLeft: 11 },
       editorOther: undefined,
       editorRejected: true,
+      tabs: {
+        paths: ["first.txt", "dir/second.pdf"],
+        selected: "dir/second.pdf",
+      },
+      tabsFromDatabase: {
+        paths: ["first.txt", "dir/second.pdf"],
+        selected: "dir/second.pdf",
+      },
+      tabsOther: undefined,
+      tabsRejected: true,
     });
     const migration = await page.evaluate(async () => {
       const drafts = (window as any).workdeckFileTest.drafts;

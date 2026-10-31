@@ -595,6 +595,16 @@ export function WorkspaceEditor({
           <button onClick={controller.retry}>重新连接</button>
         </div>
       )}
+      {controller.unrestoredTabs.length > 0 && (
+        <div className="workbench-notice" role="status">
+          以下文件标签暂时无法恢复：{controller.unrestoredTabs.join("、")}
+          。本地草稿仍会保留。
+          <button onClick={controller.retry}>重试恢复</button>
+          <button onClick={controller.forgetUnrestoredTabs}>
+            移除未恢复的标签
+          </button>
+        </div>
+      )}
       {doc?.pending && (
         <div className="workbench-notice">
           保存结果待确认，本地草稿已保留。

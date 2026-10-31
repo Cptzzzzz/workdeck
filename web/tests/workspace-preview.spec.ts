@@ -95,6 +95,26 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
       (window as any).previewRevokes++;
       revoke(url);
     };
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (data) {
+      if (
+        typeof data === "string" &&
+        this.url.includes("/api/workspaces/") &&
+        sessionStorage.getItem("test-delay-guide")
+      ) {
+        const message = JSON.parse(data);
+        if (
+          message.type === "file.read.open" &&
+          message.payload?.path === "guide.md"
+        ) {
+          sessionStorage.removeItem("test-delay-guide");
+          (window as any).__restoreDelayed = true;
+          window.setTimeout(() => send.call(this, data), 2500);
+          return;
+        }
+      }
+      return send.call(this, data);
+    };
   });
   let id = "",
     csrf = "";
@@ -245,9 +265,9 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
     await page.reload();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
-    await page
-      .getByRole("button", { name: "document.pdf", exact: true })
-      .click();
+    await expect(
+      page.locator(".workbench-tab.active .workbench-tab-select"),
+    ).toHaveAttribute("title", "document.pdf");
     await expect(page.getByText("2 / 2", { exact: true })).toBeVisible();
     await expect(page.getByText("156%", { exact: true })).toBeVisible();
     await expect
@@ -282,7 +302,9 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
     await page.reload();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
-    await page.getByRole("button", { name: "long.txt", exact: true }).click();
+    await expect(
+      page.locator(".workbench-tab.active .workbench-tab-select"),
+    ).toHaveAttribute("title", "long.txt");
     await expect(page.locator(".monaco-editor .view-lines")).toContainText(
       "MARKline-160",
     );
@@ -292,6 +314,66 @@ test("safe Markdown, images and PDF use the workspace connection", async ({
     await expect
       .poll(() => readFileSync(path.join(dir, "long.txt"), "utf8"))
       .toContain("MARKSECONDline-160");
+    const longContent = readFileSync(path.join(dir, "long.txt"), "utf8");
+    rmSync(path.join(dir, "long.txt"));
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(
+      page.getByText("以下文件标签暂时无法恢复：", { exact: false }),
+    ).toContainText("long.txt");
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(
+      page.getByText("以下文件标签暂时无法恢复：", { exact: false }),
+    ).toContainText("long.txt");
+    writeFileSync(path.join(dir, "long.txt"), longContent);
+    await page.getByRole("button", { name: "重试恢复" }).click();
+    await expect(
+      page.locator(".workbench-tab.active .workbench-tab-select"),
+    ).toHaveAttribute("title", "long.txt");
+    await expect(page.locator(".monaco-editor .view-lines")).toContainText(
+      "MARKSECONDline-160",
+    );
+    rmSync(path.join(dir, "long.txt"));
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(
+      page.getByText("以下文件标签暂时无法恢复：", { exact: false }),
+    ).toContainText("long.txt");
+    await page.getByRole("button", { name: "移除未恢复的标签" }).click();
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(
+      page.getByText("以下文件标签暂时无法恢复：", { exact: false }),
+    ).toHaveCount(0);
+    await page.locator('.workbench-tab-select[title="guide.md"]').click();
+    await page.evaluate(() => sessionStorage.setItem("test-delay-guide", "1"));
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect
+      .poll(() => page.evaluate(() => !!(window as any).__restoreDelayed))
+      .toBe(true);
+    await page.locator('.file-tree-row[title="pixel.png"]').click();
+    await expect(
+      page.locator(".workbench-tab.active .workbench-tab-select"),
+    ).toHaveAttribute("title", "pixel.png");
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(
+      page.locator('.workbench-tab-select[title="guide.md"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('.workbench-tab-select[title="document.pdf"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator(".workbench-tab.active .workbench-tab-select"),
+    ).toHaveAttribute("title", "pixel.png");
     const resourceStatuses = await page.evaluate(async () =>
       Promise.all([
         fetch("/assets/pdfjs/standard_fonts/LiberationSans-Regular.ttf").then(
