@@ -77,6 +77,15 @@ export function WorkspaceSidebar({
   onArchivedIntent: (intent: CreateIntent) => void;
   onArchivedSave: (identity: DraftIdentity, source: "page" | "stored") => void;
 }) {
+  const [filterInput, setFilterInput] = useState("");
+  const [visibleCounts, setVisibleCounts] = useState<Map<string, number>>(
+    new Map(),
+  );
+  useEffect(() => {
+    setFilterInput(
+      controller.directoryFilters.get(controller.selectedDirectory) || "",
+    );
+  }, [controller.selectedDirectory, controller.directoryFilters]);
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadTarget = useRef<{
     parent: string;
@@ -99,94 +108,120 @@ export function WorkspaceSidebar({
     if (!listing) return null;
     return (
       <>
-        {listing.entries.map((entry) => {
-          const child = controller.childPath(path, entry.name),
-            folder = entry.kind === "directory",
-            open = controller.expanded.has(child);
-          return (
-            <div key={child}>
-              <div className="file-tree-entry">
-                <button
-                  className={
-                    "file-tree-row " +
-                    (folder && controller.selectedDirectory === child
-                      ? "selected-directory"
-                      : "")
-                  }
-                  style={{ paddingLeft: 12 + depth * 15 }}
-                  disabled={entry.restricted}
-                  title={entry.restricted ? "此文件类型暂不可操作" : child}
-                  onClick={() =>
-                    void (folder
-                      ? controller.toggle(child)
-                      : controller.openFile(child))
-                  }
-                >
-                  {folder ? (
-                    open ? (
-                      <ChevronDown size={13} />
-                    ) : (
-                      <ChevronRight size={13} />
-                    )
-                  ) : (
-                    <span className="file-tree-spacer" />
-                  )}
-                  {folder ? <Folder size={15} /> : <File size={15} />}
-                  <span>{entry.name}</span>
-                </button>
-                {!entry.restricted && (folder || entry.kind === "file") && (
+        {listing.filter && (
+          <div
+            className="file-tree-filter-status"
+            style={{ paddingLeft: 12 + depth * 15 }}
+          >
+            已筛选：{listing.filter}
+            {listing.entries.length === 0 && "（无匹配项）"}
+          </div>
+        )}
+        {listing.entries
+          .slice(0, visibleCounts.get(path) || 200)
+          .map((entry) => {
+            const child = controller.childPath(path, entry.name),
+              folder = entry.kind === "directory",
+              open = controller.expanded.has(child);
+            return (
+              <div key={child}>
+                <div className="file-tree-entry">
                   <button
-                    className="file-tree-download"
-                    title={`重命名 ${entry.name}`}
-                    aria-label={`重命名 ${entry.name}`}
-                    disabled={
-                      !controller.supportsRename ||
-                      controller.renaming ||
-                      !controller.fileReady
+                    className={
+                      "file-tree-row " +
+                      (folder && controller.selectedDirectory === child
+                        ? "selected-directory"
+                        : "")
                     }
-                    onClick={() => onRename(child)}
-                  >
-                    <Pencil size={13} />
-                  </button>
-                )}
-                {!entry.restricted && (folder || entry.kind === "file") && (
-                  <button
-                    className="file-tree-download"
-                    title={`删除 ${entry.name}`}
-                    aria-label={`删除 ${entry.name}`}
-                    disabled={
-                      !controller.supportsDelete ||
-                      controller.renaming ||
-                      !controller.fileReady
-                    }
-                    onClick={() => onDelete(child, folder)}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                )}
-                {!folder && entry.kind === "file" && !entry.restricted && (
-                  <button
-                    className="file-tree-download"
-                    title={`下载 ${entry.name}`}
-                    aria-label={`下载 ${entry.name}`}
-                    disabled={!!controller.transfer}
+                    style={{ paddingLeft: 12 + depth * 15 }}
+                    disabled={entry.restricted}
+                    title={entry.restricted ? "此文件类型暂不可操作" : child}
                     onClick={() =>
-                      void controller.download(child).catch((e) => {
-                        if ((e as Error).name !== "AbortError")
-                          controller.reportError((e as Error).message);
-                      })
+                      void (folder
+                        ? controller.toggle(child)
+                        : controller.openFile(child))
                     }
                   >
-                    <Download size={14} />
+                    {folder ? (
+                      open ? (
+                        <ChevronDown size={13} />
+                      ) : (
+                        <ChevronRight size={13} />
+                      )
+                    ) : (
+                      <span className="file-tree-spacer" />
+                    )}
+                    {folder ? <Folder size={15} /> : <File size={15} />}
+                    <span>{entry.name}</span>
                   </button>
-                )}
+                  {!entry.restricted && (folder || entry.kind === "file") && (
+                    <button
+                      className="file-tree-download"
+                      title={`重命名 ${entry.name}`}
+                      aria-label={`重命名 ${entry.name}`}
+                      disabled={
+                        !controller.supportsRename ||
+                        controller.renaming ||
+                        !controller.fileReady
+                      }
+                      onClick={() => onRename(child)}
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  )}
+                  {!entry.restricted && (folder || entry.kind === "file") && (
+                    <button
+                      className="file-tree-download"
+                      title={`删除 ${entry.name}`}
+                      aria-label={`删除 ${entry.name}`}
+                      disabled={
+                        !controller.supportsDelete ||
+                        controller.renaming ||
+                        !controller.fileReady
+                      }
+                      onClick={() => onDelete(child, folder)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                  {!folder && entry.kind === "file" && !entry.restricted && (
+                    <button
+                      className="file-tree-download"
+                      title={`下载 ${entry.name}`}
+                      aria-label={`下载 ${entry.name}`}
+                      disabled={!!controller.transfer}
+                      onClick={() =>
+                        void controller.download(child).catch((e) => {
+                          if ((e as Error).name !== "AbortError")
+                            controller.reportError((e as Error).message);
+                        })
+                      }
+                    >
+                      <Download size={14} />
+                    </button>
+                  )}
+                </div>
+                {folder && open && renderDirectory(child, depth + 1)}
               </div>
-              {folder && open && renderDirectory(child, depth + 1)}
-            </div>
-          );
-        })}
+            );
+          })}
+        {listing.entries.length > (visibleCounts.get(path) || 200) && (
+          <button
+            className="file-tree-more"
+            onClick={() =>
+              setVisibleCounts((old) =>
+                new Map(old).set(path, (old.get(path) || 200) + 200),
+              )
+            }
+          >
+            显示更多（剩余{" "}
+            {listing.entries.length - (visibleCounts.get(path) || 200)} 项）
+          </button>
+        )}
         {listing.truncated && (
-          <div className="file-tree-warning">目录条目过多，显示结果已截断</div>
+          <div className="file-tree-warning">
+            目录扫描或结果数量达到上限，列表可能不完整。可选择此目录并按名称筛选。
+          </div>
         )}
       </>
     );
@@ -288,6 +323,55 @@ export function WorkspaceSidebar({
         </button>
       ) : (
         <div className="workbench-hint">选择一个终端以浏览其工作目录</div>
+      )}
+      {controller.workspace && (
+        <form
+          className="file-tree-filter"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setVisibleCounts((old) =>
+              new Map(old).set(controller.selectedDirectory, 200),
+            );
+            void controller.filterDirectory(
+              controller.selectedDirectory,
+              filterInput,
+            );
+          }}
+        >
+          <label
+            htmlFor="directory-filter"
+            title={controller.selectedDirectory}
+          >
+            筛选所选目录：{controller.selectedDirectory}
+          </label>
+          <div>
+            <input
+              id="directory-filter"
+              value={filterInput}
+              maxLength={64}
+              placeholder="按名称筛选"
+              disabled={!controller.fileReady}
+              onChange={(event) => setFilterInput(event.target.value)}
+            />
+            <button type="submit" disabled={!controller.fileReady}>
+              筛选
+            </button>
+          </div>
+          {controller.directoryFilters.get(controller.selectedDirectory) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterInput("");
+                void controller.filterDirectory(
+                  controller.selectedDirectory,
+                  "",
+                );
+              }}
+            >
+              清除筛选
+            </button>
+          )}
+        </form>
       )}
       <div className="file-tree">{renderDirectory(".", 0)}</div>
       {controller.deletedDrafts.length > 0 && (

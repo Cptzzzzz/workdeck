@@ -234,6 +234,10 @@ func (e *Engine) List(ctx context.Context, id string, revision int64, name strin
 		return result, fail("NOT_DIRECTORY", "所选路径不是目录")
 	}
 	scanned := 0
+	maxScanned := 20000
+	if filter != "" {
+		maxScanned = 200000
+	}
 	for {
 		if err = ctx.Err(); err != nil {
 			return result, err
@@ -241,7 +245,7 @@ func (e *Engine) List(ctx context.Context, id string, revision int64, name strin
 		items, readErr := dir.ReadDir(128)
 		for _, item := range items {
 			scanned++
-			if scanned > 20000 {
+			if scanned > maxScanned {
 				result.Truncated = true
 				break
 			}
@@ -251,6 +255,10 @@ func (e *Engine) List(ctx context.Context, id string, revision int64, name strin
 			}
 			if filter != "" && !strings.Contains(strings.ToLower(raw), strings.ToLower(filter)) {
 				continue
+			}
+			if len(result.Entries) >= 20000 {
+				result.Truncated = true
+				break
 			}
 			info, err := r.root.Lstat(path.Join(name, raw))
 			if err != nil {

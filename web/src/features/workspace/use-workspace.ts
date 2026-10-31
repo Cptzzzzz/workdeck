@@ -48,7 +48,7 @@ import {
   type WorkspaceTabs,
 } from "../../services/files/view-state";
 
-type Directory = { entries: FileEntry[]; truncated: boolean };
+type Directory = { entries: FileEntry[]; truncated: boolean; filter: string };
 export type Document = {
   identity: DraftIdentity;
   path: string;
@@ -108,6 +108,11 @@ export function useWorkspace(
   );
   const [error, setError] = useState("");
   const [directories, setDirectories] = useState<Record<string, Directory>>({});
+  const [directoryFilters, setDirectoryFilters] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const directoryFilterRef = useRef(new Map<string, string>());
+  const directoryRequests = useRef(new Map<string, number>());
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["."]));
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedDirectory, setSelectedDirectory] = useState(".");
@@ -227,25 +232,49 @@ export function useWorkspace(
 
   const loadDirectory = useCallback(
     async (client: FileClient, path: string, gen: number) => {
+      const filter = directoryFilterRef.current.get(path) || "";
+      const request = (directoryRequests.current.get(path) || 0) + 1;
+      directoryRequests.current.set(path, request);
       let snapshot = "",
         offset = 0,
         truncated = false;
       const entries: FileEntry[] = [];
       do {
-        const page = await client.list(path, false, "", snapshot, offset);
+        const page = await client.list(path, false, filter, snapshot, offset);
         entries.push(...page.entries);
         truncated = page.truncated;
         snapshot = page.snapshot;
         offset = page.next;
         if (!page.has_more) break;
       } while (entries.length < 20000);
-      if (gen === generation.current)
+      if (
+        gen === generation.current &&
+        directoryRequests.current.get(path) === request
+      )
         setDirectories((previous) => ({
           ...previous,
-          [path]: { entries, truncated },
+          [path]: { entries, truncated, filter },
         }));
     },
     [],
+  );
+  const filterDirectory = useCallback(
+    async (path: string, filter: string) => {
+      const client = clientRef.current,
+        gen = generation.current;
+      if (!client || renameLock.current) return;
+      directoryFilterRef.current = new Map(directoryFilterRef.current).set(
+        path,
+        filter,
+      );
+      setDirectoryFilters(directoryFilterRef.current);
+      try {
+        await loadDirectory(client, path, gen);
+      } catch (e) {
+        if (gen === generation.current) setError((e as Error).message);
+      }
+    },
+    [loadDirectory],
   );
   useEffect(() => {
     const gen = ++generation.current;
@@ -254,6 +283,9 @@ export function useWorkspace(
       retry = 0;
     setWorkspace(null);
     setDirectories({});
+    directoryFilterRef.current = new Map();
+    directoryRequests.current = new Map();
+    setDirectoryFilters(new Map());
     setExpanded(new Set(["."]));
     setSelected(null);
     setSelectedDirectory(".");
@@ -3267,6 +3299,8 @@ export function useWorkspace(
     fileMetrics,
     error,
     directories,
+    directoryFilters,
+    filterDirectory,
     expanded,
     selectedDirectory,
     selectDirectory: setSelectedDirectory,

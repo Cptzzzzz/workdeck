@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -398,6 +399,33 @@ func TestPathListingFiltersAndCancellation(t *testing.T) {
 	_, err = f.e.List(canceled, f.w.ID, 1, ".", false, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestDirectoryFilterSearchesBeyondUnfilteredLimit(t *testing.T) {
+	f := setupFiles(t)
+	for i := 0; i < 20001; i++ {
+		if err := os.WriteFile(filepath.Join(f.root, fmt.Sprintf("entry-%05d", i)), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir, err := os.Open(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := dir.ReadDir(20001)
+	dir.Close()
+	if err != nil || len(entries) != 20001 {
+		t.Fatal(len(entries), err)
+	}
+	name := entries[20000].Name()
+	ordinary, err := f.e.List(context.Background(), f.w.ID, 1, ".", false, "")
+	if err != nil || !ordinary.Truncated || len(ordinary.Entries) != 20000 {
+		t.Fatal(len(ordinary.Entries), ordinary.Truncated, err)
+	}
+	filtered, err := f.e.List(context.Background(), f.w.ID, 1, ".", false, name)
+	if err != nil || filtered.Truncated || len(filtered.Entries) != 1 || filtered.Entries[0].Name != name {
+		t.Fatal(filtered, err)
 	}
 }
 
