@@ -11,6 +11,20 @@ export type PairSummary = {
   requestsReceived?: number;
   responsesSent?: number;
 };
+export type RtcNodeReport = {
+  sampleMs: number;
+  gathering: string;
+  ice: string;
+  connection: string;
+  stunServers: number;
+  localCandidates: CandidateCounts;
+  remoteCandidates: CandidateCounts;
+  remoteReceived: number;
+  remoteApplied: number;
+  remoteRejected: number;
+  remotePending: number;
+  pairs: PairSummary[] | null;
+};
 export type RtcReport = {
   schema: 1;
   startedAt: number;
@@ -22,6 +36,7 @@ export type RtcReport = {
   connection: string;
   channel: string;
   trickle?: boolean;
+  node?: RtcNodeReport;
   localCandidates: CandidateCounts;
   remoteCandidates: CandidateCounts;
   gatherMs?: number;
@@ -196,6 +211,53 @@ export function cleanReport(value: unknown): RtcReport | undefined {
     stunErrorCodes: [],
   };
   if (typeof raw.trickle === "boolean") result.trickle = raw.trickle;
+  if (raw.node && typeof raw.node === "object") {
+    const node = raw.node as Record<string, unknown>;
+    const nested = cleanReport({
+      schema: 1,
+      startedAt: raw.startedAt,
+      elapsedMs: 0,
+      stage: "unknown",
+      outcome: "unknown",
+      gathering: node.gathering,
+      ice: node.ice,
+      connection: node.connection,
+      channel: "new",
+      localCandidates: node.localCandidates,
+      remoteCandidates: node.remoteCandidates,
+      pairs: node.pairs,
+    });
+    const sampleMs = count(node.sampleMs);
+    const stunServers = count(node.stunServers);
+    const remoteReceived = count(node.remoteReceived);
+    const remoteApplied = count(node.remoteApplied);
+    const remoteRejected = count(node.remoteRejected);
+    const remotePending = count(node.remotePending);
+    if (
+      nested &&
+      sampleMs !== undefined &&
+      stunServers !== undefined &&
+      remoteReceived !== undefined &&
+      remoteApplied !== undefined &&
+      remoteRejected !== undefined &&
+      remotePending !== undefined
+    ) {
+      result.node = {
+        sampleMs,
+        gathering: nested.gathering,
+        ice: nested.ice,
+        connection: nested.connection,
+        stunServers: Math.min(stunServers, 4),
+        localCandidates: nested.localCandidates,
+        remoteCandidates: nested.remoteCandidates,
+        remoteReceived: Math.min(remoteReceived, 128),
+        remoteApplied: Math.min(remoteApplied, 128),
+        remoteRejected: Math.min(remoteRejected, 128),
+        remotePending: Math.min(remotePending, 128),
+        pairs: nested.pairs,
+      };
+    }
+  }
   for (const field of [
     "gatherMs",
     "offerMs",
@@ -302,7 +364,7 @@ export class RtcRecorder {
     return Math.max(0, Math.round(performance.now() - this.started));
   }
   private publish() {
-    this.report.elapsedMs = this.elapsed();
+    if (!this.finished) this.report.elapsedMs = this.elapsed();
     const safe = cleanReport(this.report);
     if (!safe) return;
     if (this.finished || this.report.outcome === "available")
@@ -376,6 +438,12 @@ export class RtcRecorder {
     for (const [key, value] of Object.entries(counts))
       this.report.remoteCandidates[key] =
         (this.report.remoteCandidates[key] || 0) + value;
+    this.publish();
+  }
+  nodeDiagnostic(node: unknown) {
+    const safe = cleanReport({ ...this.report, node });
+    if (!safe?.node) return;
+    this.report.node = safe.node;
     this.publish();
   }
   stunError(code: number) {

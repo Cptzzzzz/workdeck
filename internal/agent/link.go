@@ -41,6 +41,8 @@ type terminalLink struct {
 	remoteReady          bool
 	remoteCandidates     []webrtc.ICECandidateInit
 	remoteCandidateCount int
+	remoteApplied        int
+	remoteRejected       int
 }
 
 func stunURLs() []string {
@@ -231,10 +233,14 @@ func (l *terminalLink) addRemoteCandidate(c protocol.ICECandidate) {
 		l.remoteCandidates = append(l.remoteCandidates, candidate)
 		return
 	}
-	_ = l.peer.AddICECandidate(candidate)
+	if err := l.peer.AddICECandidate(candidate); err != nil {
+		l.remoteRejected++
+	} else {
+		l.remoteApplied++
+	}
 }
 
-func (l *terminalLink) negotiate(sdp string, trickle bool) {
+func (l *terminalLink) negotiate(sdp string, trickle bool, diagnostics bool) {
 	l.mu.Lock()
 	if l.offered || l.closed || os.Getenv("WORKDECK_DIRECT") == "0" || len(sdp) > 60000 {
 		l.mu.Unlock()
@@ -243,13 +249,13 @@ func (l *terminalLink) negotiate(sdp string, trickle bool) {
 	l.offered = true
 	l.mu.Unlock()
 	go func() {
-		if err := l.answer(sdp, trickle); err != nil && l.ctx.Err() == nil {
+		if err := l.answer(sdp, trickle, diagnostics); err != nil && l.ctx.Err() == nil {
 			_ = l.ws.JSON(protocol.Frame{Type: "rtc-unavailable"})
 		}
 	}()
 }
 
-func (l *terminalLink) answer(sdp string, trickle bool) error {
+func (l *terminalLink) answer(sdp string, trickle bool, diagnostics bool) error {
 	settings := webrtc.SettingEngine{}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6})
 	settings.SetSCTPMaxMessageSize(65536)
@@ -307,7 +313,11 @@ func (l *terminalLink) answer(sdp string, trickle bool) error {
 	}
 	l.mu.Lock()
 	for _, candidate := range l.remoteCandidates {
-		_ = peer.AddICECandidate(candidate)
+		if err := peer.AddICECandidate(candidate); err != nil {
+			l.remoteRejected++
+		} else {
+			l.remoteApplied++
+		}
 	}
 	l.remoteCandidates = nil
 	l.remoteReady = true
@@ -366,5 +376,8 @@ func (l *terminalLink) answer(sdp string, trickle bool) error {
 	}
 	candidateMu.Unlock()
 	succeeded = err == nil
+	if succeeded && diagnostics {
+		go l.sampleRTC(peer)
+	}
 	return err
 }

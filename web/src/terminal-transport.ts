@@ -20,6 +20,7 @@ type Frame = {
   sdp?: string;
   ice_servers?: string[];
   rtc_trickle?: boolean;
+  node_diagnostic?: unknown;
   candidate?: RTCIceCandidateInit;
 };
 type Payload = string | Uint8Array;
@@ -381,6 +382,14 @@ export class TerminalTransport {
       else this.remoteCandidates.push(frame.candidate);
       return;
     }
+    if (
+      frame.type === "rtc-diagnostic" &&
+      route === "relay" &&
+      frame.node_diagnostic
+    ) {
+      this.rtc?.nodeDiagnostic(frame.node_diagnostic);
+      return;
+    }
     if (frame.type === "rtc-unavailable") {
       this.abandon("agent_unavailable");
       return;
@@ -599,6 +608,7 @@ export class TerminalTransport {
             type: "rtc-offer",
             sdp: peer.localDescription.sdp,
             rtc_trickle: trickle,
+            rtc_diagnostics: true,
           }),
         );
         offerSent = true;

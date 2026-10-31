@@ -100,6 +100,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     browserCandidates = 0,
     nodeCandidates = 0,
     trickleOffer = false;
+  let nodeDiagnostic: Record<string, any> | undefined;
   page.on("websocket", (ws) => {
     ws.on("framesent", (frame) => {
       if (typeof frame.payload !== "string") return;
@@ -117,6 +118,8 @@ test("automatic direct path carries terminal bytes; failure falls back without r
         try {
           const payload = JSON.parse(frame.payload);
           if (payload.type === "ready") readyCount++;
+          if (payload.type === "rtc-diagnostic")
+            nodeDiagnostic = payload.node_diagnostic;
           if (payload.type === "rtc-candidate" && payload.candidate?.candidate)
             nodeCandidates++;
         } catch {}
@@ -146,6 +149,34 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       expect(trickleOffer).toBe(true);
       await expect.poll(() => browserCandidates).toBeGreaterThan(0);
       await expect.poll(() => nodeCandidates).toBeGreaterThan(0);
+    }
+    if (process.env.WORKDECK_NODE_DIAGNOSTIC_ACCEPTANCE === "1") {
+      await expect
+        .poll(() => nodeDiagnostic?.remoteApplied ?? 0)
+        .toBeGreaterThan(0);
+      expect(nodeDiagnostic).toMatchObject({
+        gathering: expect.any(String),
+        ice: expect.any(String),
+        localCandidates: expect.any(Object),
+        pairs: expect.any(Array),
+      });
+      const keys = Object.keys(nodeDiagnostic!).sort();
+      expect(keys).toEqual(
+        [
+          "connection",
+          "gathering",
+          "ice",
+          "localCandidates",
+          "pairs",
+          "remoteApplied",
+          "remoteCandidates",
+          "remotePending",
+          "remoteReceived",
+          "remoteRejected",
+          "sampleMs",
+          "stunServers",
+        ].sort(),
+      );
     }
     await expect(page.locator(".xterm-screen")).toContainText("handover-11");
     const screen = await page.locator(".xterm-screen").innerText();

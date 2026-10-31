@@ -44,6 +44,44 @@ class FakeWebSocket {
           }),
         30,
       );
+    if (frame.type === "rtc-offer")
+      setTimeout(
+        () =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              type: "rtc-diagnostic",
+              node_diagnostic: {
+                sampleMs: 2700,
+                gathering: "complete",
+                ice: "checking",
+                connection: "connecting",
+                stunServers: 1,
+                localCandidates: { "host/udp": 2 },
+                remoteCandidates: { "srflx/udp": 1 },
+                remoteReceived: 3,
+                remoteApplied: 2,
+                remoteRejected: 1,
+                remotePending: 0,
+                pairs: [
+                  {
+                    local: "host/udp",
+                    remote: "srflx/udp",
+                    state: "in-progress",
+                    count: 1,
+                    requestsSent: 9,
+                    responsesReceived: 0,
+                    requestsReceived: 5,
+                    responsesSent: 5,
+                    id: "private-local-id",
+                    address: "192.0.2.19",
+                  },
+                ],
+                sdp: "private-password",
+              },
+            }),
+          }),
+        2800,
+      );
   }
   close() {
     if (this.readyState === 3) return;

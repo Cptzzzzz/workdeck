@@ -82,18 +82,46 @@ type ICECandidate struct {
 	UsernameFragment *string `json:"usernameFragment,omitempty"`
 }
 
+// RTCNodePair contains only candidate categories and counters, never addresses or IDs.
+type RTCNodePair struct {
+	Local             string `json:"local"`
+	Remote            string `json:"remote"`
+	State             string `json:"state"`
+	Count             int    `json:"count"`
+	RequestsSent      uint64 `json:"requestsSent"`
+	RequestsReceived  uint64 `json:"requestsReceived"`
+	ResponsesSent     uint64 `json:"responsesSent"`
+	ResponsesReceived uint64 `json:"responsesReceived"`
+}
+type RTCNodeDiagnostic struct {
+	SampleMs         int64          `json:"sampleMs"`
+	Gathering        string         `json:"gathering"`
+	ICE              string         `json:"ice"`
+	Connection       string         `json:"connection"`
+	STUNServers      int            `json:"stunServers"`
+	LocalCandidates  map[string]int `json:"localCandidates"`
+	RemoteCandidates map[string]int `json:"remoteCandidates"`
+	RemoteReceived   int            `json:"remoteReceived"`
+	RemoteApplied    int            `json:"remoteApplied"`
+	RemoteRejected   int            `json:"remoteRejected"`
+	RemotePending    int            `json:"remotePending"`
+	Pairs            []RTCNodePair  `json:"pairs"`
+}
+
 type Frame struct {
-	Type       string        `json:"type"`
-	Cols       uint16        `json:"cols,omitempty"`
-	Rows       uint16        `json:"rows,omitempty"`
-	Bytes      int           `json:"bytes,omitempty"`
-	ReadOnly   bool          `json:"readonly"`
-	Message    string        `json:"message,omitempty"`
-	ID         string        `json:"id,omitempty"`
-	SDP        string        `json:"sdp,omitempty"`
-	Route      string        `json:"route,omitempty"`
-	Padding    string        `json:"padding,omitempty"`
-	ICEServers []string      `json:"ice_servers,omitempty"`
-	RTCTrickle bool          `json:"rtc_trickle,omitempty"`
-	Candidate  *ICECandidate `json:"candidate,omitempty"`
+	Type           string             `json:"type"`
+	Cols           uint16             `json:"cols,omitempty"`
+	Rows           uint16             `json:"rows,omitempty"`
+	Bytes          int                `json:"bytes,omitempty"`
+	ReadOnly       bool               `json:"readonly"`
+	Message        string             `json:"message,omitempty"`
+	ID             string             `json:"id,omitempty"`
+	SDP            string             `json:"sdp,omitempty"`
+	Route          string             `json:"route,omitempty"`
+	Padding        string             `json:"padding,omitempty"`
+	ICEServers     []string           `json:"ice_servers,omitempty"`
+	RTCDiagnostics bool               `json:"rtc_diagnostics,omitempty"`
+	NodeDiagnostic *RTCNodeDiagnostic `json:"node_diagnostic,omitempty"`
+	RTCTrickle     bool               `json:"rtc_trickle,omitempty"`
+	Candidate      *ICECandidate      `json:"candidate,omitempty"`
 }

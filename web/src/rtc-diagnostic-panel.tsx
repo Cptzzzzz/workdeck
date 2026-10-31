@@ -136,6 +136,53 @@ export function RtcDiagnosticPanel({
             ))}
           </div>
         )}
+        <div className="rtc-node-diagnostic">
+          <p>
+            <strong>节点侧诊断</strong>
+          </p>
+          {report.node ? (
+            <>
+              <p>
+                采样时间：节点发送应答后 {elapsed(report.node.sampleMs)} · 收集{" "}
+                {report.node.gathering} · ICE {report.node.ice} · 连接{" "}
+                {report.node.connection}
+              </p>
+              <p>
+                已配置 STUN 数量：{report.node.stunServers} · 节点候选：
+                {counts(report.node.localCandidates)} · 已知浏览器候选：
+                {counts(report.node.remoteCandidates)}
+              </p>
+              <p>
+                增量候选消息：接收 {report.node.remoteReceived} / 应用{" "}
+                {report.node.remoteApplied} / 失败 {report.node.remoteRejected}{" "}
+                / 等待 {report.node.remotePending}（含收集结束标记；不含 SDP
+                中的候选）
+              </p>
+              {report.node.pairs === null ? (
+                <p>节点未提供候选对统计。</p>
+              ) : report.node.pairs.length === 0 ? (
+                <p>节点采样时没有候选对。</p>
+              ) : (
+                <div className="rtc-pair-list">
+                  {report.node.pairs.map((pair, index) => (
+                    <p key={index}>
+                      {pair.local} → {pair.remote} · {pair.state} · 发请求{" "}
+                      {pair.requestsSent ?? "—"} / 收响应{" "}
+                      {pair.responsesReceived ?? "—"} · 收请求{" "}
+                      {pair.requestsReceived ?? "—"} / 发响应{" "}
+                      {pair.responsesSent ?? "—"}
+                    </p>
+                  ))}
+                </div>
+              )}
+              <p>
+                节点候选对逐条展示，但不能仅靠类型将其与浏览器候选对一一对应。计数不能确定丢包位置。
+              </p>
+            </>
+          ) : (
+            <p>尚未收到节点统计；旧版节点不支持此功能。</p>
+          )}
+        </div>
         <button
           type="button"
           onClick={() =>
