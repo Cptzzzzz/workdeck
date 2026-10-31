@@ -9,6 +9,7 @@ import {
   type TransportStatus,
 } from "./network-metrics";
 import type { Route } from "./transport-policy";
+import { RtcDiagnosticPanel } from "./rtc-diagnostic-panel";
 import {
   readRoutePreference,
   saveRoutePreference,
@@ -45,16 +46,40 @@ function age(timestamp?: number) {
 export function NetworkPanel({
   status,
   nodeName,
+  onRetryDirect,
 }: {
   status: TransportStatus;
   nodeName?: string;
+  onRetryDirect?: () => void;
 }) {
   const details = useRef<HTMLDetailsElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
   const preference = useSyncExternalStore(
     subscribeRoutePreference,
     readRoutePreference,
   );
   useEffect(() => {
+    const fitPopup = () => {
+      const anchor = details.current,
+        panel = popup.current;
+      if (!anchor?.open || !panel) return;
+      const bounds = anchor.getBoundingClientRect();
+      panel.style.right = "0px";
+      const rect = panel.getBoundingClientRect();
+      if (rect.left < 12) panel.style.right = `${rect.left - 12}px`;
+      else if (rect.right > window.innerWidth - 12)
+        panel.style.right = `${rect.right - window.innerWidth + 12}px`;
+      const above = bounds.top - 20;
+      if (above < 160 && window.innerHeight - bounds.bottom > above) {
+        panel.style.top = "calc(100% + 8px)";
+        panel.style.bottom = "auto";
+        panel.style.maxHeight = `${Math.max(0, Math.min(500, window.innerHeight - bounds.bottom - 20))}px`;
+      } else {
+        panel.style.top = "auto";
+        panel.style.bottom = "calc(100% + 8px)";
+        panel.style.maxHeight = `${Math.max(0, Math.min(500, above))}px`;
+      }
+    };
     const dismiss = (event: PointerEvent) => {
       if (details.current && !details.current.contains(event.target as Node))
         details.current.open = false;
@@ -68,9 +93,17 @@ export function NetworkPanel({
     };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("keydown", key);
+    window.addEventListener("resize", fitPopup);
+    window.addEventListener("workdeck:resize-end", fitPopup);
+    const anchor = details.current;
+    const onToggle = () => requestAnimationFrame(fitPopup);
+    anchor?.addEventListener("toggle", onToggle);
     return () => {
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("keydown", key);
+      window.removeEventListener("resize", fitPopup);
+      window.removeEventListener("workdeck:resize-end", fitPopup);
+      anchor?.removeEventListener("toggle", onToggle);
     };
   }, []);
   return (
@@ -94,7 +127,7 @@ export function NetworkPanel({
         </span>
         <ChevronDown className="network-expand" size={14} />
       </summary>
-      <div className="network-details">
+      <div className="network-details" ref={popup}>
         <label className="network-route-preference">
           链路策略
           <select
@@ -201,6 +234,19 @@ export function NetworkPanel({
           {latencyBenefit(status.relay, status.direct)}
         </p>
         <p className="network-selection">{status.detail}</p>
+        <RtcDiagnosticPanel
+          current={status.rtcDiagnostic}
+          previous={status.previousRtcDiagnostic}
+        />
+        {onRetryDirect &&
+          status.route === "relay" &&
+          ["unavailable", "timeout", "cooldown"].includes(
+            status.direct.state,
+          ) && (
+            <button type="button" className="secondary" onClick={onRetryDirect}>
+              重新检测直连（重连此终端）
+            </button>
+          )}
         <p className="network-measurement-note">
           延迟为浏览器到计算节点的往返时间，取最近最多 12
           次探测的中位数；抖动为相邻有效探测的延迟变化均值。每 5

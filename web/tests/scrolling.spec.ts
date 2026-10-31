@@ -85,7 +85,7 @@ for (const route of ["relay", "direct"] as const)
     ).id;
     try {
       if (route === "direct")
-        await expect(page.locator(".terminal-network summary")).toContainText(
+        await expect(page.locator(".terminal-network > summary")).toContainText(
           "WebRTC",
           {
             timeout: 25000,

@@ -5,6 +5,7 @@ import {
   type Samples,
 } from "./transport-policy";
 import { readRoutePreference } from "./transport-preferences";
+import { loadRtcReport, RtcRecorder } from "./rtc-diagnostics";
 import {
   describeSamples,
   initialTransportStatus,
@@ -27,6 +28,9 @@ type Probe = {
   timer: ReturnType<typeof setTimeout>;
 };
 const cooldown = new Map<string, number>();
+export function clearDirectCooldown(node: string) {
+  cooldown.delete(node);
+}
 
 // The WebSocket remains the authorization lease even when terminal bytes go
 // directly to the Agent. Losing it closes the peer, preserving Hub revocation.
@@ -36,6 +40,8 @@ export class TerminalTransport {
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   private peer: RTCPeerConnection | null = null;
+  private rtc?: RtcRecorder;
+  private rtcSampling?: ReturnType<typeof setInterval>;
   private channel: RTCDataChannel | null = null;
   private active: Route = "relay";
   private closed = false;
@@ -86,8 +92,10 @@ export class TerminalTransport {
     private report: (state: TransportStatus) => void,
     node: string,
     private reportProbe?: (route: Route, rtt: number | null) => void,
+    private terminalID = "",
   ) {
     this.key = node;
+    this.status.previousRtcDiagnostic = loadRtcReport(terminalID);
     this.ws = new WebSocket(url);
     this.ws.binaryType = "arraybuffer";
     this.publish({
@@ -237,6 +245,8 @@ export class TerminalTransport {
   private dispose() {
     if (this.closed) return;
     this.closed = true;
+    if (this.rtcSampling) clearInterval(this.rtcSampling);
+    this.rtc?.cancel();
     document.removeEventListener("visibilitychange", this.onVisible);
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.clear();
@@ -253,8 +263,11 @@ export class TerminalTransport {
     this.peer?.close();
   }
 
-  private fallback() {
+  private fallback(reason = "route_interrupted") {
     if (this.closed) return;
+    if (this.peer) this.rtc?.states(this.peer, this.channel);
+    this.rtc?.finish(reason);
+    if (this.rtcSampling) clearInterval(this.rtcSampling);
     cooldown.set(this.key, Date.now() + 120000);
     this.publish({
       detail: "直连不稳定，正在恢复服务器中转",
@@ -269,13 +282,16 @@ export class TerminalTransport {
     this.ws.close();
   }
 
-  private abandon() {
+  private abandon(reason = "channel_closed") {
     if (this.closed) return;
     if (this.active === "direct" || this.pending) {
-      this.fallback();
+      this.fallback(reason);
       return;
     }
     const peer = this.peer;
+    if (peer) this.rtc?.states(peer, this.channel);
+    this.rtc?.finish(reason);
+    if (this.rtcSampling) clearInterval(this.rtcSampling);
     this.peer = null;
     this.channel = null;
     peer?.close();
@@ -320,14 +336,21 @@ export class TerminalTransport {
     }
     if (frame.type === "rtc-answer" && route === "relay") {
       const peer = this.peer;
-      if (peer && frame.sdp)
+      if (peer && frame.sdp) {
+        this.rtc?.remoteDescription(frame.sdp);
         void peer
           .setRemoteDescription({ type: "answer", sdp: frame.sdp })
-          .catch(() => this.abandon());
+          .then(() => {
+            if (this.peer === peer) this.rtc?.mark("answer_received");
+          })
+          .catch(() => {
+            if (this.peer === peer) this.abandon("answer_error");
+          });
+      }
       return;
     }
     if (frame.type === "rtc-unavailable") {
-      this.abandon();
+      this.abandon("agent_unavailable");
       return;
     }
     if (frame.type === "route-ready") {
@@ -414,6 +437,9 @@ export class TerminalTransport {
       return;
     }
     this.attempted = true;
+    this.rtc = new RtcRecorder(this.terminalID, (current, previous) =>
+      this.publish({ rtcDiagnostic: current, previousRtcDiagnostic: previous }),
+    );
     this.publish({
       direct: {
         ...this.status.direct,
@@ -430,27 +456,56 @@ export class TerminalTransport {
       this.peer = peer;
       const channel = peer.createDataChannel("workdeck", { ordered: true });
       this.channel = channel;
+      this.rtc?.mark("gathering");
+      this.rtc?.states(peer, channel);
+      this.rtcSampling = setInterval(() => {
+        if (this.peer === peer) void this.rtc?.sample(peer);
+      }, 2000);
+      peer.onicecandidate = (event) => {
+        if (this.peer === peer && event.candidate)
+          this.rtc?.localCandidate(event.candidate);
+      };
+      peer.onicecandidateerror = (event) => {
+        if (this.peer === peer) this.rtc?.stunError(event.errorCode);
+      };
+      peer.onicegatheringstatechange = () => {
+        if (this.peer === peer) this.rtc?.states(peer, channel);
+      };
+      peer.oniceconnectionstatechange = () => {
+        if (this.peer === peer) {
+          this.rtc?.states(peer, channel);
+          if (peer.iceConnectionState === "checking")
+            void this.rtc?.sample(peer);
+        }
+      };
       channel.binaryType = "arraybuffer";
       channel.onmessage = (event) => this.receive("direct", event.data);
       channel.onclose = () => {
-        if (this.peer === peer) this.abandon();
+        if (this.peer === peer) this.abandon("channel_closed");
       };
       channel.onerror = () => {
-        if (this.peer === peer) this.abandon();
+        if (this.peer === peer) this.abandon("channel_error");
       };
       peer.onconnectionstatechange = () => {
+        if (this.peer === peer) this.rtc?.states(peer, channel);
         if (
           this.peer === peer &&
           ["failed", "closed"].includes(peer.connectionState)
         )
-          this.abandon();
+          this.abandon(
+            peer.connectionState === "failed" ? "ice_failed" : "peer_closed",
+          );
       };
       const deadline = this.later(() => {
-        if (channel.readyState !== "open") this.abandon();
+        if (channel.readyState !== "open") this.abandon("timeout");
       }, 18000);
       channel.onopen = () => {
         clearTimeout(deadline);
         if (this.closed || this.peer !== peer) return;
+        this.rtc?.states(peer, channel);
+        this.rtc?.mark("channel_open");
+        void this.rtc?.sample(peer);
+        if (this.rtcSampling) clearInterval(this.rtcSampling);
         void this.compare();
       };
       await peer.setLocalDescription(await peer.createOffer());
@@ -470,13 +525,15 @@ export class TerminalTransport {
         const timer = setTimeout(done, 5000);
         peer.addEventListener("icegatheringstatechange", changed);
       });
-      if (!this.closed && this.peer === peer && peer.localDescription)
+      if (!this.closed && this.peer === peer && peer.localDescription) {
         this.rawSend(
           "relay",
           JSON.stringify({ type: "rtc-offer", sdp: peer.localDescription.sdp }),
         );
+        this.rtc?.mark("offer_sent");
+      }
     } catch {
-      this.abandon();
+      this.abandon("setup_error");
     }
   }
 
@@ -556,9 +613,11 @@ export class TerminalTransport {
     this.checking = true;
     try {
       if (!(await this.isDirectPair())) {
-        this.abandon();
+        this.abandon("not_direct");
         return;
       }
+      this.rtc?.available();
+      this.rtc?.mark("comparing");
       const relay: Samples = [],
         direct: Samples = [];
       for (let i = 0; i < 6; i++) {

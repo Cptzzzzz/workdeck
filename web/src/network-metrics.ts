@@ -1,4 +1,5 @@
 import type { Route } from "./transport-policy";
+import type { RtcReport } from "./rtc-diagnostics";
 
 export type PathState =
   | "pending"
@@ -31,6 +32,8 @@ export type TransportStatus = {
   relay: PathMetrics;
   direct: PathMetrics;
   traffic: Record<Route, Traffic>;
+  rtcDiagnostic?: RtcReport;
+  previousRtcDiagnostic?: RtcReport;
 };
 export function initialTransportStatus(): TransportStatus {
   const path = (): PathMetrics => ({

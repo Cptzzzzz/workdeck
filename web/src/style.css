@@ -3061,6 +3061,15 @@ main {
   background: #151c17;
   box-shadow: 0 10px 28px #0009;
 }
+.rtc-diagnostic { margin: 10px 0; border: 1px solid #39483b; border-radius: 6px; padding: 8px; font-size: 11px; }
+.rtc-diagnostic summary { cursor: pointer; color: #c3d4b7; }
+.rtc-diagnostic-body p { margin: 7px 0; line-height: 1.5; }
+.rtc-diagnostic-body dl { display: grid; gap: 5px; }
+.rtc-diagnostic-body dl div { display: grid; grid-template-columns: 90px 1fr; gap: 8px; }
+.rtc-diagnostic-body dt { color: #91a491; }
+.rtc-diagnostic-body dd { margin: 0; overflow-wrap: anywhere; }
+.rtc-pair-list { max-height: 140px; overflow: auto; }
+.rtc-diagnostic-body button { margin: 4px 8px 4px 0; }
 .terminal-statusbar .persist-label {
   margin-left: 0;
 }

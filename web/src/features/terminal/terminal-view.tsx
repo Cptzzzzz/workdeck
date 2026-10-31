@@ -14,6 +14,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { ComputeNode as Node, TerminalRecord as Term } from "../../types";
 import {
   TerminalTransport,
+  clearDirectCooldown,
   type TransportStatus,
 } from "../../terminal-transport";
 import { initialTransportStatus } from "../../network-metrics";
@@ -196,6 +197,7 @@ export function TerminalView({
         (route, rtt) => {
           if (gen === generation) currentPressure.sample(route, rtt);
         },
+        terminal.id,
       );
       socket.current = ws;
       ws.onmessage = (e) => {
@@ -470,7 +472,14 @@ export function TerminalView({
           </span>
         )}
         {!stopped && connection === "connected" && (
-          <NetworkPanel status={transport} nodeName={node?.name} />
+          <NetworkPanel
+            status={transport}
+            nodeName={node?.name}
+            onRetryDirect={() => {
+              clearDirectCooldown(terminal.node_id);
+              connectRef.current();
+            }}
+          />
         )}
         <span className="persist-label">关闭标签页后任务继续运行</span>
       </div>
