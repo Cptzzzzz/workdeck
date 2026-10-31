@@ -87,7 +87,12 @@ expected="$(awk -v name="workdeck-linux-$arch" '$2==name {print $1}' "$tmp_dir/S
 case "$expected" in *[!0123456789abcdef]*) echo 'Invalid download checksum' >&2; exit 1;; esac
 [ "${#expected}" = 64 ] || { echo 'Invalid download checksum' >&2; exit 1; }
 printf '%s  %s\n' "$expected" "$tmp_dir/workdeck" | sha256sum -c -
-"$tmp_dir/workdeck" version >/dev/null || { echo 'Downloaded Agent is not executable on this machine.' >&2; exit 1; }
+# curl creates a non-executable file, and temporary filesystems are often
+# mounted noexec. Verify the checked binary from its actual installation
+# filesystem before replacing the existing Agent.
+agent_tmp="$(mktemp "$install_home/.local/bin/.workdeck.XXXXXXXX")"
+install -m 700 "$tmp_dir/workdeck" "$agent_tmp"
+"$agent_tmp" version >/dev/null || { echo 'Downloaded Agent is not executable on this machine.' >&2; exit 1; }
 if [ "$upgrade" = 1 ]; then cp -p "$install_home/.local/bin/workdeck" "$tmp_dir/previous-agent"; fi
 # Root agents may need to run file workers as the owners of older sessions.
 # The helper and every parent directory must be root-owned and not writable
@@ -106,8 +111,7 @@ if [ "$(id -u)" = 0 ]; then
   mv -f "$helper_tmp" /usr/local/libexec/workdeck-file-worker
   helper_changed=1
 fi
-agent_tmp="$(mktemp "$install_home/.local/bin/.workdeck.XXXXXXXX")"
-install -m 755 "$tmp_dir/workdeck" "$agent_tmp"
+chmod 755 "$agent_tmp"
 mv -f "$agent_tmp" "$install_home/.local/bin/workdeck"
 agent_changed=1
 if [ "$upgrade" = 1 ]; then

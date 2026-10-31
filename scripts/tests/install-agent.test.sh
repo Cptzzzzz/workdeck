@@ -2,8 +2,11 @@
 # Run only in a disposable container; no host services or identities are used.
 set -eu
 repo="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
-docker run --rm -i -v "$repo/scripts/install-agent.sh:/fixture/install-agent.sh:ro" golang:1.25-alpine sh -s <<'TEST'
+docker run --rm -i --tmpfs /tmp/noexec:rw,noexec,size=16m,mode=1777 -e TMPDIR=/tmp/noexec -v "$repo/scripts/install-agent.sh:/fixture/install-agent.sh:ro" golang:1.25-alpine sh -s <<'TEST'
 set -eu
+probe="$(mktemp -d)"
+case "$probe" in /tmp/noexec/*) ;; *) echo 'temporary directory is not on the noexec mount' >&2; exit 1;; esac
+rmdir "$probe"
 mkdir -p /tmp/mockbin /tmp/fixture
 cat > /tmp/fixture/workdeck <<'BIN'
 #!/bin/sh
@@ -26,7 +29,7 @@ case "$2" in
     sum="$(sha256sum /tmp/fixture/workdeck | awk '{print $1}')"
     if [ -f /tmp/fixture/bad-checksum ]; then sum="0000000000000000000000000000000000000000000000000000000000000000"; fi
     printf '%s  workdeck-linux-amd64\n%s  workdeck-linux-arm64\n' "$sum" "$sum" > "$4";;
-  */downloads/workdeck-linux-*) cp /tmp/fixture/workdeck "$4";;
+  */downloads/workdeck-linux-*) cat /tmp/fixture/workdeck > "$4"; chmod 600 "$4";;
   *) exit 1;;
 esac
 CURL
