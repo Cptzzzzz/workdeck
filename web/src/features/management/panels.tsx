@@ -47,7 +47,7 @@ export function SessionsPanel({
       </div>
       <h2>会话管理</h2>
       <p className="modal-description">
-        选择会话继续工作，关闭页面不会终止任务。
+        选择会话继续工作；已结束的会话可查看其工作区文件。
       </p>
       <div className="management-toolbar">
         <input
@@ -92,6 +92,14 @@ export function SessionsPanel({
             !!node?.online &&
             ["running", "exited"].includes(t.state) &&
             t.desired_state !== "closed";
+          const fileOnly =
+            t.desired_state === "closed" ||
+            ["closed", "lost", "error"].includes(t.state);
+          const canBrowse =
+            fileOnly &&
+            !!node?.online &&
+            !!node.capabilities?.includes("workspace-control-v1") &&
+            !!node.capabilities?.includes("workspace-files-v1");
           return (
             <div className="management-item" key={t.id}>
               <div className="management-item-text">
@@ -105,8 +113,16 @@ export function SessionsPanel({
                 <small title={t.cwd}>{t.cwd}</small>
               </div>
               <div className="management-item-actions">
-                <button disabled={!canOpen} onClick={() => onOpen(t.id)}>
-                  打开
+                <button
+                  disabled={fileOnly ? !canBrowse : !canOpen}
+                  title={
+                    fileOnly && !canBrowse
+                      ? "节点离线或尚未支持文件工作区"
+                      : undefined
+                  }
+                  onClick={() => onOpen(t.id)}
+                >
+                  {fileOnly ? "查看文件" : "打开"}
                 </button>
                 <button onClick={() => onRename(t)}>重命名</button>
                 {t.desired_state !== "closed" && t.state !== "closed" && (

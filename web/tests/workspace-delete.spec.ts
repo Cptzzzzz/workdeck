@@ -211,9 +211,11 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "project", exact: true }).click();
     await page.getByRole("button", { name: "one.txt", exact: true }).click();
-    await expect(page.locator(".workbench-notice")).toContainText(
-      "此路径有已删除文件的草稿",
-    );
+    await expect(
+      page
+        .locator(".workbench-notice")
+        .filter({ hasText: "此路径有已删除文件的草稿" }),
+    ).toBeVisible();
     await page
       .locator(".workbench-intents > div")
       .filter({ hasText: "project/one.txt" })

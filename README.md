@@ -9,6 +9,9 @@
 - **多设备登录**：默认记住登录 30 天，设备之间独立；每个终端一个控制者，其他连接只读，可明确接管。
 - **自适应链路**：WebSocket 中转立即可用，后台比较 WebRTC 直连；合适时切换，失败自动回退。
 - **网络可视化**：展示实际链路、两条路径的延迟，以及终端数据的上传 / 下载速率。
+- **双模式工作区**：保留终端管理界面，可切换到桌面文件工作区；文件树、编辑器和终端支持调整布局。
+- **文件编辑与预览**：支持工作区内文件操作、文本编辑及 Markdown、图片、PDF 预览；未保存草稿保存在当前浏览器，保存前检查远端版本。
+- **文件同步与传输**：手动及自动刷新文件树；文件连接同样支持中转和按需直连。传输、路径和预览限制见技术方案。
 - **显示适配**：移动端、全屏、可记忆字号；支持中文和复杂彩色 TUI。
 - **主机复用**：Hub 所在机器也可以安装 Agent 作为计算节点；以 root 安装 Agent 时，新终端使用 root。
 
@@ -20,6 +23,7 @@ flowchart LR
     agent[内网 Agent] -->|主动建立 WSS| hub
     browser <-.->|可选 WebRTC 直连| agent
     agent --> terminal[tmux + systemd 持久终端]
+    agent --> files[按会话账户访问工作区文件]
 ```
 
 ## 一键部署
@@ -56,6 +60,16 @@ sudo cat /opt/workdeck/secrets/admin_password
 
 接入完成后，浏览器无需访问节点地址；Agent 主动连接 Hub。可选直连不需要手工配置端口映射，也不会影响中转的可用性。
 
+## 文件工作区
+
+选择终端后切换至“工作区模式”，左侧浏览并管理该终端的工作区文件，上方编辑或预览，下方继续使用同一个终端。工作区的初始目录来自创建终端时选择的目录，不会随 Shell 的 `cd` 改变；可在界面中另行选择工作区根目录。切换模式或关闭浏览器不会终止终端。
+
+文本文件支持手动保存和可选自动保存。浏览器中的草稿与节点文件不是同一份数据；清理浏览器站点数据可能删除草稿，重要草稿请先保存或导出。远端文件发生变化时，工作台会保留本地修改并要求处理冲突。超过 5 MiB 的文本采用只读分段预览，可下载查看。
+
+文件树支持刷新、按当前目录筛选和显示隐藏项。图片、PDF、Markdown 及本地资源通过文件连接读取；由于浏览器能力差异，部分大文件下载使用 Hub 中转，界面会提示实际方式。旧版节点仍可使用终端模式，使用文件工作区前需要升级 Agent。
+
+终止会话后，节点在线且原目录仍可访问时，可在“会话管理”中勾选“显示已终止”，选择“查看文件”重新进入该会话的工作区；此操作不会重新启动终端。
+
 ## 本地开发
 
 需要 Go 1.25+、Node.js 22+、Linux tmux 和 systemd。普通用户须有可用的 systemd 用户管理器。
@@ -85,6 +99,8 @@ bin/workdeck-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') hub \
 cmd/workdeck/         Hub / Agent 命令行入口
 internal/hub/         登录、SQLite、节点与终端管理、反向连接中转
 internal/agent/       节点身份、systemd / tmux 生命周期、目录与直连
+internal/files/       工作区文件访问、版本检查及操作恢复
+internal/fileworker/  按会话账户运行的文件服务
 internal/protocol/    控制消息与连接封装
 web/src/              React 工作台、xterm、网络探测及链路选择
 web/tests/            浏览器与前端逻辑回归
@@ -96,7 +112,7 @@ docs/                中文设计、部署、运维和验证文档
 ## 文档与许可
 
 - [架构与生命周期](docs/architecture.md)
-- [双模式工作区技术方案](docs/workspace-design.md)（规划中的文件编辑与预览功能，尚未实现）
+- [双模式工作区技术方案](docs/workspace-design.md) · [开发进度与验证](docs/workspace-progress.md)
 - [部署指南](docs/deployment.md) · [节点接入](docs/agent-setup.md)
 - [运维手册](docs/operations.md) · [验证指南](docs/verification.md)
 - [敏感信息与脱敏规则](docs/security.md) · [安全问题反馈](SECURITY.md)
