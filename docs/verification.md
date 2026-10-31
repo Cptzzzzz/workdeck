@@ -16,6 +16,18 @@ npx playwright test transport-policy.spec.ts network-metrics.spec.ts terminal-do
 
 Go 测试覆盖登录、CSRF / Origin、节点接入及重试、防重放、改密撤销、状态恢复、目录读取、服务账户和附着连接清理。前端独立用例覆盖链路选择、网络统计和实际 xterm DOM 渲染，不需要 Hub 或计算节点。
 
+保存过程中的磁盘满和权限撤销测试需要独立、小容量的 tmpfs。下面的容器只在临时内存文件系统内填满空间，不操作宿主机的数据目录；测试会拒绝非 tmpfs 或大于 32 MiB 的测试路径：
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  --tmpfs /faulttmp:rw,size=12m,mode=1777 \
+  -v "$PWD:/src" -w /src \
+  -e WORKDECK_DISK_FULL_ROOT=/faulttmp golang:1.25-alpine \
+  go test ./internal/files -run 'TestUploadQuotaDoesNotChangeFiles|TestPermissionRevokedDuringSavePreservesOriginal|TestDiskFullPreservesOriginalAndAllowsRetry' -count=1 -v
+```
+
+容器需要可下载 Go 依赖；权限撤销测试需要非 root 账户。未设置专用测试路径时，磁盘满测试会跳过。
+
 ## 完整交互验收
 
 按 [开发指南](../CONTRIBUTING.md) 创建独立 Hub、独立 Agent 数据目录，再运行：
