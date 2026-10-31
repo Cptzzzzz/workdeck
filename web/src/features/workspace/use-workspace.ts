@@ -113,6 +113,14 @@ export function useWorkspace(
   );
   const directoryFilterRef = useRef(new Map<string, string>());
   const directoryRequests = useRef(new Map<string, number>());
+  const [showHidden, setShowHidden] = useState(() => {
+    try {
+      return localStorage.getItem("workdeck.showHiddenFiles") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const showHiddenRef = useRef(showHidden);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["."]));
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedDirectory, setSelectedDirectory] = useState(".");
@@ -233,6 +241,7 @@ export function useWorkspace(
   const loadDirectory = useCallback(
     async (client: FileClient, path: string, gen: number) => {
       const filter = directoryFilterRef.current.get(path) || "";
+      const hidden = showHiddenRef.current;
       const request = (directoryRequests.current.get(path) || 0) + 1;
       directoryRequests.current.set(path, request);
       let snapshot = "",
@@ -240,7 +249,7 @@ export function useWorkspace(
         truncated = false;
       const entries: FileEntry[] = [];
       do {
-        const page = await client.list(path, false, filter, snapshot, offset);
+        const page = await client.list(path, hidden, filter, snapshot, offset);
         entries.push(...page.entries);
         truncated = page.truncated;
         snapshot = page.snapshot;
@@ -275,6 +284,34 @@ export function useWorkspace(
       }
     },
     [loadDirectory],
+  );
+  const changeShowHidden = useCallback(
+    async (show: boolean) => {
+      if (renameLock.current) return;
+      showHiddenRef.current = show;
+      setShowHidden(show);
+      try {
+        localStorage.setItem("workdeck.showHiddenFiles", String(show));
+      } catch {
+        /* Storage can be unavailable. */
+      }
+      const isHiddenPath = (path: string) =>
+        path !== "." && path.split("/").some((part) => part.startsWith("."));
+      const paths = [...expanded].filter((path) => show || !isHiddenPath(path));
+      if (!show) {
+        setExpanded(new Set(paths));
+        setSelectedDirectory((old) => (isHiddenPath(old) ? "." : old));
+      }
+      const client = clientRef.current,
+        gen = generation.current;
+      if (!client) return;
+      try {
+        for (const path of paths) await loadDirectory(client, path, gen);
+      } catch (e) {
+        if (gen === generation.current) setError((e as Error).message);
+      }
+    },
+    [expanded, loadDirectory],
   );
   useEffect(() => {
     const gen = ++generation.current;
@@ -3301,6 +3338,8 @@ export function useWorkspace(
     directories,
     directoryFilters,
     filterDirectory,
+    showHidden,
+    changeShowHidden,
     expanded,
     selectedDirectory,
     selectDirectory: setSelectedDirectory,

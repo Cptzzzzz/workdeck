@@ -371,6 +371,17 @@ export function WorkspaceSidebar({
               清除筛选
             </button>
           )}
+          <label className="file-tree-hidden-toggle">
+            <input
+              type="checkbox"
+              checked={controller.showHidden}
+              disabled={!controller.fileReady || controller.renaming}
+              onChange={(event) =>
+                void controller.changeShowHidden(event.target.checked)
+              }
+            />
+            显示隐藏文件和目录
+          </label>
         </form>
       )}
       <div className="file-tree">{renderDirectory(".", 0)}</div>

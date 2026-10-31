@@ -24,6 +24,9 @@ test("directory filtering and incremental rendering preserve the running termina
   mkdirSync(path.join(dir, "sub"));
   mkdirSync(path.join(dir, "__proto__"));
   writeFileSync(path.join(dir, "__proto__", "safe.txt"), "");
+  mkdirSync(path.join(dir, ".config"));
+  writeFileSync(path.join(dir, ".config", "settings.json"), "{}");
+  writeFileSync(path.join(dir, ".env"), "secret=example");
   for (let i = 0; i < 205; i++)
     writeFileSync(
       path.join(dir, `entry-${String(i).padStart(3, "0")}.txt`),
@@ -143,6 +146,50 @@ test("directory filtering and incremental rendering preserve the running termina
     await page.getByRole("button", { name: "筛选", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "safe.txt", exact: true }),
+    ).toBeVisible();
+    const hidden = page.getByRole("checkbox", { name: "显示隐藏文件和目录" });
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
+    ).toHaveCount(0);
+    await hidden.check();
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
+    ).toBeVisible();
+    await page.locator(".workbench-root").click();
+    await input.fill(".env");
+    await page.getByRole("button", { name: "筛选", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: ".config", exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "清除筛选" }).click();
+    await page.getByRole("button", { name: ".config", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "settings.json", exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "刷新文件树" }).click();
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
+    ).toBeVisible();
+    await hidden.uncheck();
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("筛选所选目录：.", { exact: true }),
+    ).toBeVisible();
+    await hidden.check();
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
+    ).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(hidden).toBeChecked();
+    await expect(
+      page.getByRole("button", { name: ".env", exact: true }),
     ).toBeVisible();
     expect(pane()).toBe(pid);
   } finally {
