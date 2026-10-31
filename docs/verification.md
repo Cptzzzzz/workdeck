@@ -40,6 +40,7 @@ WORKDECK_TEST_PASSWORD_FILE=../.secrets/administrator.txt \
 | `WORKDECK_OFFLINE_ACCEPTANCE=1` | 允许 Python 离线终止验收停止本机用户 Agent，仅用于隔离环境 |
 | `WORKDECK_ROOT_ACCEPTANCE=1` | 执行 root 计算节点验收，需匹配的节点及重启权限 |
 | `WORKDECK_FILE_RATE_ACCEPTANCE=1` | 验证同一账户的并发文件上传下载共享限速；仅用于配置了 262144 字节/秒、独立数据目录和回环 Hub 的测试 Agent，同时指定 `WORKDECK_FILE_TEST_ROOT` 和测试节点名称 |
+| `WORKDECK_ARCHIVE_ACCEPTANCE=1` | 在支持旧操作查询的隔离节点验证旧修订日志和本地记录恢复；设置 `WORKDECK_ARCHIVE_DIRECT=1` 可强制测试文件 WebRTC 直连 |
 
 各用例的其他参数以 `web/tests/` 中的实际读取项为准。重启测试会短暂断开查看者，只应在隔离环境或明确维护窗口执行。
 

@@ -20,6 +20,7 @@ import type {
   UploadTransaction,
   DeleteStatus,
   DeleteOutcome,
+  ArchivedOperation,
   Workspace,
   WorkspaceView,
 } from "./types";
@@ -918,6 +919,12 @@ export class FileClient {
         limit: 64,
       })
     ).value as { items?: DeleteOutcome[]; next?: number };
+    return this.checkOutcomes(value, offset);
+  }
+  private checkOutcomes(
+    value: { items?: DeleteOutcome[]; next?: number },
+    offset: number,
+  ): { items: DeleteOutcome[]; next: number } {
     if (
       !value ||
       !Array.isArray(value.items) ||
@@ -946,11 +953,132 @@ export class FileClient {
       throw new FileServiceError("PROTOCOL_ERROR", "删除结果分页无效");
     return value as { items: DeleteOutcome[]; next: number };
   }
-  private checkDelete(value: unknown, opID: string): DeleteStatus {
+  async archivedOperationStatus(
+    opID: string,
+    previousRevision: number,
+  ): Promise<ArchivedOperation> {
+    if (
+      !Number.isSafeInteger(previousRevision) ||
+      previousRevision < 1 ||
+      previousRevision >= this.workspace.root_revision
+    )
+      throw new FileServiceError("INVALID_RANGE", "旧工作区修订无效");
+    const value = (
+      await this.request("operation.archive.status", {
+        op_id: opID,
+        previous_revision: previousRevision,
+      })
+    ).value as ArchivedOperation;
+    if (
+      !value ||
+      !["write", "directory.create", "entry.rename", "entry.delete"].includes(
+        value.kind,
+      )
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "旧操作类型无效");
+    this.checkOperation(
+      value,
+      opID,
+      value.kind as
+        | "write"
+        | "directory.create"
+        | "entry.rename"
+        | "entry.delete",
+      previousRevision,
+    );
+    if (
+      typeof value.path !== "string" ||
+      new TextEncoder().encode(value.path).length > 4096 ||
+      (value.source !== undefined &&
+        (typeof value.source !== "string" ||
+          new TextEncoder().encode(value.source).length > 4096)) ||
+      (value.details_expired !== undefined &&
+        typeof value.details_expired !== "boolean") ||
+      (value.error !== undefined &&
+        (typeof value.error?.code !== "string" ||
+          typeof value.error?.message !== "string" ||
+          value.error.code.length > 128 ||
+          value.error.message.length > 4096)) ||
+      ![
+        "receiving",
+        "ready",
+        "committing",
+        "committed",
+        "conflict",
+        "failed",
+        "aborted",
+        "uncertain",
+        "prepared",
+        "deleting",
+        "partial",
+      ].includes(value.state)
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "旧操作记录无效");
+    if (
+      value.kind === "write" &&
+      (!value.write ||
+        value.write.path !== value.path ||
+        !Number.isSafeInteger(value.write.size) ||
+        value.write.size < 0 ||
+        typeof value.write.sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/.test(value.write.sha256) ||
+        (value.write.create !== undefined &&
+          typeof value.write.create !== "boolean") ||
+        (value.write.base_version !== undefined &&
+          typeof value.write.base_version !== "string"))
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "旧写入记录无效");
+    if (
+      value.kind === "entry.delete" &&
+      value.recursive !== undefined &&
+      typeof value.recursive !== "boolean"
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "旧删除范围无效");
+    if (value.kind === "entry.delete" && value.delete) {
+      const detail = this.checkDelete(value.delete, opID, previousRevision);
+      if (
+        detail.path !== value.path ||
+        detail.state !== value.state ||
+        detail.recursive !== !!value.recursive
+      )
+        throw new FileServiceError("PROTOCOL_ERROR", "旧删除记录不一致");
+    }
+    return value;
+  }
+  async archivedDeleteOutcomes(
+    opID: string,
+    previousRevision: number,
+    offset: number,
+  ): Promise<{ items: DeleteOutcome[]; next: number }> {
+    if (
+      !Number.isSafeInteger(previousRevision) ||
+      previousRevision < 1 ||
+      previousRevision >= this.workspace.root_revision ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      offset > 8192
+    )
+      throw new FileServiceError("INVALID_RANGE", "旧删除结果分页无效");
+    const value = (
+      await this.request("operation.archive.delete.outcomes", {
+        op_id: opID,
+        previous_revision: previousRevision,
+        offset,
+        limit: 64,
+      })
+    ).value as { items?: DeleteOutcome[]; next?: number };
+    return this.checkOutcomes(value, offset);
+  }
+  private checkDelete(
+    value: unknown,
+    opID: string,
+    revision = this.workspace.root_revision,
+  ): DeleteStatus {
     const operation = this.checkOperation(
       value,
       opID,
       "entry.delete",
+      revision,
     ) as DeleteStatus;
     if (
       typeof operation.path !== "string" ||
@@ -1012,13 +1140,14 @@ export class FileClient {
       | "directory.create"
       | "entry.rename"
       | "entry.delete" = "write",
+    revision = this.workspace.root_revision,
   ): FileOperation {
     const op = value as FileOperation | undefined;
     if (
       !op ||
       op.id !== opID ||
       op.workspace_id !== this.workspace.id ||
-      op.root_revision !== this.workspace.root_revision ||
+      op.root_revision !== revision ||
       op.kind !== kind ||
       !Number.isSafeInteger(op.offset) ||
       op.offset < 0 ||

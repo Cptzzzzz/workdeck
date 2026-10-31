@@ -153,11 +153,15 @@ func (e *Engine) deleteStatus(ctx context.Context, m mutationRecord) (DeleteStat
 // DeleteOutcomes is paginated so callers can inspect every affected path
 // without returning the entire recursive manifest in one control frame.
 func (e *Engine) DeleteOutcomes(ctx context.Context, workspace string, revision int64, id string, offset, limit int) ([]DeleteOutcome, int, error) {
+	e.commit.Lock()
+	defer e.commit.Unlock()
+	return e.deleteOutcomes(ctx, workspace, revision, id, offset, limit)
+}
+
+func (e *Engine) deleteOutcomes(ctx context.Context, workspace string, revision int64, id string, offset, limit int) ([]DeleteOutcome, int, error) {
 	if offset < 0 || limit < 1 || limit > 64 {
 		return nil, 0, fail("INVALID_RANGE", "删除结果分页无效")
 	}
-	e.commit.Lock()
-	defer e.commit.Unlock()
 	m, err := e.mutation(ctx, id)
 	if err != nil {
 		return nil, 0, err

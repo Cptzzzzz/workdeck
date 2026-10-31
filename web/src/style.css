@@ -2797,3 +2797,23 @@ main {
   gap: 8px;
   margin-top: 4px;
 }
+.archived-operation-info {
+  display: grid;
+  gap: 6px;
+  color: #c7d1c6;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.archived-operation-actions {
+  justify-content: flex-start;
+}
+.archived-outcomes ul {
+  max-height: 150px;
+  overflow: auto;
+  padding-left: 18px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.archived-confirm {
+  margin-top: 16px;
+}

@@ -49,8 +49,10 @@ import {
   DiscardDeletedDraftForm,
   CloseDocumentForm,
   WorkspaceRootForm,
+  ArchivedIntentForm,
+  ArchivedSaveForm,
 } from "./features/workspace/workspace-view";
-import type { CreateIntent } from "./services/files/drafts";
+import type { CreateIntent, DraftIdentity } from "./services/files/drafts";
 import {
   RenameForm,
   TerminateForm,
@@ -88,6 +90,8 @@ type Modal =
   | "file-discard-draft"
   | "file-close"
   | "workspace-root"
+  | "archived-intent"
+  | "archived-save"
   | null;
 function layoutNumber(key: string, fallback: number, min: number, max: number) {
   try {
@@ -164,10 +168,23 @@ function App() {
     [tabs, setTabs] = useState<string[]>([]);
   const [modalParent, setModalParent] = useState<Modal>(null);
   const [rootModalBusy, setRootModalBusy] = useState(false);
+  const [archiveModalBusy, setArchiveModalBusy] = useState(false);
+  const [archivedIntent, setArchivedIntent] = useState<CreateIntent | null>(
+    null,
+  );
+  const [archivedSave, setArchivedSave] = useState<{
+    identity: DraftIdentity;
+    source: "page" | "stored";
+  } | null>(null);
   const [closeDocumentTarget, setCloseDocumentTarget] =
     useState<WorkspaceDocument | null>(null);
   const closeModal = () => {
     if (modal === "workspace-root" && rootModalBusy) return;
+    if (
+      (modal === "archived-intent" || modal === "archived-save") &&
+      archiveModalBusy
+    )
+      return;
     if (
       modal === "file-close" &&
       (closeDocumentTarget?.saving || closeDocumentTarget?.closing)
@@ -203,6 +220,11 @@ function App() {
       if (event.key === "Escape") {
         event.preventDefault();
         if (modal === "workspace-root" && rootModalBusy) return;
+        if (
+          (modal === "archived-intent" || modal === "archived-save") &&
+          archiveModalBusy
+        )
+          return;
         if (
           modal === "file-close" &&
           (closeDocumentTarget?.saving || closeDocumentTarget?.closing)
@@ -241,6 +263,7 @@ function App() {
     closeDocumentTarget?.saving,
     closeDocumentTarget?.closing,
     rootModalBusy,
+    archiveModalBusy,
   ]);
   const [mode, setMode] = useState<"terminal" | "workspace">(() => {
     try {
@@ -298,6 +321,11 @@ function App() {
         (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
       )
       ?.capabilities?.includes("workspace-watch-v1"),
+    !!data.nodes
+      .find(
+        (n) => n.id === data.terminals.find((t) => t.id === active)?.node_id,
+      )
+      ?.capabilities?.includes("workspace-archive-v1"),
   );
   const [fileRenameTarget, setFileRenameTarget] = useState("");
   const [deletedSaveTarget, setDeletedSaveTarget] =
@@ -576,6 +604,14 @@ function App() {
             controller={workspace}
             onNewItem={() => setModal("file-create")}
             onChangeRoot={() => setModal("workspace-root")}
+            onArchivedIntent={(intent) => {
+              setArchivedIntent(intent);
+              setModal("archived-intent");
+            }}
+            onArchivedSave={(identity, source) => {
+              setArchivedSave({ identity, source });
+              setModal("archived-save");
+            }}
             onRename={(path) => {
               setFileRenameTarget(path);
               setModal("file-rename");
@@ -1159,40 +1195,68 @@ function App() {
                         ? "关闭文件"
                         : modal === "workspace-root"
                           ? "更换工作区目录"
-                          : modal === "file-create"
-                            ? "新建文件或文件夹"
-                            : modal === "file-discard-draft"
-                              ? "移除本地草稿"
-                              : modal === "file-save-as"
-                                ? deletedSaveTarget?.unavailable
-                                  ? "另存不可访问的草稿"
-                                  : "另存已删除的草稿"
-                                : modal === "file-delete"
-                                  ? "删除文件或文件夹"
-                                  : modal === "file-rename"
-                                    ? "重命名文件或文件夹"
-                                    : modal === "create"
-                                      ? "新建终端"
-                                      : modal === "join"
-                                        ? "接入节点"
-                                        : modal === "rename"
-                                          ? renameTarget?.kind === "node"
-                                            ? "重命名节点"
-                                            : "重命名终端"
-                                          : modal === "terminate"
-                                            ? "终止终端"
-                                            : "修改密码"
+                          : modal === "archived-intent"
+                            ? "核对旧目录操作"
+                            : modal === "archived-save"
+                              ? "核对旧目录保存"
+                              : modal === "file-create"
+                                ? "新建文件或文件夹"
+                                : modal === "file-discard-draft"
+                                  ? "移除本地草稿"
+                                  : modal === "file-save-as"
+                                    ? deletedSaveTarget?.unavailable
+                                      ? "另存不可访问的草稿"
+                                      : "另存已删除的草稿"
+                                    : modal === "file-delete"
+                                      ? "删除文件或文件夹"
+                                      : modal === "file-rename"
+                                        ? "重命名文件或文件夹"
+                                        : modal === "create"
+                                          ? "新建终端"
+                                          : modal === "join"
+                                            ? "接入节点"
+                                            : modal === "rename"
+                                              ? renameTarget?.kind === "node"
+                                                ? "重命名节点"
+                                                : "重命名终端"
+                                              : modal === "terminate"
+                                                ? "终止终端"
+                                                : "修改密码"
             }
           >
             <button
               className="modal-close icon-button"
               aria-label="关闭对话框"
-              disabled={modal === "workspace-root" && rootModalBusy}
+              disabled={
+                (modal === "workspace-root" && rootModalBusy) ||
+                ((modal === "archived-intent" || modal === "archived-save") &&
+                  archiveModalBusy)
+              }
               onClick={closeModal}
             >
               <X size={20} />
             </button>
-            {modal === "workspace-root" && current ? (
+            {modal === "archived-save" && archivedSave ? (
+              <ArchivedSaveForm
+                controller={workspace}
+                identity={archivedSave.identity}
+                source={archivedSave.source}
+                onClose={closeModal}
+                onBusy={setArchiveModalBusy}
+              />
+            ) : modal === "archived-intent" && archivedIntent ? (
+              <ArchivedIntentForm
+                controller={workspace}
+                intent={archivedIntent}
+                onClose={closeModal}
+                onBusy={setArchiveModalBusy}
+                onRemoved={() => {
+                  setModal(null);
+                  setArchivedIntent(null);
+                  notify("已移除本地操作记录");
+                }}
+              />
+            ) : modal === "workspace-root" && current ? (
               <WorkspaceRootForm
                 controller={workspace}
                 terminal={current}

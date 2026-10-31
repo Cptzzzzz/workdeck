@@ -648,6 +648,136 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       { path: "deleted.txt", revision: 3, pending: false },
       { path: "pending.txt", revision: 1, pending: true },
     ]);
+    const archivedIntentCAS = await page.evaluate(async () => {
+      const drafts = (window as any).workdeckFileTest.drafts;
+      const scope = {
+        account: "fixture",
+        nodeID: crypto.randomUUID(),
+        workspaceID: "archive-ops",
+        rootRevision: 2,
+      };
+      const old = {
+        ...scope,
+        rootRevision: 1,
+        rootPath: "/old",
+        opID: crypto.randomUUID(),
+        kind: "delete",
+        path: "old.txt",
+        createdAt: Date.now(),
+        confirmed: false,
+      };
+      const current = {
+        ...scope,
+        opID: crypto.randomUUID(),
+        kind: "file",
+        path: "new.txt",
+        createdAt: Date.now(),
+      };
+      const unrelated = {
+        ...old,
+        account: "other",
+        opID: crypto.randomUUID(),
+        path: "other.txt",
+      };
+      await Promise.all(
+        [old, current, unrelated].map((intent) =>
+          drafts.recordCreateIntent(intent),
+        ),
+      );
+      const before = (await drafts.listArchivedIntents(scope)).items;
+      await drafts.confirmDeleteIntent(old.opID);
+      let rejected = false;
+      try {
+        await drafts.removeArchivedIntent(before[0]);
+      } catch {
+        rejected = true;
+      }
+      const latest = (await drafts.listArchivedIntents(scope)).items;
+      await drafts.removeArchivedIntent(latest[0]);
+      const after = (await drafts.listArchivedIntents(scope)).items;
+      await drafts.removeCreateIntent(current.opID);
+      await drafts.removeCreateIntent(unrelated.opID);
+      return {
+        count: before.length,
+        pending: before[0].confirmed,
+        rejected,
+        updated: latest[0].confirmed,
+        remaining: after.length,
+      };
+    });
+    expect(archivedIntentCAS).toEqual({
+      count: 1,
+      pending: false,
+      rejected: true,
+      updated: true,
+      remaining: 0,
+    });
+    const archiveLimit = await page.evaluate(async () => {
+      const drafts = (window as any).workdeckFileTest.drafts;
+      const scope = {
+        account: "limit-fixture",
+        nodeID: crypto.randomUUID(),
+        workspaceID: crypto.randomUUID(),
+        rootRevision: 100,
+      };
+      const request = indexedDB.open("workdeck-workspace-drafts", 2);
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const ids: string[] = [];
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("file-intents", "readwrite"),
+          store = tx.objectStore("file-intents");
+        for (let i = 0; i < 1001; i++) {
+          const revision = Math.floor(i / 100) + 1,
+            opID = crypto.randomUUID(),
+            path = `item-${i}`;
+          const key = JSON.stringify([
+            scope.account,
+            scope.nodeID,
+            scope.workspaceID,
+            revision,
+          ]);
+          ids.push(opID);
+          store.put({
+            ...scope,
+            rootRevision: revision,
+            opID,
+            kind: "file",
+            path,
+            createdAt: i,
+            scope: key,
+            target: JSON.stringify([key, path]),
+          });
+        }
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+      });
+      const before = await drafts.listArchivedIntents(scope);
+      await drafts.removeArchivedIntent(before.items[0]);
+      const after = await drafts.listArchivedIntents(scope);
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("file-intents", "readwrite"),
+          store = tx.objectStore("file-intents");
+        ids.forEach((id) => store.delete(id));
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+      });
+      db.close();
+      return {
+        before: before.items.length,
+        truncatedBefore: before.truncated,
+        after: after.items.length,
+        truncatedAfter: after.truncated,
+      };
+    });
+    expect(archiveLimit).toEqual({
+      before: 1000,
+      truncatedBefore: true,
+      after: 1000,
+      truncatedAfter: false,
+    });
     const viewState = await page.evaluate(async () => {
       const views = (window as any).workdeckFileTest.viewState;
       const id = {

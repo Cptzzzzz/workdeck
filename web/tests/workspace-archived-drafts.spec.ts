@@ -75,7 +75,13 @@ test("old workspace revisions export both page and stored drafts after another d
           body: JSON.stringify({ node_id: nodes[0].id, name, cwd: first }),
         });
         if (!response.ok) throw new Error(`terminal ${response.status}`);
-        return { terminal: await response.json(), csrf: me.csrf };
+        return {
+          terminal: await response.json(),
+          csrf: me.csrf,
+          archiveSupported: nodes[0].capabilities.includes(
+            "workspace-archive-v1",
+          ),
+        };
       },
       { name, first, nodeName },
     );
@@ -202,6 +208,17 @@ test("old workspace revisions export both page and stored drafts after another d
     const recovered = Buffer.from(record.pendingSave.contentBase64, "base64");
     expect(recovered.length).toBe(100001);
     expect(recovered.every((byte, i) => byte === i % 251)).toBe(true);
+    if (!fixture.archiveSupported) {
+      await archive.getByRole("button", { name: "核对已保存记录" }).click();
+      const unsupported = page.getByRole("dialog", { name: "核对旧目录保存" });
+      await expect(unsupported).toContainText("节点尚不支持旧记录查询");
+      await expect(
+        unsupported.getByRole("button", { name: "核对节点记录" }),
+      ).toBeDisabled();
+      await unsupported
+        .getByRole("button", { name: "关闭", exact: true })
+        .click();
+    }
     await page.locator('.file-tree-row[title="same.txt"]').click();
     await expect(page.locator(".monaco-editor")).toContainText("new root file");
     expect(readFileSync(path.join(first, "same.txt"), "utf8")).toBe(

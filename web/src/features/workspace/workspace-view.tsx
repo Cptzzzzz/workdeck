@@ -26,7 +26,11 @@ import type {
 import type { CreateIntent, DraftIdentity } from "../../services/files/drafts";
 import { DirectoryPicker } from "../management/forms";
 import type { ComputeNode, TerminalRecord } from "../../types";
-import type { DeleteStatus, DeleteOutcome } from "../../services/files/types";
+import type {
+  DeleteStatus,
+  DeleteOutcome,
+  ArchivedOperation,
+} from "../../services/files/types";
 import { formatBytes, formatLatency } from "../../network-metrics";
 const MonacoEditor = lazy(() =>
   import("./monaco-editor").then((m) => ({ default: m.MonacoEditor })),
@@ -54,6 +58,8 @@ export function WorkspaceSidebar({
   onRename,
   onDelete,
   onChangeRoot,
+  onArchivedIntent,
+  onArchivedSave,
 }: {
   controller: WorkspaceController;
   onSessions: () => void;
@@ -68,6 +74,8 @@ export function WorkspaceSidebar({
     intent?: (typeof controller.intents)[number],
   ) => void;
   onChangeRoot: () => void;
+  onArchivedIntent: (intent: CreateIntent) => void;
+  onArchivedSave: (identity: DraftIdentity, source: "page" | "stored") => void;
 }) {
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadTarget = useRef<{
@@ -350,20 +358,28 @@ export function WorkspaceSidebar({
                     </button>
                   )}
                   {page && pagePending && (
-                    <button
-                      onClick={() =>
-                        void downloadArchived(
-                          controller,
-                          identity,
-                          "page",
-                          true,
-                        ).catch((e) =>
-                          controller.reportError((e as Error).message),
-                        )
-                      }
-                    >
-                      导出页面记录
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onArchivedSave(identity, "page")}
+                      >
+                        核对页面保存
+                      </button>
+                      <button
+                        onClick={() =>
+                          void downloadArchived(
+                            controller,
+                            identity,
+                            "page",
+                            true,
+                          ).catch((e) =>
+                            controller.reportError((e as Error).message),
+                          )
+                        }
+                      >
+                        导出页面记录
+                      </button>
+                    </>
                   )}
                   {stored && (
                     <button
@@ -382,25 +398,56 @@ export function WorkspaceSidebar({
                     </button>
                   )}
                   {stored && storedPending && (
-                    <button
-                      onClick={() =>
-                        void downloadArchived(
-                          controller,
-                          identity,
-                          "stored",
-                          true,
-                        ).catch((e) =>
-                          controller.reportError((e as Error).message),
-                        )
-                      }
-                    >
-                      导出已保存记录
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onArchivedSave(identity, "stored")}
+                      >
+                        核对已保存记录
+                      </button>
+                      <button
+                        onClick={() =>
+                          void downloadArchived(
+                            controller,
+                            identity,
+                            "stored",
+                            true,
+                          ).catch((e) =>
+                            controller.reportError((e as Error).message),
+                          )
+                        }
+                      >
+                        导出已保存记录
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
             ),
           )}
+        </div>
+      )}
+      {controller.archivedIntents.length > 0 && (
+        <div className="workbench-intents archived-drafts">
+          <b>旧目录的待确认操作</b>
+          <small>只读取旧记录，不会在当前目录重放操作。</small>
+          {controller.archivedIntentsTruncated && (
+            <small>
+              记录超过 1000 条，当前显示前 1000 条；处理后会继续显示其余记录。
+            </small>
+          )}
+          {controller.archivedIntents.map((intent) => (
+            <div key={intent.opID}>
+              <span title={intent.path}>
+                修订 {intent.rootRevision} · {intent.path}
+              </span>
+              <div className="archived-actions">
+                <button onClick={() => onArchivedIntent(intent)}>
+                  核对或导出记录
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
       {controller.transfer && (
@@ -565,6 +612,325 @@ function exportDraft(doc: Document) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+export function ArchivedIntentForm({
+  controller,
+  intent,
+  onClose,
+  onBusy,
+  onRemoved,
+}: {
+  controller: WorkspaceController;
+  intent: CreateIntent;
+  onClose: () => void;
+  onBusy: (busy: boolean) => void;
+  onRemoved: () => void;
+}) {
+  const [busy, setBusy] = useState(false),
+    [checked, setChecked] = useState(false),
+    [error, setError] = useState("");
+  const [status, setStatus] = useState<ArchivedOperation | null>(null);
+  const [outcomes, setOutcomes] = useState<DeleteOutcome[]>([]),
+    [offset, setOffset] = useState(0);
+  const kinds: Record<CreateIntent["kind"], string> = {
+    file: "创建文件",
+    directory: "创建文件夹",
+    upload: "上传",
+    rename: "重命名",
+    delete: "删除",
+  };
+  const states: Record<string, string> = {
+    committed: "已完成",
+    aborted: "已取消",
+    conflict: "发生冲突",
+    failed: "失败",
+    partial: "部分完成",
+    uncertain: "结果不明确",
+    prepared: "已准备，结果未确认",
+    receiving: "接收中",
+    ready: "等待提交",
+    committing: "提交中",
+    deleting: "删除中",
+  };
+  const run = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    onBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (e) {
+      const err = e as Error & { code?: string };
+      setError(
+        err.code === "OPERATION_NOT_FOUND"
+          ? "节点没有可用的旧操作记录；这不能证明操作没有执行，请检查旧目录并保留记录。"
+          : err.message,
+      );
+    } finally {
+      setBusy(false);
+      onBusy(false);
+    }
+  };
+  const exportRecord = () => {
+    const value = JSON.stringify(
+      {
+        format: "workdeck-archived-operation-v1",
+        intent,
+        nodeSnapshot: status,
+      },
+      null,
+      2,
+    );
+    const url = URL.createObjectURL(
+      new Blob([value], { type: "application/json;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `workdeck-operation-${intent.opID}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  return (
+    <div>
+      <div className="modal-symbol">
+        <FolderCog size={24} />
+      </div>
+      <h2>核对旧目录操作</h2>
+      <p className="modal-description">
+        只读取节点日志，不会执行、取消或重试旧操作，也不会修改当前目录。请结合原目录核对实际结果。
+      </p>
+      <div className="archived-operation-info">
+        <div>操作：{kinds[intent.kind] || "未知"}</div>
+        <div>旧目录：{intent.rootPath || "未记录，请自行确认原目录"}</div>
+        <div>修订：{intent.rootRevision}</div>
+        {intent.source && <div>原路径：{intent.source}</div>}
+        <div>目标路径：{intent.path}</div>
+        <div>操作标识：{intent.opID}</div>
+      </div>
+      <div className="form-actions archived-operation-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={
+            busy || !controller.fileReady || !controller.supportsArchive
+          }
+          onClick={() =>
+            void run(async () => {
+              const result = await controller.inspectArchivedIntent(intent);
+              setStatus(result);
+              setOutcomes([]);
+              setOffset(0);
+            })
+          }
+        >
+          核对节点记录
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={exportRecord}
+        >
+          导出本地记录
+        </button>
+      </div>
+      {!controller.supportsArchive && (
+        <p className="form-hint">
+          节点尚不支持旧记录查询，请升级节点后核对；本地记录仍可导出。
+        </p>
+      )}
+      {status && (
+        <div className="workbench-notice" role="status">
+          节点记录：{states[status.state] || "未知"}。
+          {status.error?.message ? ` ${status.error.message}` : ""}
+          {status.delete && (
+            <>
+              {" "}
+              共 {status.delete.count} 项，已删除 {status.delete.deleted ?? 0}{" "}
+              项，跳过 {status.delete.skipped ?? 0} 项，未完成{" "}
+              {status.delete.pending ?? 0} 项，不确定{" "}
+              {status.delete.uncertain ?? 0} 项。
+            </>
+          )}
+          {status.details_expired && <> 删除明细已过期，请检查原目录。</>}
+        </div>
+      )}
+      {status?.delete && !status.details_expired && (
+        <div className="archived-outcomes">
+          {outcomes.length > 0 && (
+            <ul>
+              {outcomes.map((item, i) => (
+                <li key={`${i}:${item.path}`}>
+                  {item.path} · {item.state}
+                  {item.error?.message ? ` · ${item.error.message}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+          {offset < status.delete.count && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !controller.fileReady}
+              onClick={() =>
+                void run(async () => {
+                  const page = await controller.archivedDeleteOutcomes(
+                    intent,
+                    offset,
+                  );
+                  if (page.next <= offset)
+                    throw new Error("节点未返回完整明细，请保留记录");
+                  setOutcomes((old) => [...old, ...page.items]);
+                  setOffset(page.next);
+                })
+              }
+            >
+              {offset ? "继续查看删除明细" : "查看删除明细"}
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <label className="checkbox archived-confirm">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={busy}
+          onChange={(event) => setChecked(event.target.checked)}
+        />
+        我已核对原目录，理解操作可能未完成；仅移除此浏览器的记录。
+      </label>
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={onClose}
+        >
+          关闭
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy || !checked}
+          onClick={() =>
+            void run(async () => {
+              await controller.forgetArchivedIntent(intent);
+              onRemoved();
+            })
+          }
+        >
+          {busy ? "正在处理…" : "确认移除本地记录"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function ArchivedSaveForm({
+  controller,
+  identity,
+  source,
+  onClose,
+  onBusy,
+}: {
+  controller: WorkspaceController;
+  identity: DraftIdentity;
+  source: "page" | "stored";
+  onClose: () => void;
+  onBusy: (busy: boolean) => void;
+}) {
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [status, setStatus] = useState<ArchivedOperation | null>(null);
+  const states: Record<string, string> = {
+    committed: "已完成",
+    aborted: "已取消",
+    conflict: "发生冲突",
+    failed: "失败",
+    uncertain: "结果不明确",
+    receiving: "接收中",
+    ready: "等待提交",
+    committing: "提交中",
+  };
+  const inspect = async () => {
+    if (busy) return;
+    setBusy(true);
+    onBusy(true);
+    setError("");
+    try {
+      setStatus(await controller.inspectArchivedSave(identity, source));
+    } catch (e) {
+      const error = e as Error & { code?: string };
+      setError(
+        error.code === "OPERATION_NOT_FOUND"
+          ? "节点没有可用的旧保存记录；这不能证明保存没有执行，请检查旧目录并保留草稿。"
+          : error.message,
+      );
+    } finally {
+      setBusy(false);
+      onBusy(false);
+    }
+  };
+  return (
+    <div>
+      <div className="modal-symbol">
+        <Save size={24} />
+      </div>
+      <h2>核对旧目录保存</h2>
+      <p className="modal-description">
+        读取原保存操作的节点日志，不会重试保存或修改当前目录。即使原快照已提交，之后的草稿修改仍需自行处理。
+      </p>
+      <div className="archived-operation-info">
+        <div>来源：{source === "page" ? "当前页面" : "浏览器已保存草稿"}</div>
+        <div>修订：{identity.rootRevision}</div>
+        <div>路径：{identity.path}</div>
+      </div>
+      <div className="form-actions archived-operation-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={
+            busy || !controller.fileReady || !controller.supportsArchive
+          }
+          onClick={() => void inspect()}
+        >
+          核对节点记录
+        </button>
+      </div>
+      {!controller.supportsArchive && (
+        <p className="form-hint">
+          节点尚不支持旧记录查询，请升级节点后核对；草稿及操作记录仍可导出。
+        </p>
+      )}
+      {status && (
+        <div className="workbench-notice" role="status">
+          节点记录：{states[status.state] || "未知"}。
+          {status.error?.message ? ` ${status.error.message}` : ""}
+        </div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={onClose}
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function WorkspaceRootForm({
   controller,
   terminal,

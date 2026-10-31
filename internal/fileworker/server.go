@@ -358,6 +358,33 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			return s.engine.MutationStatus(ctx, r.WorkspaceID, r.Revision, p.OpID)
 		}
 		return result, err
+	case "operation.archive.status":
+		var p struct {
+			OpID             string `json:"op_id"`
+			PreviousRevision int64  `json:"previous_revision"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.ArchivedOperationStatus(ctx, r.WorkspaceID, r.Revision, p.PreviousRevision, p.OpID)
+	case "operation.archive.delete.outcomes":
+		var p struct {
+			OpID             string `json:"op_id"`
+			PreviousRevision int64  `json:"previous_revision"`
+			Offset           int    `json:"offset"`
+			Limit            int    `json:"limit"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		items, next, err := s.engine.ArchivedDeleteOutcomes(ctx, r.WorkspaceID, r.Revision, p.PreviousRevision, p.OpID, p.Offset, p.Limit)
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			Items []files.DeleteOutcome `json:"items"`
+			Next  int                   `json:"next"`
+		}{items, next}, nil
 	case "file.stat":
 		var p struct {
 			Path string `json:"path"`

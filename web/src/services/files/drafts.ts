@@ -36,6 +36,7 @@ export type CreateIntent = {
   nodeID: string;
   workspaceID: string;
   rootRevision: number;
+  rootPath?: string;
   opID: string;
   kind: "file" | "directory" | "upload" | "rename" | "delete";
   path: string;
@@ -157,6 +158,106 @@ export async function removeCreateIntent(opID: string): Promise<void> {
       tx.objectStore(INTENTS).delete(opID);
       tx.oncomplete = () => resolve();
       tx.onabort = () => reject(tx.error || new Error("清理文件操作记录失败"));
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function listArchivedIntents(
+  scope: DraftScope,
+): Promise<{ items: CreateIntent[]; truncated: boolean }> {
+  const db = await openDB();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(INTENTS, "readonly"),
+        cursor = tx.objectStore(INTENTS).openCursor(),
+        result: CreateIntent[] = [];
+      let truncated = false;
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const intent = item.value as CreateIntent;
+        if (
+          intent &&
+          intent.account === scope.account &&
+          intent.nodeID === scope.nodeID &&
+          intent.workspaceID === scope.workspaceID &&
+          Number.isSafeInteger(intent.rootRevision) &&
+          intent.rootRevision > 0 &&
+          intent.rootRevision !== scope.rootRevision &&
+          typeof intent.opID === "string" &&
+          item.primaryKey === intent.opID
+        ) {
+          if (result.length >= 1000) {
+            truncated = true;
+            return;
+          }
+          result.push(intent);
+        }
+        item.continue();
+      };
+      tx.oncomplete = () => resolve({ items: result, truncated });
+      tx.onabort = () =>
+        reject(tx.error || new Error("读取旧目录操作记录失败"));
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
+
+// Remove only the exact record the user reviewed; another tab may have
+// confirmed or otherwise updated it in the meantime.
+export async function removeArchivedIntent(
+  expected: CreateIntent,
+): Promise<void> {
+  const db = await openDB();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(INTENTS, "readwrite"),
+        store = tx.objectStore(INTENTS),
+        request = store.get(expected.opID);
+      let changed = false;
+      request.onsuccess = () => {
+        const current = request.result as CreateIntent | undefined;
+        const keys: (keyof CreateIntent)[] = [
+          "account",
+          "nodeID",
+          "workspaceID",
+          "rootRevision",
+          "rootPath",
+          "opID",
+          "kind",
+          "path",
+          "createdAt",
+          "size",
+          "sha256",
+          "sourceName",
+          "source",
+          "version",
+          "recursive",
+          "confirmed",
+        ];
+        if (
+          !current ||
+          keys.some((key) => current[key] !== expected[key]) ||
+          JSON.stringify(current) !== JSON.stringify(expected)
+        ) {
+          changed = true;
+          tx.abort();
+          return;
+        }
+        store.delete(expected.opID);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onabort = () =>
+        reject(
+          changed
+            ? new Error("操作记录已被其他页面更改，请重新核对")
+            : tx.error || new Error("移除操作记录失败"),
+        );
       tx.onerror = () => {};
     });
   } finally {

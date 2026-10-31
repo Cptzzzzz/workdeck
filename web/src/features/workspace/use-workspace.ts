@@ -25,6 +25,8 @@ import {
   listDeletedDrafts,
   listRecoverableDrafts,
   listArchivedDrafts,
+  listArchivedIntents,
+  removeArchivedIntent,
 } from "../../services/files/drafts";
 import type {
   FileEntry,
@@ -33,10 +35,12 @@ import type {
   Workspace,
   DeleteStatus,
   DeleteOutcome,
+  ArchivedOperation,
 } from "../../services/files/types";
 import type { TerminalRecord } from "../../types";
 import { downloadFile } from "../../services/files/download";
 import { previewKind } from "./preview-utils";
+import { matchesArchivedIntent } from "../../services/files/archive";
 import {
   readWorkspaceTabs,
   writeWorkspaceTabs,
@@ -95,6 +99,7 @@ export function useWorkspace(
   supportsRename: boolean,
   supportsDelete: boolean,
   supportsWatch: boolean,
+  supportsArchive: boolean,
 ) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [connection, setConnection] = useState("等待连接");
@@ -114,6 +119,9 @@ export function useWorkspace(
   const [archivedRecords, setArchivedRecords] = useState<
     { identity: DraftIdentity; pending: boolean }[]
   >([]);
+  const [archivedIntents, setArchivedIntents] = useState<CreateIntent[]>([]);
+  const [archivedIntentsTruncated, setArchivedIntentsTruncated] =
+    useState(false);
   const [transfer, setTransfer] = useState("");
   const [downloadMessage, setDownloadMessage] = useState("");
   const [renaming, setRenaming] = useState(false);
@@ -356,6 +364,8 @@ export function useWorkspace(
 
   useEffect(() => {
     setArchivedRecords([]);
+    setArchivedIntents([]);
+    setArchivedIntentsTruncated(false);
     if (!enabled || !workspace || !terminal || !account) return;
     const scope = {
       account,
@@ -366,8 +376,15 @@ export function useWorkspace(
     let stopped = false;
     const refreshArchives = async () => {
       try {
-        const drafts = await listArchivedDrafts(scope);
-        if (!stopped) setArchivedRecords(drafts);
+        const [drafts, operations] = await Promise.all([
+          listArchivedDrafts(scope),
+          listArchivedIntents(scope),
+        ]);
+        if (!stopped) {
+          setArchivedRecords(drafts);
+          setArchivedIntents(operations.items);
+          setArchivedIntentsTruncated(operations.truncated);
+        }
       } catch (e) {
         if (!stopped) setError("无法读取旧目录草稿：" + (e as Error).message);
       }
@@ -433,6 +450,113 @@ export function useWorkspace(
       return draft;
     },
     [account, workspace, terminal?.node_id],
+  );
+  const checkArchivedScope = useCallback(
+    (intent: CreateIntent) => {
+      const w = workspace,
+        client = clientRef.current;
+      if (
+        !w ||
+        !terminal ||
+        !client ||
+        intent.account !== account ||
+        intent.nodeID !== terminal.node_id ||
+        intent.workspaceID !== w.id ||
+        intent.rootRevision >= w.root_revision ||
+        client.workspace.id !== w.id ||
+        client.workspace.root_revision !== w.root_revision
+      )
+        throw new Error("工作区已改变或旧操作不属于当前工作区");
+      return client;
+    },
+    [account, workspace, terminal?.node_id],
+  );
+  const inspectArchivedIntent = useCallback(
+    async (intent: CreateIntent): Promise<ArchivedOperation> => {
+      const client = checkArchivedScope(intent);
+      if (!supportsArchive)
+        throw new Error("请升级节点后核对旧操作记录；可以先导出本地记录");
+      const result = await client.archivedOperationStatus(
+        intent.opID,
+        intent.rootRevision,
+      );
+      if (
+        clientRef.current !== client ||
+        !matchesArchivedIntent(intent, result)
+      )
+        throw new Error("节点记录与本地操作不匹配，请保留并人工核对");
+      return result;
+    },
+    [checkArchivedScope, supportsArchive],
+  );
+  const inspectArchivedSave = useCallback(
+    async (
+      identity: DraftIdentity,
+      source: "page" | "stored",
+    ): Promise<ArchivedOperation> => {
+      const draft = await exportArchivedDraft(identity, source),
+        pending = draft.pendingSave;
+      if (!pending) throw new Error("该草稿没有待确认保存");
+      const client = checkArchivedScope({
+        ...identity,
+        opID: pending.opID,
+        kind: "file",
+        createdAt: 0,
+      });
+      if (!supportsArchive)
+        throw new Error("请升级节点后核对旧保存；草稿和记录仍可导出");
+      const result = await client.archivedOperationStatus(
+          pending.opID,
+          identity.rootRevision,
+        ),
+        spec = result.write;
+      if (
+        clientRef.current !== client ||
+        result.kind !== "write" ||
+        result.path !== pending.spec.path ||
+        !spec ||
+        spec.path !== pending.spec.path ||
+        spec.size !== pending.spec.size ||
+        spec.sha256 !== pending.spec.sha256 ||
+        !!spec.create !== !!pending.spec.create ||
+        (spec.base_version || "") !== (pending.spec.base_version || "")
+      )
+        throw new Error("节点记录与本地保存快照不匹配，请保留并人工核对");
+      return result;
+    },
+    [checkArchivedScope, exportArchivedDraft, supportsArchive],
+  );
+  const archivedDeleteOutcomes = useCallback(
+    async (intent: CreateIntent, offset: number) => {
+      if (intent.kind !== "delete") throw new Error("此操作不是删除记录");
+      const client = checkArchivedScope(intent);
+      const status = await inspectArchivedIntent(intent);
+      if (
+        status.kind !== "entry.delete" ||
+        !status.delete ||
+        status.details_expired
+      )
+        throw new Error("旧删除结果明细不可用，请保留记录并人工核对");
+      if (clientRef.current !== client) throw new Error("工作区连接已改变");
+      return client.archivedDeleteOutcomes(
+        intent.opID,
+        intent.rootRevision,
+        offset,
+      );
+    },
+    [checkArchivedScope, inspectArchivedIntent],
+  );
+  const forgetArchivedIntent = useCallback(
+    async (intent: CreateIntent) => {
+      checkArchivedScope(intent);
+      if (activeIntents.current.has(intent.opID))
+        throw new Error("操作正在处理，请稍后重试");
+      await removeArchivedIntent(intent);
+      setArchivedIntents((old) =>
+        old.filter((item) => item.opID !== intent.opID),
+      );
+    },
+    [checkArchivedScope],
   );
 
   const refreshActive = useRef(false);
@@ -2183,6 +2307,7 @@ export function useWorkspace(
           nodeID: terminal.node_id,
           workspaceID: w.id,
           rootRevision: w.root_revision,
+          rootPath: w.root_path,
           opID: client.newOperationID(),
           kind: "rename",
           path: target,
@@ -2280,6 +2405,7 @@ export function useWorkspace(
           throw new Error("工作区已切换，请重新选择文件");
         const intent: CreateIntent = {
           ...scope,
+          rootPath: w.root_path,
           opID: client.newOperationID(),
           kind: "delete",
           path,
@@ -2692,6 +2818,7 @@ export function useWorkspace(
           nodeID: terminal.node_id,
           workspaceID: w.id,
           rootRevision: w.root_revision,
+          rootPath: w.root_path,
           opID: tx.opID,
           kind: "upload",
           path: tx.spec.path,
@@ -2904,6 +3031,7 @@ export function useWorkspace(
         nodeID: terminal.node_id,
         workspaceID: w.id,
         rootRevision: w.root_revision,
+        rootPath: w.root_path,
         opID: client.newOperationID(),
         kind,
         path: childPath(parent, name),
@@ -3146,6 +3274,21 @@ export function useWorkspace(
     renaming,
     supportsRename,
     supportsDelete,
+    supportsArchive,
+    archivedIntents: archivedIntents.filter(
+      (i) =>
+        workspace &&
+        terminal &&
+        i.account === account &&
+        i.nodeID === terminal.node_id &&
+        i.workspaceID === workspace.id &&
+        i.rootRevision !== workspace.root_revision,
+    ),
+    archivedIntentsTruncated,
+    inspectArchivedIntent,
+    inspectArchivedSave,
+    archivedDeleteOutcomes,
+    forgetArchivedIntent,
     changeRoot,
     renameItem,
     retryRename,

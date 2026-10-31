@@ -269,7 +269,7 @@ func (l *fileLink) control(request fileprotocol.Envelope) error {
 		var result files.WatchEvent
 		err := l.call("watch.poll", map[string]any{"handle": l.watch, "timeout_ms": p.TimeoutMS}, &result)
 		return l.send(id, "result", result, err)
-	case "directory.list", "directory.create", "file.stat", "entry.rename", "entry.delete.prepare", "entry.delete.commit", "entry.delete.cancel", "entry.delete.status", "entry.delete.outcomes":
+	case "directory.list", "directory.create", "file.stat", "entry.rename", "entry.delete.prepare", "entry.delete.commit", "entry.delete.cancel", "entry.delete.status", "entry.delete.outcomes", "operation.archive.status", "operation.archive.delete.outcomes":
 		var result json.RawMessage
 		err := l.call(request.Type, request.Payload, &result)
 		return l.send(id, "result", result, err)

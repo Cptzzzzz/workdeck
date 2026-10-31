@@ -56,6 +56,14 @@ export type DeleteOutcome = {
   state: string;
   error?: { code: string; message: string };
 };
+export type ArchivedOperation = FileOperation & {
+  path: string;
+  source?: string;
+  recursive?: boolean;
+  write?: SaveSpec;
+  delete?: DeleteStatus;
+  details_expired?: boolean;
+};
 export type SaveSpec = {
   path: string;
   base_version?: string;

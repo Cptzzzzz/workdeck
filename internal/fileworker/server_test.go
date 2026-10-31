@@ -175,6 +175,37 @@ func TestWorkerRPCFileLifecycleAndScope(t *testing.T) {
 	if err := json.Unmarshal(result, &got); err != nil || string(got) != string(body) {
 		t.Fatal(string(got), err)
 	}
+	if _, errResp = c.call(t, "read.close", workspace.ID, 1, map[string]any{"handle": "handle"}); errResp != nil {
+		t.Fatal(errResp)
+	}
+	nextRoot := filepath.Join(base, "next")
+	if err := os.Mkdir(nextRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	change := files.NewID(time.Now())
+	if _, errResp = c.call(t, "workspace.prepare", workspace.ID, 1, map[string]any{"op_id": change, "root_path": nextRoot}); errResp != nil {
+		t.Fatal(errResp)
+	}
+	if _, errResp = c.call(t, "workspace.commit", workspace.ID, 1, map[string]any{"op_id": change}); errResp != nil {
+		t.Fatal(errResp)
+	}
+	result, errResp = c.call(t, "operation.archive.status", workspace.ID, 2, map[string]any{"op_id": id, "previous_revision": 1})
+	var archived files.ArchivedOperation
+	if errResp != nil || json.Unmarshal(result, &archived) != nil || archived.Path != "new.txt" || archived.State != "committed" {
+		t.Fatalf("archived write: %+v %v", archived, errResp)
+	}
+	result, errResp = c.call(t, "operation.archive.delete.outcomes", workspace.ID, 2, map[string]any{"op_id": deleteID, "previous_revision": 1, "offset": 0, "limit": 64})
+	var archivedOutcomes struct {
+		Items []files.DeleteOutcome `json:"items"`
+		Next  int                   `json:"next"`
+	}
+	if errResp != nil || json.Unmarshal(result, &archivedOutcomes) != nil || len(archivedOutcomes.Items) != 1 || archivedOutcomes.Items[0].State != "deleted" {
+		t.Fatalf("archived delete: %+v %v", archivedOutcomes, errResp)
+	}
+	_, errResp = c.call(t, "operation.archive.status", workspace.ID, 2, map[string]any{"op_id": id, "previous_revision": 2})
+	if errResp == nil || errResp.Code != "OPERATION_SCOPE" {
+		t.Fatalf("current revision accepted: %v", errResp)
+	}
 	// EOF releases active read handles before the engine closes.
 	inW.Close()
 	select {
