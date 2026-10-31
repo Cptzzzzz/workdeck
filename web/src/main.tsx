@@ -281,7 +281,7 @@ function App() {
     }
   });
   const [sidebarWidth, setSidebarWidth] = useState(() =>
-    layoutNumber("workdeck.sidebar.v1", 280, 180, 600),
+    layoutNumber("workdeck.sidebar.v1", 280, 228, 600),
   );
   const [editorHeight, setEditorHeight] = useState(() =>
     layoutNumber("workdeck.editor-height.v1", 55, 20, 80),
@@ -493,7 +493,7 @@ function App() {
           "--workbench-sidebar-width":
             sidebarCollapsed && mode === "workspace"
               ? "0px"
-              : `min(${sidebarWidth}px, max(180px, calc(100vw - 340px)))`,
+              : `min(${sidebarWidth}px, max(228px, calc(100vw - 340px)))`,
           "--workbench-editor-height": `${editorHeight}%`,
         } as React.CSSProperties
       }
@@ -569,6 +569,12 @@ function App() {
             接入新节点
           </button>
           <div className="sidebar-bottom">
+            <button
+              className="sidebar-mode-button"
+              onClick={() => void changeMode("workspace")}
+            >
+              工作区模式
+            </button>
             <div className="secure-note">
               <ShieldCheck size={16} />
               <span>加密连接 · 会话独立运行</span>
@@ -613,6 +619,7 @@ function App() {
                 .find((n) => n.id === current?.node_id)
                 ?.capabilities?.includes("workspace-pending-v1")
             }
+            onSwitchMode={() => void changeMode("terminal")}
             onPendingWrites={() => setModal("pending-writes")}
             onNewItem={() => setModal("file-create")}
             onChangeRoot={() => setModal("workspace-root")}
@@ -645,10 +652,10 @@ function App() {
           role="separator"
           aria-label="调整文件树宽度"
           aria-orientation="vertical"
-          aria-valuemin={180}
-          aria-valuemax={Math.max(180, Math.min(600, window.innerWidth - 340))}
+          aria-valuemin={228}
+          aria-valuemax={Math.max(228, Math.min(600, window.innerWidth - 340))}
           aria-valuenow={Math.round(
-            Math.max(180, Math.min(sidebarWidth, window.innerWidth - 340)),
+            Math.max(228, Math.min(sidebarWidth, window.innerWidth - 340)),
           )}
           tabIndex={0}
           onKeyDown={(event) => {
@@ -656,7 +663,7 @@ function App() {
             event.preventDefault();
             setSidebarWidth((width) =>
               Math.max(
-                180,
+                228,
                 Math.min(
                   600,
                   window.innerWidth - 340,
@@ -672,10 +679,10 @@ function App() {
             if (event.currentTarget.hasPointerCapture(event.pointerId))
               setSidebarWidth(
                 Math.max(
-                  180,
+                  228,
                   Math.min(
                     600,
-                    Math.max(180, window.innerWidth - 340),
+                    Math.max(228, window.innerWidth - 340),
                     event.clientX,
                   ),
                 ),
@@ -690,7 +697,7 @@ function App() {
         />
       )}
       <main>
-        <header className="topbar">
+        <header className={"topbar " + (mode === "workspace" ? "hidden" : "")}>
           <button
             className="mobile-menu icon-button"
             aria-label="打开导航"
@@ -704,85 +711,6 @@ function App() {
             <b>{active ? "终端" : selected?.name || "全部终端"}</b>
           </div>
           <div className="topbar-right">
-            {mode === "workspace" && (
-              <div className="workbench-layout-actions" aria-label="工作区布局">
-                <button
-                  className="icon-button"
-                  aria-label={sidebarCollapsed ? "显示文件树" : "隐藏文件树"}
-                  title={sidebarCollapsed ? "显示文件树" : "隐藏文件树"}
-                  onClick={() => setSidebarCollapsed((value) => !value)}
-                >
-                  {sidebarCollapsed ? (
-                    <PanelLeftOpen size={16} />
-                  ) : (
-                    <PanelLeftClose size={16} />
-                  )}
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label={
-                    panelLayout === "editor"
-                      ? "恢复编辑区和终端分栏"
-                      : "最大化编辑区"
-                  }
-                  title={panelLayout === "editor" ? "恢复分栏" : "最大化编辑区"}
-                  aria-pressed={panelLayout === "editor"}
-                  disabled={!active}
-                  onClick={() =>
-                    setPanelLayout((value) =>
-                      value === "editor" ? "split" : "editor",
-                    )
-                  }
-                >
-                  <PanelTop size={16} />
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label={
-                    panelLayout === "terminal"
-                      ? "恢复终端和编辑区分栏"
-                      : "最大化终端"
-                  }
-                  title={panelLayout === "terminal" ? "恢复分栏" : "最大化终端"}
-                  aria-pressed={panelLayout === "terminal"}
-                  disabled={!active}
-                  onClick={() =>
-                    setPanelLayout((value) =>
-                      value === "terminal" ? "split" : "terminal",
-                    )
-                  }
-                >
-                  <PanelBottom size={16} />
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label="恢复默认布局"
-                  title="恢复默认布局"
-                  onClick={() => {
-                    setSidebarWidth(280);
-                    setEditorHeight(55);
-                    setSidebarCollapsed(false);
-                    setPanelLayout("split");
-                  }}
-                >
-                  <RotateCcw size={16} />
-                </button>
-              </div>
-            )}
-            <div className="mode-switch" aria-label="视图模式">
-              <button
-                className={mode === "terminal" ? "active" : ""}
-                onClick={() => void changeMode("terminal")}
-              >
-                终端模式
-              </button>
-              <button
-                className={mode === "workspace" ? "active" : ""}
-                onClick={() => void changeMode("workspace")}
-              >
-                工作区模式
-              </button>
-            </div>
             <span className="connection-status">
               <i className={"dot " + (!refreshError ? "online" : "")} />
               {refreshError ? "连接中断" : "工作台已连接"}
@@ -797,7 +725,7 @@ function App() {
             </button>
           </div>
         </header>
-        {tabs.length > 0 && (
+        {mode === "terminal" && tabs.length > 0 && (
           <div className="tab-strip">
             <button
               className={"overview-tab " + (!active ? "active" : "")}
@@ -841,7 +769,11 @@ function App() {
             无法刷新状态：{refreshError}。任务在节点上独立运行，正在重试连接。
           </div>
         )}
-        <div className={"overview " + (active ? "hidden" : "")}>
+        <div
+          className={
+            "overview " + (active || mode === "workspace" ? "hidden" : "")
+          }
+        >
           <div className="page-heading">
             <div>
               <div className="eyebrow">YOUR WORK, ALWAYS THERE</div>
@@ -1067,11 +999,85 @@ function App() {
           </footer>
         </div>
         <div
-          className={"sessions-host " + (!active ? "hidden" : "")}
+          className={
+            "sessions-host " + (!active && mode !== "workspace" ? "hidden" : "")
+          }
           data-workbench-panel={mode === "workspace" ? panelLayout : undefined}
         >
-          {mode === "workspace" && active && (
+          {mode === "workspace" && (
             <WorkspaceEditor
+              layoutActions={
+                <div
+                  className="workbench-layout-actions"
+                  aria-label="工作区布局"
+                >
+                  <button
+                    className="icon-button"
+                    aria-label={sidebarCollapsed ? "显示文件树" : "隐藏文件树"}
+                    title={sidebarCollapsed ? "显示文件树" : "隐藏文件树"}
+                    onClick={() => setSidebarCollapsed((value) => !value)}
+                  >
+                    {sidebarCollapsed ? (
+                      <PanelLeftOpen size={16} />
+                    ) : (
+                      <PanelLeftClose size={16} />
+                    )}
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label={
+                      panelLayout === "editor"
+                        ? "恢复编辑区和终端分栏"
+                        : "最大化编辑区"
+                    }
+                    title={
+                      panelLayout === "editor" ? "恢复分栏" : "最大化编辑区"
+                    }
+                    aria-pressed={panelLayout === "editor"}
+                    disabled={!active}
+                    onClick={() =>
+                      setPanelLayout((value) =>
+                        value === "editor" ? "split" : "editor",
+                      )
+                    }
+                  >
+                    <PanelTop size={16} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label={
+                      panelLayout === "terminal"
+                        ? "恢复终端和编辑区分栏"
+                        : "最大化终端"
+                    }
+                    title={
+                      panelLayout === "terminal" ? "恢复分栏" : "最大化终端"
+                    }
+                    aria-pressed={panelLayout === "terminal"}
+                    disabled={!active}
+                    onClick={() =>
+                      setPanelLayout((value) =>
+                        value === "terminal" ? "split" : "terminal",
+                      )
+                    }
+                  >
+                    <PanelBottom size={16} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="恢复默认布局"
+                    title="恢复默认布局"
+                    onClick={() => {
+                      setSidebarWidth(280);
+                      setEditorHeight(55);
+                      setSidebarCollapsed(false);
+                      setPanelLayout("split");
+                    }}
+                  >
+                    <RotateCcw size={16} />
+                  </button>
+                </div>
+              }
               controller={workspace}
               onCloseDocument={(doc) => {
                 if (
@@ -1150,6 +1156,17 @@ function App() {
             />
           )}
           <div className="terminal-sessions">
+            {mode === "workspace" && !active && (
+              <div className="workbench-empty-session">
+                <span>选择一个会话以打开对应的文件和终端</span>
+                <button
+                  className="secondary"
+                  onClick={() => setModal("sessions")}
+                >
+                  选择会话
+                </button>
+              </div>
+            )}
             {tabs.map((id) => {
               const t = data.terminals.find((t) => t.id === id);
               if (!t) return null;

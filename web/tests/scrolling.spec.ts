@@ -85,9 +85,12 @@ for (const route of ["relay", "direct"] as const)
     ).id;
     try {
       if (route === "direct")
-        await expect(page.locator(".transport-state")).toContainText("直连", {
-          timeout: 25000,
-        });
+        await expect(page.locator(".terminal-network summary")).toContainText(
+          "WebRTC",
+          {
+            timeout: 25000,
+          },
+        );
       await type(page, "bash --noprofile --norc");
       await type(page, "PS1='scroll$ '; HISTFILE=/dev/null; history -c");
       const program = "for i in range(200): print('SCROLL-LINE-%03d'%i)";

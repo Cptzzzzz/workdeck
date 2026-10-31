@@ -79,6 +79,17 @@ test("rename preserves dirty editor content and terminal process", async ({
       ).trim();
     const pid = pane();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "project", exact: true }).click();
@@ -90,6 +101,17 @@ test("rename preserves dirty editor content and terminal process", async ({
     await page.keyboard.insertText("stored draft\n");
     await page.waitForTimeout(800);
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "project", exact: true }).click();
@@ -118,7 +140,10 @@ test("rename preserves dirty editor content and terminal process", async ({
       };
     });
     await page
-      .getByRole("button", { name: "重命名 project", exact: true })
+      .getByRole("button", { name: "project", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "重命名 project", exact: true })
       .click();
     const modal = page.getByRole("dialog", { name: "重命名文件或文件夹" });
     await modal.getByLabel("新的文件名称").fill("renamed");
@@ -143,7 +168,10 @@ test("rename preserves dirty editor content and terminal process", async ({
       "unsaved content",
     );
     await page
-      .getByRole("button", { name: "重命名 renamed", exact: true })
+      .getByRole("button", { name: "renamed", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "重命名 renamed", exact: true })
       .click();
     const conflictModal = page.getByRole("dialog", {
       name: "重命名文件或文件夹",
@@ -158,6 +186,17 @@ test("rename preserves dirty editor content and terminal process", async ({
       "other\n",
     );
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "renamed", exact: true }).click();

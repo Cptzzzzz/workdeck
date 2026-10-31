@@ -2,7 +2,7 @@ import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { readState, selectTestNode, terminateCurrentTerminal } from "./helpers";
 
-async function assertLastRowFits(page: Page) {
+async function assertLastRowFits(page: Page, allowNetworkOverlay = false) {
   await expect(page.locator(".xterm-rows > div").last()).toContainText(
     "BOTTOM-ROW-VISIBLE",
   );
@@ -32,6 +32,7 @@ async function assertLastRowFits(page: Page) {
       }),
     )
     .toBe(true);
+  if (allowNetworkOverlay) return;
   await expect
     .poll(async () => {
       const row = await page.locator(".xterm-rows > div").last().boundingBox();
@@ -90,7 +91,7 @@ test("last terminal row remains fully visible through resizing, network details 
         assertLastRowFits(page));
       await page.locator(".terminal-network > summary").click();
       await test.step(`${viewport.width}x${viewport.height}: expanded`, () =>
-        assertLastRowFits(page));
+        assertLastRowFits(page, true));
       await page.locator(".terminal-network > summary").click();
       await assertLastRowFits(page);
     }

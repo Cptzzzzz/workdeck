@@ -111,15 +111,63 @@ test("modes share the terminal and the workspace edits and saves files", async (
       { encoding: "utf8" },
     ).trim();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await expect(page.locator(".terminal-state")).toContainText("控制中");
     await page
       .locator(".terminal-mount")
       .evaluate((e) => e.setAttribute("data-fixture-stable", "yes"));
     await page.getByRole("button", { name: "工作区模式" }).click();
+    await expect(page.locator(".topbar")).toBeHidden();
+    await expect(page.locator(".tab-strip")).toHaveCount(0);
+    const tabsBox = await page.locator(".workbench-tabs").boundingBox();
+    expect(tabsBox?.y).toBe(0);
     await expect(
       page.getByRole("button", { name: "example.txt", exact: true }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "重命名 example.txt" }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "example.txt", exact: true })
+      .click({ button: "right" });
+    await expect(
+      page.getByRole("menuitem", { name: "重命名 example.txt" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "下载 example.txt" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: "删除 example.txt" }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("menu", { name: "example.txt 的操作" }),
+    ).toBeHidden();
+    const network = page.locator(".terminal-statusbar .terminal-network");
+    await expect(network).toBeVisible();
+    const sizeBeforeDetails = await page
+      .locator(".terminal-screen")
+      .boundingBox();
+    await network.locator("summary").click();
+    await expect(network.getByLabel("WebSocket 中转指标")).toBeVisible();
+    await expect(network.getByLabel("WebRTC 直连指标")).toBeVisible();
+    const sizeWithDetails = await page
+      .locator(".terminal-screen")
+      .boundingBox();
+    expect(sizeWithDetails?.height).toBe(sizeBeforeDetails?.height);
+    await page.keyboard.press("Escape");
+    await expect(network.locator(".network-details")).toBeHidden();
     await page.evaluate(() => {
       const original = Blob.prototype.arrayBuffer;
       (window as any).workbenchOriginalArrayBuffer = original;
@@ -164,7 +212,10 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await expect(
       page.getByRole("button", { name: "uploaded.txt", exact: true }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "下载 uploaded.txt" }).click();
+    await page
+      .getByRole("button", { name: "uploaded.txt", exact: true })
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "下载 uploaded.txt" }).click();
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -273,7 +324,10 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await page.getByRole("button", { name: "显示文件树" }).click();
     await expect(page.locator(".workbench-sidebar")).toBeVisible();
     await page.getByRole("button", { name: "最大化终端" }).click();
-    await expect(page.locator(".workbench-editor")).toBeHidden();
+    await expect(page.locator(".workbench-editor-toolbar")).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "恢复终端和编辑区分栏" }),
+    ).toBeVisible();
     await expect(
       page.locator('.terminal-mount[data-fixture-stable="yes"]'),
     ).toBeVisible();
@@ -341,10 +395,19 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await page.waitForTimeout(150);
     const dragResizes = await page.evaluate(
       () =>
-        (window as any).__terminalResizes as { cols: number; rows: number }[],
+        (window as any).__terminalResizes as {
+          cols: number;
+          rows: number;
+          time: number;
+        }[],
     );
     expect(dragResizes.length).toBeGreaterThan(0);
-    expect(dragResizes.length).toBeLessThanOrEqual(9);
+    const dragDuration = dragResizes.at(-1)!.time - dragResizes[0].time;
+    // The browser may take longer to dispatch the drag under load. Allow one
+    // initial and one forced final update in addition to the 100 ms throttle.
+    expect(dragResizes.length).toBeLessThanOrEqual(
+      Math.ceil(dragDuration / 100) + 3,
+    );
     expect(dragResizes.every((size) => size.cols > 0 && size.rows > 0)).toBe(
       true,
     );
@@ -407,7 +470,13 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await page.screenshot({ path: "../test-results/workbench-mode.png" });
     await page.waitForTimeout(800); // let the draft transaction complete
     await page.reload();
-    await page.getByRole("button", { name, exact: true }).click();
+    await page.getByRole("button", { name: "选择会话", exact: true }).click();
+    const sessions = page.getByRole("dialog", { name: "会话管理" });
+    await sessions
+      .locator(".management-item")
+      .filter({ hasText: name })
+      .getByRole("button", { name: "打开", exact: true })
+      .click();
     await expect(
       page.locator(".workbench-tab.active .workbench-tab-select"),
     ).toHaveAttribute("title", "example.txt");

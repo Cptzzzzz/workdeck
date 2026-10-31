@@ -1,10 +1,5 @@
-import {
-  ArrowDown,
-  ArrowRight,
-  ArrowUp,
-  ChevronDown,
-  Radio,
-} from "lucide-react";
+import { useEffect, useRef } from "react";
+import { ArrowRight, ChevronDown, Radio } from "lucide-react";
 import {
   formatBytes,
   formatLatency,
@@ -49,39 +44,44 @@ export function NetworkPanel({
   status: TransportStatus;
   nodeName?: string;
 }) {
-  const totalReceive =
-    status.traffic.relay.receiveRate + status.traffic.direct.receiveRate;
-  const totalSend =
-    status.traffic.relay.sendRate + status.traffic.direct.sendRate;
+  const details = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      if (details.current && !details.current.contains(event.target as Node))
+        details.current.open = false;
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && details.current?.open) {
+        details.current.open = false;
+        details.current.querySelector<HTMLElement>("summary")?.focus();
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", key);
+    };
+  }, []);
   return (
-    <details className="terminal-network" aria-label="终端网络状态">
-      <summary>
-        {(["relay", "direct"] as const).map((route) => (
-          <span
-            key={route}
-            className={`network-path-summary ${status.route === route ? "selected" : ""}`}
-            data-path={route}
-          >
-            <i
-              className={status[route].state === "available" ? "available" : ""}
-            />
-            <span>{route === "relay" ? "WebSocket" : "WebRTC"}</span>
-            <strong>{latency(status[route])}</strong>
-            {status.route === route && <small>当前</small>}
-          </span>
-        ))}
+    <details
+      ref={details}
+      className="terminal-network"
+      aria-label="终端网络状态"
+    >
+      <summary title={`${status.detail}；点击查看终端网络详情`}>
         <span
-          className="network-rates"
-          title="本终端实际传输速率，方向以浏览器为准"
+          className="network-path-summary selected"
+          data-path={status.route}
         >
-          <span className="network-download">
-            <ArrowDown size={12} />
-            {formatBytes(totalReceive)}/s
-          </span>
-          <span className="network-upload">
-            <ArrowUp size={12} />
-            {formatBytes(totalSend)}/s
-          </span>
+          <i
+            className={
+              status[status.route].state === "available" ? "available" : ""
+            }
+          />
+          <span>{status.route === "relay" ? "WebSocket" : "WebRTC"}</span>
+          <strong>{latency(status[status.route])}</strong>
         </span>
         <ChevronDown className="network-expand" size={14} />
       </summary>

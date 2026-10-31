@@ -16,7 +16,7 @@ import {
   TerminalTransport,
   type TransportStatus,
 } from "../../terminal-transport";
-import { initialTransportStatus, formatLatency } from "../../network-metrics";
+import { initialTransportStatus } from "../../network-metrics";
 import { NetworkPanel } from "../../network-panel";
 import { TerminalFontControl } from "../../terminal-font-control";
 import { registerTerminalPressure } from "../../services/files/terminal-pressure";
@@ -327,17 +327,6 @@ export function TerminalView({
                   : "控制中"
                 : "重新连接中…"}
           </span>
-          {connection === "connected" && (
-            <span
-              className={"transport-state " + transport.route}
-              title={transport.detail}
-            >
-              {transport.route === "direct" ? "直连" : "中转"}
-              {transport.latency !== undefined
-                ? ` · ${formatLatency(transport.latency)}`
-                : ""}
-            </span>
-          )}
           <TerminalFontControl
             size={fontSize}
             onChange={onFontSizeChange}
@@ -384,9 +373,6 @@ export function TerminalView({
             <ArrowRight size={14} />
           </button>
         </div>
-      )}
-      {!stopped && connection === "connected" && (
-        <NetworkPanel status={transport} nodeName={node?.name} />
       )}
       {(failure || stopped || !node?.online) && (
         <div className="terminal-notice">
@@ -471,6 +457,9 @@ export function TerminalView({
         </span>
         <span>{terminal.cwd}</span>
         <span>{size}</span>
+        {!stopped && connection === "connected" && (
+          <NetworkPanel status={transport} nodeName={node?.name} />
+        )}
         <span className="persist-label">关闭标签页后任务继续运行</span>
       </div>
     </section>

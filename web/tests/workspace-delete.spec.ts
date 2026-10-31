@@ -79,6 +79,17 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
       ).trim();
     const pid = pane();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "project", exact: true }).click();
@@ -90,6 +101,17 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     await page.keyboard.insertText("second draft\n");
     await page.waitForTimeout(800);
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "project", exact: true }).click();
@@ -100,7 +122,10 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.insertText("draft text\n");
     await page
-      .getByRole("button", { name: "删除 project", exact: true })
+      .getByRole("button", { name: "project", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "删除 project", exact: true })
       .click();
     let dialog = page.getByRole("dialog", { name: "删除文件或文件夹" });
     await expect(dialog).toContainText("递归");
@@ -132,12 +157,10 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
       WebSocket.prototype.send = (window as any).deleteOriginalSend;
     });
     await page.getByRole("button", { name: "关闭对话框" }).click();
-    const pending = page
-      .locator(".workbench-intents > div")
-      .filter({
-        hasText: "project",
-        has: page.getByRole("button", { name: "核对并继续" }),
-      });
+    const pending = page.locator(".workbench-intents > div").filter({
+      hasText: "project",
+      has: page.getByRole("button", { name: "核对并继续" }),
+    });
     await expect(pending).toBeVisible();
     const retry = pending.getByRole("button", { name: "核对并继续" });
     await expect(retry).toBeEnabled({ timeout: 15000 });
@@ -163,6 +186,17 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     );
     await expect(page.locator(".monaco-editor")).toContainText("draft text");
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     const draft = page
@@ -207,6 +241,17 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
       .toBe("draft text\n");
     writeFileSync(path.join(dir, "project", "one.txt"), "new external\n");
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await page.getByRole("button", { name: "project", exact: true }).click();
@@ -236,7 +281,10 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     await expect(page.locator(".monaco-editor")).toContainText("second draft");
     await page.getByRole("button", { name: "刷新文件树" }).click();
     await page
-      .getByRole("button", { name: "删除 safe.txt", exact: true })
+      .getByRole("button", { name: "safe.txt", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "删除 safe.txt", exact: true })
       .click();
     dialog = page.getByRole("dialog", { name: "删除文件或文件夹" });
     await dialog.getByRole("button", { name: "检查删除范围" }).click();
@@ -245,6 +293,17 @@ test("confirmed deletion recovers after disconnect and preserves drafts and late
     ).toBeVisible();
     await page.getByRole("button", { name: "关闭对话框" }).click();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     expect(readFileSync(path.join(dir, "safe.txt"), "utf8")).toBe("keep\n");

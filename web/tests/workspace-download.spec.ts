@@ -76,10 +76,26 @@ test("large browser-managed download uses a single-use relay ticket", async ({
       ).trim();
     const pid = pane();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     const event = page.waitForEvent("download");
-    await page.getByRole("button", { name: "下载 large.bin" }).click();
+    await page
+      .getByRole("button", { name: "large.bin", exact: true })
+      .click({ button: "right" });
+    await page
+      .getByRole("menuitem", { name: "下载 large.bin", exact: true })
+      .click();
     const download = await event;
     await expect(
       page.getByText(/大文件下载已交给浏览器，通过服务器中转/),

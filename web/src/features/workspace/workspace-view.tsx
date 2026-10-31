@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronDown,
   ChevronRight,
@@ -18,6 +19,9 @@ import {
   TerminalSquare,
   X,
   ListChecks,
+  Eye,
+  EyeOff,
+  PanelsTopLeft,
 } from "lucide-react";
 import type {
   WorkspaceController,
@@ -72,6 +76,7 @@ export function WorkspaceSidebar({
   onArchivedIntent,
   onArchivedSave,
   onPendingWrites,
+  onSwitchMode,
   supportsPending,
 }: {
   controller: WorkspaceController;
@@ -90,9 +95,47 @@ export function WorkspaceSidebar({
   onArchivedIntent: (intent: CreateIntent) => void;
   onArchivedSave: (identity: DraftIdentity, source: "page" | "stored") => void;
   onPendingWrites: () => void;
+  onSwitchMode: () => void;
   supportsPending: boolean;
 }) {
   const [filterInput, setFilterInput] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    path: string;
+    name: string;
+    directory: boolean;
+    x: number;
+    y: number;
+    trigger: HTMLElement;
+  } | null>(null);
+  const contextRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!contextMenu) return;
+    contextRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (!contextRef.current?.contains(event.target as Node))
+        setContextMenu(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        contextMenu.trigger.focus();
+        setContextMenu(null);
+      }
+    };
+    const close = () => setContextMenu(null);
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", key);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [contextMenu]);
   const [visibleCounts, setVisibleCounts] = useState<Map<string, number>>(
     new Map(),
   );
@@ -151,6 +194,28 @@ export function WorkspaceSidebar({
                     style={{ paddingLeft: 12 + depth * 15 }}
                     disabled={entry.restricted || !controller.fileReady}
                     title={entry.restricted ? "此文件类型暂不可操作" : child}
+                    onContextMenu={(event) => {
+                      if (
+                        entry.restricted ||
+                        (entry.kind !== "file" && !folder)
+                      )
+                        return;
+                      event.preventDefault();
+                      setContextMenu({
+                        path: child,
+                        name: entry.name,
+                        directory: folder,
+                        x: Math.max(
+                          4,
+                          Math.min(event.clientX, window.innerWidth - 200),
+                        ),
+                        y: Math.max(
+                          4,
+                          Math.min(event.clientY, window.innerHeight - 155),
+                        ),
+                        trigger: event.currentTarget,
+                      });
+                    }}
                     onClick={() =>
                       void (folder
                         ? controller.toggle(child)
@@ -169,52 +234,6 @@ export function WorkspaceSidebar({
                     {folder ? <Folder size={15} /> : <File size={15} />}
                     <span>{entry.name}</span>
                   </button>
-                  {!entry.restricted && (folder || entry.kind === "file") && (
-                    <button
-                      className="file-tree-download"
-                      title={`重命名 ${entry.name}`}
-                      aria-label={`重命名 ${entry.name}`}
-                      disabled={
-                        !controller.supportsRename ||
-                        controller.renaming ||
-                        !controller.fileReady
-                      }
-                      onClick={() => onRename(child)}
-                    >
-                      <Pencil size={13} />
-                    </button>
-                  )}
-                  {!entry.restricted && (folder || entry.kind === "file") && (
-                    <button
-                      className="file-tree-download"
-                      title={`删除 ${entry.name}`}
-                      aria-label={`删除 ${entry.name}`}
-                      disabled={
-                        !controller.supportsDelete ||
-                        controller.renaming ||
-                        !controller.fileReady
-                      }
-                      onClick={() => onDelete(child, folder)}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                  {!folder && entry.kind === "file" && !entry.restricted && (
-                    <button
-                      className="file-tree-download"
-                      title={`下载 ${entry.name}`}
-                      aria-label={`下载 ${entry.name}`}
-                      disabled={!!controller.transfer || !controller.fileReady}
-                      onClick={() =>
-                        void controller.download(child).catch((e) => {
-                          if ((e as Error).name !== "AbortError")
-                            controller.reportError((e as Error).message);
-                        })
-                      }
-                    >
-                      <Download size={14} />
-                    </button>
-                  )}
                 </div>
                 {folder && open && renderDirectory(child, depth + 1)}
               </div>
@@ -323,6 +342,23 @@ export function WorkspaceSidebar({
           >
             <RefreshCw size={15} />
           </button>
+          <button
+            className="icon-button"
+            type="button"
+            title={
+              controller.showHidden
+                ? "不显示隐藏文件和目录"
+                : "显示隐藏文件和目录"
+            }
+            aria-label="显示隐藏文件和目录"
+            aria-pressed={controller.showHidden}
+            disabled={!controller.fileReady || controller.renaming}
+            onClick={() =>
+              void controller.changeShowHidden(!controller.showHidden)
+            }
+          >
+            {controller.showHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+          </button>
         </div>
       </div>
       {controller.workspace ? (
@@ -388,17 +424,6 @@ export function WorkspaceSidebar({
               清除筛选
             </button>
           )}
-          <label className="file-tree-hidden-toggle">
-            <input
-              type="checkbox"
-              checked={controller.showHidden}
-              disabled={!controller.fileReady || controller.renaming}
-              onChange={(event) =>
-                void controller.changeShowHidden(event.target.checked)
-              }
-            />
-            显示隐藏文件和目录
-          </label>
           <button
             type="button"
             className="file-tree-pending"
@@ -675,7 +700,79 @@ export function WorkspaceSidebar({
         <button title="设置" aria-label="设置" onClick={onSettings}>
           <Settings2 size={17} />
         </button>
+        <button
+          title="切换到终端模式"
+          aria-label="终端模式"
+          onClick={onSwitchMode}
+        >
+          <PanelsTopLeft size={17} />
+        </button>
       </div>
+      {contextMenu &&
+        createPortal(
+          <div
+            ref={contextRef}
+            className="file-context-menu"
+            role="menu"
+            aria-label={`${contextMenu.name} 的操作`}
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button
+              role="menuitem"
+              aria-label={`重命名 ${contextMenu.name}`}
+              disabled={
+                !controller.supportsRename ||
+                controller.renaming ||
+                !controller.fileReady
+              }
+              onClick={() => {
+                const path = contextMenu.path;
+                setContextMenu(null);
+                onRename(path);
+              }}
+            >
+              <Pencil size={14} />
+              重命名
+            </button>
+            {!contextMenu.directory && (
+              <button
+                role="menuitem"
+                aria-label={`下载 ${contextMenu.name}`}
+                disabled={!!controller.transfer || !controller.fileReady}
+                onClick={() => {
+                  const path = contextMenu.path;
+                  setContextMenu(null);
+                  void controller.download(path).catch((e) => {
+                    if ((e as Error).name !== "AbortError")
+                      controller.reportError((e as Error).message);
+                  });
+                }}
+              >
+                <Download size={14} />
+                下载
+              </button>
+            )}
+            <button
+              role="menuitem"
+              className="danger-text"
+              aria-label={`删除 ${contextMenu.name}`}
+              disabled={
+                !controller.supportsDelete ||
+                controller.renaming ||
+                !controller.fileReady
+              }
+              onClick={() => {
+                const { path, directory } = contextMenu;
+                setContextMenu(null);
+                onDelete(path, directory);
+              }}
+            >
+              <Trash2 size={14} />
+              删除
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -1578,11 +1675,13 @@ export function WorkspaceRootForm({
 }
 export function WorkspaceEditor({
   controller,
+  layoutActions,
   onCloseDocument,
   onSaveDeletedAs,
   onDiscardDeleted,
 }: {
   controller: WorkspaceController;
+  layoutActions: React.ReactNode;
   onCloseDocument: (doc: Document) => void;
   onSaveDeletedAs: (doc: Document) => void;
   onDiscardDeleted: (doc: Document) => void;
@@ -1679,6 +1778,7 @@ export function WorkspaceEditor({
             </button>
           </div>
         ))}
+        {layoutActions}
       </div>
       <div className="workbench-editor-toolbar">
         <span>

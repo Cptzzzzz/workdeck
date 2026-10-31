@@ -119,9 +119,12 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       page,
       `python3 -u -c "exec(__import__('base64').b64decode('${Buffer.from(stream).toString("base64")}'))"`,
     );
-    await expect(page.locator(".transport-state")).toContainText("直连", {
-      timeout: 25000,
-    });
+    await expect(page.locator(".terminal-network summary")).toContainText(
+      "WebRTC",
+      {
+        timeout: 25000,
+      },
+    );
     await expect(page.locator(".xterm-screen")).toContainText("handover-11");
     const screen = await page.locator(".xterm-screen").innerText();
     for (let i = 0; i < 12; i++)
@@ -141,9 +144,20 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       await page.evaluate(() => (window as any).__directBinary),
     ).toBeGreaterThan(directAtStart);
     const network = page.locator(".terminal-network");
-    await expect(network.locator('[data-path="relay"]')).toContainText(/ms/);
-    await expect(network.locator('[data-path="direct"]')).toContainText(/ms/);
+    await expect(network.locator('summary [data-path="direct"]')).toContainText(
+      /ms/,
+    );
     await network.locator("summary").click();
+    await expect(
+      network
+        .getByRole("region", { name: "WebSocket 中转指标" })
+        .locator(".network-latency"),
+    ).toContainText(/ms/);
+    await expect(
+      network
+        .getByRole("region", { name: "WebRTC 直连指标" })
+        .locator(".network-latency"),
+    ).toContainText(/ms/);
     await expect(network.locator(".network-current-route")).toHaveAttribute(
       "data-route",
       "direct",
@@ -160,7 +174,13 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       page,
       `python3 -u -c "exec(__import__('base64').b64decode('${Buffer.from(trafficProgram).toString("base64")}'))"`,
     );
-    await expect(network.locator(".network-download")).not.toHaveText("0 B/s");
+    await expect(
+      network
+        .getByRole("region", { name: "WebRTC 直连指标" })
+        .getByText("下行速率", { exact: true })
+        .locator("..")
+        .locator("dd"),
+    ).not.toHaveText("0 B/s");
     await expect(page.locator(".xterm-screen")).toContainText(
       "network-traffic-done",
     );
@@ -229,9 +249,12 @@ test("automatic direct path carries terminal bytes; failure falls back without r
         .getByRole("button", { name, exact: true })
         .click();
       await expect(viewer.locator(".terminal-state")).toContainText("只读连接");
-      await expect(viewer.locator(".transport-state")).toContainText("直连", {
-        timeout: 25000,
-      });
+      await expect(viewer.locator(".terminal-network summary")).toContainText(
+        "WebRTC",
+        {
+          timeout: 25000,
+        },
+      );
       await viewer.evaluate(() => {
         for (const channel of (window as any).__channels)
           if (channel.readyState === "open")
@@ -260,9 +283,12 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       await expect(viewer.locator(".xterm-screen")).toContainText(
         "takeover-marker=kept",
       );
-      await expect(viewer.locator(".transport-state")).toContainText("直连", {
-        timeout: 25000,
-      });
+      await expect(viewer.locator(".terminal-network summary")).toContainText(
+        "WebRTC",
+        {
+          timeout: 25000,
+        },
+      );
       await viewer.evaluate(async () => {
         const me = await (await fetch("/api/me")).json();
         await fetch("/api/logout", {
@@ -284,9 +310,12 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     }
     await page.getByRole("button", { name: "接管终端", exact: true }).click();
     await expect(page.locator(".terminal-state")).toContainText("控制中");
-    await expect(page.locator(".transport-state")).toContainText("直连", {
-      timeout: 25000,
-    });
+    await expect(page.locator(".terminal-network summary")).toContainText(
+      "WebRTC",
+      {
+        timeout: 25000,
+      },
+    );
     await type(page, "export WORKDECK_ONCE=1; printf 'once-marker\\n'");
     await expect(page.locator(".xterm-screen")).toContainText("once-marker");
     const beforeReconnect = readyCount;
@@ -295,7 +324,9 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     });
     await expect.poll(() => readyCount).toBeGreaterThan(beforeReconnect);
     await expect(page.locator(".terminal-state")).toContainText("控制中");
-    await expect(page.locator(".transport-state")).toContainText("中转");
+    await expect(page.locator(".terminal-network summary")).toContainText(
+      "WebSocket",
+    );
     await type(
       page,
       'printf \'fallback-marker=%s:%s\\n\' "$WORKDECK_LINK_MARKER" "$WORKDECK_ONCE"',
@@ -353,11 +384,13 @@ test("a working but slower direct path leaves terminal traffic on the relay", as
     await expect
       .poll(() => page.evaluate(() => (window as any).__directReplies))
       .toBeGreaterThanOrEqual(6);
-    await expect(page.locator(".transport-state")).toHaveAttribute(
+    await expect(page.locator(".terminal-network summary")).toHaveAttribute(
       "title",
       /自动比较/,
     );
-    await expect(page.locator(".transport-state")).toContainText("中转");
+    await expect(page.locator(".terminal-network summary")).toContainText(
+      "WebSocket",
+    );
     const network = page.locator(".terminal-network");
     await network.locator("summary").click();
     await expect(network.locator(".network-current-route")).toHaveAttribute(
@@ -390,13 +423,17 @@ test("a browser without WebRTC keeps a usable relay terminal", async ({
   await login(page);
   const id = await create(page);
   try {
-    await expect(page.locator(".transport-state")).toContainText("中转");
+    await expect(page.locator(".terminal-network summary")).toContainText(
+      "WebSocket",
+    );
     const network = page.locator(".terminal-network");
-    await expect(network.locator('[data-path="relay"]')).toContainText(/ms/);
-    await expect(network.locator('[data-path="direct"]')).toContainText(
-      "不支持",
+    await expect(network.locator('summary [data-path="relay"]')).toContainText(
+      /ms/,
     );
     await network.locator("summary").click();
+    await expect(
+      network.getByRole("region", { name: "WebRTC 直连指标" }),
+    ).toContainText("不支持");
     await expect(network.locator(".network-current-route")).toHaveAttribute(
       "data-route",
       "relay",

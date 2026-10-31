@@ -105,6 +105,17 @@ test("directory filtering and incremental rendering preserve the running termina
       ).trim();
     const pid = pane();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
     await expect(page.getByRole("button", { name: /显示更多/ })).toBeVisible();
@@ -147,11 +158,11 @@ test("directory filtering and incremental rendering preserve the running termina
     await expect(
       page.getByRole("button", { name: "safe.txt", exact: true }),
     ).toBeVisible();
-    const hidden = page.getByRole("checkbox", { name: "显示隐藏文件和目录" });
+    const hidden = page.getByRole("button", { name: "显示隐藏文件和目录" });
     await expect(
       page.getByRole("button", { name: ".env", exact: true }),
     ).toHaveCount(0);
-    await hidden.check();
+    await hidden.click();
     await expect(
       page.getByRole("button", { name: ".env", exact: true }),
     ).toBeVisible();
@@ -173,21 +184,32 @@ test("directory filtering and incremental rendering preserve the running termina
     await expect(
       page.getByRole("button", { name: ".env", exact: true }),
     ).toBeVisible();
-    await hidden.uncheck();
+    await hidden.click();
     await expect(
       page.getByRole("button", { name: ".env", exact: true }),
     ).toHaveCount(0);
     await expect(
       page.getByText("筛选所选目录：.", { exact: true }),
     ).toBeVisible();
-    await hidden.check();
+    await hidden.click();
     await expect(
       page.getByRole("button", { name: ".env", exact: true }),
     ).toBeVisible();
     await page.reload();
+    await expect(
+      page.locator(
+        '.sidebar-mode-button:visible, .workbench-management button[aria-label="终端模式"]:visible',
+      ),
+    ).toBeVisible();
+    if (
+      await page
+        .getByRole("button", { name: "终端模式", exact: true })
+        .isVisible()
+    )
+      await page.getByRole("button", { name: "终端模式", exact: true }).click();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
-    await expect(hidden).toBeChecked();
+    await expect(hidden).toHaveAttribute("aria-pressed", "true");
     await expect(
       page.getByRole("button", { name: ".env", exact: true }),
     ).toBeVisible();
