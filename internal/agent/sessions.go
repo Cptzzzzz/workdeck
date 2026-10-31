@@ -104,7 +104,7 @@ func (s *Sessions) inspect(t protocol.Session) protocol.Session {
 	if t.State == "closed" || t.State == "error" {
 		return t
 	}
-	out, err := s.tmuxRun(t.ID, "display-message", "-p", "-t", "main:0.0", "#{pane_dead}:#{pane_dead_status}")
+	out, err := s.tmuxRun(t.ID, "display-message", "-p", "-t", "main:0.0", "#{pane_dead}:#{pane_dead_status}:#{pane_pid}")
 	if err != nil {
 		t.State = "lost"
 		t.Error = "会话进程已不存在，节点可能重启过"
@@ -113,10 +113,13 @@ func (s *Sessions) inspect(t protocol.Session) protocol.Session {
 		}
 		return t
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), ":", 2)
+	parts := strings.SplitN(strings.TrimSpace(string(out)), ":", 3)
+	if len(parts) == 3 {
+		t.PanePID, _ = strconv.Atoi(parts[2])
+	}
 	if parts[0] == "1" {
 		t.State = "exited"
-		if len(parts) == 2 {
+		if len(parts) >= 2 {
 			if n, e := strconv.Atoi(parts[1]); e == nil {
 				t.ExitCode = &n
 			}
@@ -136,6 +139,7 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 		return list, err
 	}
 	var snapshotErr error
+	processes := codexProcesses()
 	for _, entry := range files {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -176,6 +180,15 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 			}
 		}
 		t.Codex = s.codexObservation(t.ID)
+		if t.Codex != nil && t.State == "running" && t.PanePID > 0 {
+			if _, ok := processes[t.PanePID]; ok {
+				detected := processes.hasCodex(t.PanePID)
+				t.Codex.Detected = &detected
+				if t.Codex.ProcessKey != "" && t.Codex.Status != "session_ended" && !processes.hasKey(t.PanePID, t.Codex.ProcessKey) {
+					t.Codex.Status = "unknown"
+				}
+			}
+		}
 		list = append(list, t)
 	}
 	return list, snapshotErr

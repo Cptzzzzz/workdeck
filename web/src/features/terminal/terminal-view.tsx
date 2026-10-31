@@ -20,6 +20,7 @@ import { initialTransportStatus } from "../../network-metrics";
 import { NetworkPanel } from "../../network-panel";
 import { TerminalFontControl } from "../../terminal-font-control";
 import { registerTerminalPressure } from "../../services/files/terminal-pressure";
+import { codexStatus } from "../../codex-status";
 function sendInput(socket: TerminalTransport | null, bytes: Uint8Array) {
   if (socket?.readyState !== WebSocket.OPEN) return;
   for (let offset = 0; offset < bytes.length; offset += 16384)
@@ -457,6 +458,13 @@ export function TerminalView({
         </span>
         <span>{terminal.cwd}</span>
         <span>{size}</span>
+        {codexStatus(terminal, node) && (
+          <span
+            className={`codex-bar-status ${codexStatus(terminal, node)!.kind}`}
+          >
+            {codexStatus(terminal, node)!.text}
+          </span>
+        )}
         {!stopped && connection === "connected" && (
           <NetworkPanel status={transport} nodeName={node?.name} />
         )}

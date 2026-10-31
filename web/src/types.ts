@@ -30,6 +30,10 @@ export type TerminalRecord = {
     codex_turn: string;
     codex_completed_at: string;
     codex_command: string;
+    codex_status: string;
+    codex_event: string;
+    codex_observed_at: string;
+    codex_detected: boolean | null;
   };
 };
 export type Snapshot = { nodes: ComputeNode[]; terminals: TerminalRecord[] };

@@ -36,6 +36,7 @@ import type {
 import { api, setCSRF } from "./services/api";
 import { TerminalView } from "./features/terminal/terminal-view";
 import { formatBytes } from "./network-metrics";
+import { codexStatus } from "./codex-status";
 import {
   useWorkspace,
   type Document as WorkspaceDocument,
@@ -484,16 +485,29 @@ function App() {
     if (!user) return;
     void refresh();
     const t = setInterval(refresh, 5000);
-    return () => clearInterval(t);
+    const events = new EventSource("/api/events");
+    events.addEventListener("state", refresh);
+    return () => {
+      clearInterval(t);
+      events.close();
+    };
   }, [user, refresh]);
   const knownCodexTurns = useRef<Map<string, string> | null>(null);
+  const knownCodexEvents = useRef<Map<string, string> | null>(null);
+  const codexSnapshot = useRef(data);
+  codexSnapshot.current = data;
+  const currentUser = useRef(user);
+  currentUser.current = user;
+  const [unreadCodex, setUnreadCodex] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!user) {
       knownCodexTurns.current = null;
+      knownCodexEvents.current = null;
       return;
     }
     if (!data.nodes.length) return;
     const previous = knownCodexTurns.current;
+    const previousEvents = knownCodexEvents.current;
     const current = new Map(
       data.terminals.map((terminal) => [
         terminal.id,
@@ -505,6 +519,7 @@ function App() {
         const turn = terminal.task?.codex_turn;
         if (
           !turn ||
+          terminal.task?.codex_status ||
           !previous.has(terminal.id) ||
           previous.get(terminal.id) === turn
         )
@@ -517,14 +532,112 @@ function App() {
           localStorage.getItem(key) !== turn
         ) {
           localStorage.setItem(key, turn);
-          new Notification("Codex 本轮已结束", {
+          const notice = new Notification("Codex 本轮已结束", {
             body: `${terminal.name}：请查看结果和后续操作。`,
           });
+          notice.onclick = () => {
+            window.focus();
+            setTabs((tabs) =>
+              tabs.includes(terminal.id) ? tabs : [...tabs, terminal.id],
+            );
+            setActive(terminal.id);
+            notice.close();
+          };
+        }
+      }
+    }
+    if (previousEvents) {
+      for (const terminal of data.terminals) {
+        const event = terminal.task?.codex_event;
+        const state = terminal.task?.codex_status;
+        if (
+          !event ||
+          !previousEvents.has(terminal.id) ||
+          previousEvents.get(terminal.id) === event ||
+          !["attention", "turn_ended", "interrupted"].includes(state || "")
+        )
+          continue;
+        if (active !== terminal.id || !document.hasFocus())
+          setUnreadCodex((old) => ({ ...old, [terminal.id]: event }));
+        if (state === "turn_ended") {
+          window.setTimeout(() => {
+            if (!currentUser.current) return;
+            const latest = codexSnapshot.current.terminals.find(
+              (item) => item.id === terminal.id,
+            );
+            if (
+              latest?.task?.codex_event !== event ||
+              latest.task.codex_status !== "turn_ended"
+            )
+              return;
+            if (
+              localStorage.getItem("workdeck-task-notifications") !== "on" ||
+              !("Notification" in window) ||
+              Notification.permission !== "granted"
+            )
+              return;
+            const key = `workdeck-notified-event-${terminal.id}`;
+            if (localStorage.getItem(key) === event) return;
+            localStorage.setItem(key, event);
+            const notice = new Notification("Codex 可能已完成，请查看", {
+              body: `${terminal.name}：请查看结果和后续操作。`,
+            });
+            notice.onclick = () => {
+              window.focus();
+              setTabs((tabs) =>
+                tabs.includes(terminal.id) ? tabs : [...tabs, terminal.id],
+              );
+              setActive(terminal.id);
+              notice.close();
+            };
+          }, 2500);
+        }
+        if (
+          state === "attention" &&
+          localStorage.getItem("workdeck-task-notifications") === "on" &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          const key = `workdeck-notified-event-${terminal.id}`;
+          if (localStorage.getItem(key) !== event) {
+            localStorage.setItem(key, event);
+            const notice = new Notification("Codex 可能需要处理", {
+              body: `${terminal.name}：请打开终端查看。`,
+            });
+            notice.onclick = () => {
+              window.focus();
+              setTabs((tabs) =>
+                tabs.includes(terminal.id) ? tabs : [...tabs, terminal.id],
+              );
+              setActive(terminal.id);
+              notice.close();
+            };
+          }
         }
       }
     }
     knownCodexTurns.current = current;
-  }, [user, data]);
+    knownCodexEvents.current = new Map(
+      data.terminals.map((terminal) => [
+        terminal.id,
+        terminal.task?.codex_event || "",
+      ]),
+    );
+  }, [user, data, active]);
+  useEffect(() => {
+    const markRead = () => {
+      if (!active || !document.hasFocus()) return;
+      setUnreadCodex((old) => {
+        if (!old[active]) return old;
+        const next = { ...old };
+        delete next[active];
+        return next;
+      });
+    };
+    markRead();
+    window.addEventListener("focus", markRead);
+    return () => window.removeEventListener("focus", markRead);
+  }, [active]);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 5000);
@@ -892,6 +1005,27 @@ function App() {
                   <button onClick={() => setActive(id)}>
                     <TerminalSquare size={15} />
                     <span>{t?.name || "终端"}</span>
+                    {t &&
+                      (() => {
+                        const state = codexStatus(
+                          t,
+                          data.nodes.find((n) => n.id === t.node_id),
+                        );
+                        return state ? (
+                          <span
+                            className={`codex-tab-indicator ${state.kind}`}
+                            title={state.text}
+                            aria-label={state.text}
+                          />
+                        ) : null;
+                      })()}
+                    {unreadCodex[id] && (
+                      <span
+                        className="codex-unread"
+                        title="有未查看的 Codex 状态更新"
+                        aria-label="有未查看的 Codex 状态更新"
+                      />
+                    )}
                   </button>
                   <button
                     title="断开此标签页，任务继续运行"
@@ -1067,6 +1201,13 @@ function App() {
                       <Server size={13} />
                       {n?.name || "已撤销节点"}
                     </div>
+                    {codexStatus(t, n) && (
+                      <div
+                        className={`codex-card-status ${codexStatus(t, n)!.kind}`}
+                      >
+                        {codexStatus(t, n)!.text}
+                      </div>
+                    )}
                     <div className="card-path">
                       <Folder size={14} />
                       <span title={t.cwd}>

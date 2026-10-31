@@ -3086,3 +3086,42 @@ main {
   font-size: 11px;
   margin: 8px 0;
 }
+
+.codex-tab-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #86ac80;
+  flex: none;
+}
+.codex-unread {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f0be78;
+  flex: none;
+}
+.codex-tab-indicator.attention,
+.codex-tab-indicator.interrupted {
+  background: #eeb46d;
+}
+.codex-tab-indicator.done {
+  background: #9fd889;
+}
+.codex-tab-indicator.unknown {
+  background: #7e8b80;
+}
+.codex-card-status,
+.codex-bar-status {
+  color: #add79e;
+  font-size: 11px;
+}
+.codex-card-status.attention,
+.codex-bar-status.attention {
+  color: #eeb46d;
+}
+.codex-card-status.unknown,
+.codex-bar-status.unknown {
+  color: #9aa59d;
+}

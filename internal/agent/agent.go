@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -115,7 +116,7 @@ func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1"}})
+	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1"}})
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")
@@ -146,6 +147,7 @@ func (a *Agent) connected(parent context.Context) error {
 			}
 		}
 	}()
+	go a.watchCodexEvents(ctx, socket)
 	fileWorkers := newFileWorkerPool(a)
 	defer fileWorkers.Close()
 	var jobs sync.WaitGroup
@@ -158,6 +160,24 @@ func (a *Agent) connected(parent context.Context) error {
 			return err
 		}
 		switch msg.Type {
+		case "codex.install", "codex.remove":
+			jobs.Add(1)
+			go func() {
+				defer jobs.Done()
+				dir, e := filepath.Abs(a.sessions.dir)
+				if e == nil {
+					if msg.Type == "codex.install" {
+						e = InstallCodexHooks(dir)
+					} else {
+						e = RemoveCodexHooks(dir)
+					}
+				}
+				result := protocol.Message{Type: "result", RequestID: msg.RequestID}
+				if e != nil {
+					result.Error = e.Error()
+				}
+				_ = socket.JSON(result)
+			}()
 		case "file.attach":
 			select {
 			case fileSlots <- struct{}{}:

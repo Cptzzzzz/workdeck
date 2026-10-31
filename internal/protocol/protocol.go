@@ -15,6 +15,7 @@ type Session struct {
 	RunUser   string            `json:"run_user,omitempty"`
 	Scope     string            `json:"scope,omitempty"`
 	Codex     *CodexObservation `json:"codex,omitempty"`
+	PanePID   int               `json:"-"`
 }
 
 // CodexObservation contains no prompts or model output. A completion records
@@ -23,6 +24,11 @@ type CodexObservation struct {
 	TurnID        string `json:"turn_id,omitempty"`
 	CompletedAt   string `json:"completed_at,omitempty"`
 	LaunchCommand string `json:"launch_command,omitempty"`
+	Status        string `json:"status,omitempty"`
+	EventID       string `json:"event_id,omitempty"`
+	ObservedAt    string `json:"observed_at,omitempty"`
+	Detected      *bool  `json:"detected,omitempty"`
+	ProcessKey    string `json:"process_key,omitempty"`
 }
 
 type Directory struct {
@@ -62,6 +68,7 @@ type Message struct {
 	Directory     *DirectoryListing `json:"directory,omitempty"`
 	Workspace     *files.Workspace  `json:"workspace,omitempty"`
 	RootChange    *files.RootChange `json:"root_change,omitempty"`
+	Codex         *CodexObservation `json:"codex,omitempty"`
 	WorkspaceID   string            `json:"workspace_id,omitempty"`
 	RootRevision  int64             `json:"root_revision,omitempty"`
 	OperationID   string            `json:"operation_id,omitempty"`

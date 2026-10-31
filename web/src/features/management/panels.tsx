@@ -210,7 +210,7 @@ function TaskEditor({ terminal }: { terminal: TerminalRecord }) {
         }
       }}
     >
-      <summary>任务详情与 Codex 跟踪</summary>
+      <summary>任务详情</summary>
       <label>
         标签
         <input
@@ -251,32 +251,9 @@ function TaskEditor({ terminal }: { terminal: TerminalRecord }) {
       </label>
       <button onClick={() => void save()}>保存任务信息</button>
       <p>
-        使用下方命令在此终端启动 Codex，才能收到之后的轮次结束事件；已经运行的
-        Codex 不受影响。本轮结束不代表整个任务已成功，后续仍可能需要你处理。
+        在节点管理中启用 Codex 跟踪并在 Codex 的 /hooks 中信任后，直接运行 codex
+        即可。已运行的进程可能需要重启或恢复会话。
       </p>
-      {terminal.task?.codex_command ? (
-        <>
-          <code className="task-command">{terminal.task.codex_command}</code>
-          <button
-            onClick={() =>
-              void navigator.clipboard
-                .writeText(terminal.task!.codex_command)
-                .then(
-                  () => setMessage("命令已复制"),
-                  () => setMessage("复制失败，请手动选择命令"),
-                )
-            }
-          >
-            复制启动命令
-          </button>
-          <p>
-            该命令只为此次启动设置 Codex notify，会覆盖此进程已有的 notify
-            配置；不同服务账户的旧终端可能无法访问节点数据目录。
-          </p>
-        </>
-      ) : (
-        <p>等待支持任务跟踪的节点上线。</p>
-      )}
       {message && <small role="status">{message}</small>}
     </details>
   );
@@ -295,6 +272,7 @@ export function NodesPanel({
   onRename: (node: ComputeNode) => void;
   onRevoke: (node: ComputeNode) => void;
 }) {
+  const [hookMessage, setHookMessage] = useState("");
   return (
     <div className="management-panel">
       <div className="modal-symbol">
@@ -331,6 +309,45 @@ export function NodesPanel({
             </div>
             <div className="management-item-actions">
               <button onClick={() => onRename(n)}>重命名</button>
+              <button
+                disabled={
+                  !n.online || !n.capabilities?.includes("codex-hooks-v1")
+                }
+                onClick={() => {
+                  setHookMessage("正在配置 Codex 跟踪…");
+                  void api(`/nodes/${n.id}/codex-hooks`, {
+                    method: "POST",
+                    body: "{}",
+                  }).then(
+                    () =>
+                      setHookMessage(
+                        `${n.name}：配置已合并。下次启动 Codex 后运行 /hooks，审核并信任 Workdeck Hooks。`,
+                      ),
+                    (e) => setHookMessage((e as Error).message),
+                  );
+                }}
+              >
+                启用 Codex 跟踪
+              </button>
+              <button
+                disabled={
+                  !n.online || !n.capabilities?.includes("codex-hooks-v1")
+                }
+                onClick={() => {
+                  setHookMessage("正在移除 Workdeck 的 Codex Hooks…");
+                  void api(`/nodes/${n.id}/codex-hooks`, {
+                    method: "DELETE",
+                  }).then(
+                    () =>
+                      setHookMessage(
+                        `${n.name}：已移除 Workdeck 配置，其他 Hooks 保留。已启动的 Codex 可能继续使用已加载的配置。`,
+                      ),
+                    (e) => setHookMessage((e as Error).message),
+                  );
+                }}
+              >
+                移除跟踪
+              </button>
               <button onClick={() => onRevoke(n)}>撤销接入</button>
             </div>
           </div>
@@ -339,6 +356,11 @@ export function NodesPanel({
           <p className="management-empty">尚未接入计算节点。</p>
         )}
       </div>
+      {hookMessage && (
+        <p role="status" className="modal-description">
+          {hookMessage}
+        </p>
+      )}
     </div>
   );
 }
@@ -459,7 +481,7 @@ export function SettingsPanel({
             setNotifications(enabled);
           }}
         />
-        Codex 新一轮结束时显示浏览器通知
+        Codex 停止或可能需要处理时显示浏览器通知
       </label>
       <p className="modal-description">
         仅在本设备页面打开并保持登录时生效；首次打开不会补发旧通知。浏览器需要允许通知。

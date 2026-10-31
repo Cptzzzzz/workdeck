@@ -48,6 +48,39 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	for name, definition := range map[string]string{"codex_status": "TEXT NOT NULL DEFAULT ''", "codex_event": "TEXT NOT NULL DEFAULT ''", "codex_observed_at": "TEXT NOT NULL DEFAULT ''", "codex_detected": "INTEGER"} {
+		rows, e := db.Query("PRAGMA table_info(terminal_tasks)")
+		if e != nil {
+			db.Close()
+			return nil, e
+		}
+		found := false
+		for rows.Next() {
+			var cid, notnull, pk int
+			var col, typ string
+			var value any
+			if e = rows.Scan(&cid, &col, &typ, &notnull, &value, &pk); e != nil {
+				rows.Close()
+				db.Close()
+				return nil, e
+			}
+			if col == name {
+				found = true
+			}
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			db.Close()
+			return nil, e
+		}
+		if !found {
+			if _, e = db.Exec("ALTER TABLE terminal_tasks ADD COLUMN " + name + " " + definition); e != nil {
+				db.Close()
+				return nil, e
+			}
+		}
+	}
 	// Additive migrations preserve existing node identities, sessions, and logins.
 	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''", "run_user": "TEXT NOT NULL DEFAULT ''"} {
 		rows, e := db.Query("PRAGMA table_info(nodes)")
@@ -145,6 +178,10 @@ type TaskInfo struct {
 	CodexTurn        string `json:"codex_turn"`
 	CodexCompletedAt string `json:"codex_completed_at"`
 	CodexCommand     string `json:"codex_command"`
+	CodexStatus      string `json:"codex_status"`
+	CodexEvent       string `json:"codex_event"`
+	CodexObservedAt  string `json:"codex_observed_at"`
+	CodexDetected    *bool  `json:"codex_detected"`
 }
 
 const terminalFields = "id,node_id,name,cwd,desired_state,observed_state,created_at,updated_at,error,exit_code"

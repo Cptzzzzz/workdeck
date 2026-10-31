@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -68,6 +69,7 @@ type Hub struct {
 	downloadResumes     map[string]*fileBrowserTicket
 	filePending         map[string]*fileAgentTicket
 	fileConnections     map[string]*fileConnection
+	stateSubscribers    map[chan struct{}]struct{}
 }
 
 func (h *Hub) workspaceLock(terminal string) *sync.Mutex {
@@ -110,6 +112,7 @@ func (h *Hub) Handler() http.Handler {
 	}))
 	m.HandleFunc("POST /api/account/password", h.protected(h.changePassword))
 	m.HandleFunc("GET /api/state", h.protected(h.state))
+	m.HandleFunc("GET /api/events", h.protected(h.stateEvents))
 	m.HandleFunc("POST /api/enrollments", h.protected(h.newEnrollment))
 	m.HandleFunc("POST /api/terminals", h.protected(h.createTerminal))
 	m.HandleFunc("PATCH /api/terminals/{id}", h.protected(h.renameTerminal))
@@ -125,6 +128,8 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
+	m.HandleFunc("POST /api/nodes/{id}/codex-hooks", h.protected(h.installNodeCodexHooks))
+	m.HandleFunc("DELETE /api/nodes/{id}/codex-hooks", h.protected(h.installNodeCodexHooks))
 	m.HandleFunc("GET /api/nodes/{id}/directories", h.protected(h.directories))
 	m.HandleFunc("POST /api/agent/enroll", h.enroll)
 	m.HandleFunc("GET /api/agent/control", h.controlSocket)
@@ -235,7 +240,7 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 		terms = append(terms, t)
 	}
 	rows.Close()
-	rows, err = h.store.db.Query("SELECT terminal_id,note,tags,important,manual_status,codex_turn,codex_completed_at,codex_command FROM terminal_tasks")
+	rows, err = h.store.db.Query("SELECT terminal_id,note,tags,important,manual_status,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected FROM terminal_tasks")
 	if err != nil {
 		failure(w, 500, "读取任务失败")
 		return
@@ -244,7 +249,7 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	for rows.Next() {
 		var id string
 		var task TaskInfo
-		if err = rows.Scan(&id, &task.Note, &task.Tags, &task.Important, &task.ManualStatus, &task.CodexTurn, &task.CodexCompletedAt, &task.CodexCommand); err != nil {
+		if err = rows.Scan(&id, &task.Note, &task.Tags, &task.Important, &task.ManualStatus, &task.CodexTurn, &task.CodexCompletedAt, &task.CodexCommand, &task.CodexStatus, &task.CodexEvent, &task.CodexObservedAt, &task.CodexDetected); err != nil {
 			rows.Close()
 			failure(w, 500, "读取任务失败")
 			return
@@ -261,6 +266,108 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 		terms[i].Task = tasks[terms[i].ID]
 	}
 	respond(w, 200, map[string]any{"nodes": nodes, "terminals": terms})
+}
+
+func (h *Hub) stateEvents(w http.ResponseWriter, r *http.Request, l login) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		failure(w, 500, "不支持事件流")
+		return
+	}
+	ch := make(chan struct{}, 1)
+	h.mu.Lock()
+	if h.stateSubscribers == nil {
+		h.stateSubscribers = map[chan struct{}]struct{}{}
+	}
+	h.stateSubscribers[ch] = struct{}{}
+	h.mu.Unlock()
+	defer func() { h.mu.Lock(); delete(h.stateSubscribers, ch); h.mu.Unlock() }()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, ": connected\n\n")
+	flusher.Flush()
+	t := time.NewTicker(20 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ch:
+			_, _ = io.WriteString(w, "event: state\ndata: changed\n\n")
+			flusher.Flush()
+		case <-t.C:
+			if _, ok := h.loginFor(r); !ok {
+				return
+			}
+			_, _ = io.WriteString(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func (h *Hub) publishState() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.stateSubscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (h *Hub) installNodeCodexHooks(w http.ResponseWriter, r *http.Request, l login) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	command := "codex.install"
+	if r.Method == "DELETE" {
+		command = "codex.remove"
+	}
+	result, err := h.command(ctx, r.PathValue("id"), protocol.Message{Type: command})
+	if err != nil {
+		failure(w, 503, "节点离线或不支持安装，请先升级节点")
+		return
+	}
+	if result.Error != "" {
+		failure(w, 400, result.Error)
+		return
+	}
+	respond(w, 200, map[string]bool{"ok": true})
+}
+
+type codexDB interface {
+	Exec(string, ...any) (sql.Result, error)
+}
+
+func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservation) error {
+	if c == nil || validateID(id) != nil || len(c.TurnID) > 128 || len(c.CompletedAt) > 64 || len(c.LaunchCommand) > 4096 || len(c.EventID) > 128 || len(c.ObservedAt) > 64 {
+		return errors.New("invalid Codex observation")
+	}
+	switch c.Status {
+	case "", "ready", "running", "attention", "turn_ended", "interrupted", "session_ended", "unknown":
+	default:
+		return errors.New("invalid Codex status")
+	}
+	if c.Status != "" {
+		if c.EventID == "" {
+			return errors.New("missing event ID")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, c.ObservedAt); err != nil {
+			return errors.New("invalid event time")
+		}
+	}
+	_, err := db.Exec(`INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected)
+	 SELECT id,?,?,?,?,?,?,? FROM terminals WHERE id=? AND node_id=?
+	 ON CONFLICT(terminal_id) DO UPDATE SET
+	 codex_turn=CASE WHEN excluded.codex_turn<>'' AND ((excluded.codex_observed_at='' AND terminal_tasks.codex_observed_at='') OR (excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at)) THEN excluded.codex_turn ELSE terminal_tasks.codex_turn END,
+	 codex_completed_at=CASE WHEN excluded.codex_turn<>'' AND ((excluded.codex_observed_at='' AND terminal_tasks.codex_observed_at='') OR (excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at)) THEN excluded.codex_completed_at ELSE terminal_tasks.codex_completed_at END,
+	 codex_command=CASE WHEN excluded.codex_command<>'' THEN excluded.codex_command ELSE terminal_tasks.codex_command END,
+	 codex_status=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_status ELSE terminal_tasks.codex_status END,
+	 codex_event=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_event ELSE terminal_tasks.codex_event END,
+	 codex_observed_at=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_observed_at ELSE terminal_tasks.codex_observed_at END,
+	 codex_detected=COALESCE(excluded.codex_detected,terminal_tasks.codex_detected)`, c.TurnID, c.CompletedAt, c.LaunchCommand, c.Status, c.EventID, c.ObservedAt, c.Detected, id, node)
+	return err
 }
 
 func (h *Hub) updateTask(w http.ResponseWriter, r *http.Request, l login) {
@@ -530,8 +637,8 @@ func (h *Hub) applyInventory(node string, msg protocol.Message) {
 			return
 		}
 		matched, _ := result.RowsAffected()
-		if matched > 0 && session.Codex != nil && len(session.Codex.TurnID) <= 128 && len(session.Codex.CompletedAt) <= 64 && len(session.Codex.LaunchCommand) <= 4096 {
-			_, err = tx.Exec("INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command) VALUES(?,?,?,?) ON CONFLICT(terminal_id) DO UPDATE SET codex_turn=CASE WHEN excluded.codex_turn<>'' THEN excluded.codex_turn ELSE terminal_tasks.codex_turn END,codex_completed_at=CASE WHEN excluded.codex_turn<>'' THEN excluded.codex_completed_at ELSE terminal_tasks.codex_completed_at END,codex_command=excluded.codex_command", session.ID, session.Codex.TurnID, session.Codex.CompletedAt, session.Codex.LaunchCommand)
+		if matched > 0 && session.Codex != nil {
+			err = saveCodexObservation(tx, node, session.ID, session.Codex)
 			if err != nil {
 				log.Printf("task inventory update: %v", err)
 				return
@@ -663,6 +770,10 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "inventory":
 			h.applyInventory(node, msg)
+		case "codex.update":
+			if err := saveCodexObservation(h.store.db, node, msg.TerminalID, msg.Codex); err == nil {
+				h.publishState()
+			}
 		case "result":
 			h.mu.Lock()
 			wait, exists := h.requests[msg.RequestID]
