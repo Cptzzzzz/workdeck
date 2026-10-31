@@ -21,6 +21,7 @@ import { NetworkPanel } from "../../network-panel";
 import { TerminalFontControl } from "../../terminal-font-control";
 import { registerTerminalPressure } from "../../services/files/terminal-pressure";
 import { codexStatus } from "../../codex-status";
+import { installTerminalSelection } from "./selection";
 function sendInput(socket: TerminalTransport | null, bytes: Uint8Array) {
   if (socket?.readyState !== WebSocket.OPEN) return;
   for (let offset = 0; offset < bytes.length; offset += 16384)
@@ -79,6 +80,7 @@ export function TerminalView({
       lineHeight: 1.25,
       scrollback: 5000,
       allowProposedApi: false,
+      macOptionClickForcesSelection: true,
       theme: {
         background: "#111416",
         foreground: "#d7dedb",
@@ -98,6 +100,7 @@ export function TerminalView({
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container.current);
+    const removeSelectionHandlers = installTerminalSelection(term);
     instance.current = term;
     let disposed = false,
       retry: ReturnType<typeof setTimeout> | null = null,
@@ -254,6 +257,7 @@ export function TerminalView({
     window.addEventListener("workdeck:resize-end", resizeEnd);
     connect();
     return () => {
+      removeSelectionHandlers();
       disposed = true;
       generation++;
       if (retry) clearTimeout(retry);
