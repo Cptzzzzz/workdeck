@@ -137,7 +137,7 @@ export function WorkspaceSidebar({
                         : "")
                     }
                     style={{ paddingLeft: 12 + depth * 15 }}
-                    disabled={entry.restricted}
+                    disabled={entry.restricted || !controller.fileReady}
                     title={entry.restricted ? "此文件类型暂不可操作" : child}
                     onClick={() =>
                       void (folder
@@ -192,7 +192,7 @@ export function WorkspaceSidebar({
                       className="file-tree-download"
                       title={`下载 ${entry.name}`}
                       aria-label={`下载 ${entry.name}`}
-                      disabled={!!controller.transfer}
+                      disabled={!!controller.transfer || !controller.fileReady}
                       onClick={() =>
                         void controller.download(child).catch((e) => {
                           if ((e as Error).name !== "AbortError")
@@ -306,6 +306,7 @@ export function WorkspaceSidebar({
             className="icon-button"
             title="刷新文件树"
             aria-label="刷新文件树"
+            disabled={!controller.fileReady}
             onClick={() => void controller.refresh()}
           >
             <RefreshCw size={15} />
@@ -319,6 +320,7 @@ export function WorkspaceSidebar({
             (controller.selectedDirectory === "." ? "selected-directory" : "")
           }
           title={controller.workspace.root_path}
+          disabled={!controller.fileReady}
           onClick={() => controller.selectDirectory(".")}
         >
           <Folder size={15} />
@@ -386,6 +388,11 @@ export function WorkspaceSidebar({
             显示隐藏文件和目录
           </label>
         </form>
+      )}
+      {controller.workspace && !controller.fileReady && (
+        <div className="file-tree-warning" role="status">
+          文件连接不可用，以下是上次读取的目录，可能已过期。
+        </div>
       )}
       <div className="file-tree">{renderDirectory(".", 0)}</div>
       {controller.deletedDrafts.length > 0 && (

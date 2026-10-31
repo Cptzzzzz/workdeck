@@ -141,6 +141,11 @@ export function useWorkspace(
   const [reconnect, setReconnect] = useState(0);
   const clientRef = useRef<FileClient | null>(null),
     generation = useRef(0);
+  const connectedScope = useRef<{
+    scope: string;
+    workspaceID?: string;
+    revision?: number;
+  } | null>(null);
   const docs = useRef(new Map<string, Document>()),
     previews = useRef(new Map<string, BinaryPreview>()),
     selections = useRef(new Map<string, string>()),
@@ -318,19 +323,30 @@ export function useWorkspace(
     let stopped = false,
       client: FileClient | undefined,
       retry = 0;
-    setWorkspace(null);
-    setDirectories({});
-    directoryFilterRef.current = new Map();
-    directoryRequests.current = new Map();
-    setDirectoryFilters(new Map());
-    setExpanded(new Set(["."]));
-    setSelected(null);
-    setSelectedDirectory(".");
-    setIntents([]);
+    const scheduleRetry = (delay: number) => {
+      if (retry) clearTimeout(retry);
+      retry = window.setTimeout(() => setReconnect((n) => n + 1), delay);
+    };
+    const scope = JSON.stringify([account, terminal?.node_id, terminal?.id]);
+    const resetView = () => {
+      setWorkspace(null);
+      setDirectories({});
+      directoryFilterRef.current = new Map();
+      directoryRequests.current = new Map();
+      setDirectoryFilters(new Map());
+      setExpanded(new Set(["."]));
+      setSelected(null);
+      setSelectedDirectory(".");
+      setIntents([]);
+      setDeletedDrafts([]);
+      setRecoverableDrafts([]);
+      setError("");
+    };
+    if (connectedScope.current?.scope !== scope) {
+      resetView();
+      connectedScope.current = { scope };
+    }
     setFileMetrics(null);
-    setDeletedDrafts([]);
-    setRecoverableDrafts([]);
-    setError("");
     if (!enabled || !terminal || !account) {
       setConnection("未连接");
       return;
@@ -351,6 +367,21 @@ export function useWorkspace(
           connected.close();
           return;
         }
+        const previous = connectedScope.current;
+        if (
+          previous?.scope === scope &&
+          previous.workspaceID &&
+          (previous.workspaceID !== view.workspace.id ||
+            previous.revision !== view.workspace.root_revision)
+        ) {
+          selections.current.delete(previous.workspaceID);
+          resetView();
+        }
+        connectedScope.current = {
+          scope,
+          workspaceID: view.workspace.id,
+          revision: view.workspace.root_revision,
+        };
         client = connected;
         clientRef.current = connected;
         setWorkspace(view.workspace);
@@ -370,7 +401,7 @@ export function useWorkspace(
             setConnection("连接已断开");
             setFileMetrics(null);
             setError("文件连接已断开，正在尝试恢复");
-            retry = window.setTimeout(() => setReconnect((n) => n + 1), 3000);
+            scheduleRetry(3000);
           }
         });
         try {
@@ -411,7 +442,7 @@ export function useWorkspace(
         if (!stopped && gen === generation.current) {
           setError((e as Error).message);
           setConnection("连接失败");
-          retry = window.setTimeout(() => setReconnect((n) => n + 1), 5000);
+          scheduleRetry(5000);
         }
       }
     };
@@ -830,8 +861,13 @@ export function useWorkspace(
     };
   }, [enabled, workspace, supportsWatch, expanded, refresh]);
   useEffect(() => {
-    if (enabled && workspace && selected) void refresh();
-  }, [enabled, workspace, selected, refresh]);
+    if (
+      enabled &&
+      workspace &&
+      (connection === "中转连接" || connection === "WebRTC 直连")
+    )
+      void refresh();
+  }, [enabled, workspace, connection, refresh]);
   useEffect(() => {
     if (!enabled || !workspace) return;
     const visible = () => {
