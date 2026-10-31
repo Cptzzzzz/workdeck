@@ -1,10 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-
-(
-  globalThis as typeof globalThis & { MonacoEnvironment?: unknown }
-).MonacoEnvironment = { getWorker: () => new EditorWorker() };
+import "./monaco-setup";
 
 export function ConflictDiff({
   remote,

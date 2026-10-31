@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import "monaco-editor/esm/vs/basic-languages/monaco.contribution";
+import "./monaco-setup";
 import type { Document } from "./use-workspace";
 import {
   readEditorView,
@@ -9,9 +8,7 @@ import {
   type EditorViewState,
 } from "../../services/files/view-state";
 
-(
-  globalThis as typeof globalThis & { MonacoEnvironment?: unknown }
-).MonacoEnvironment = { getWorker: () => new EditorWorker() };
+let modelSequence = 0;
 
 export function MonacoEditor({
   document,
@@ -29,6 +26,8 @@ export function MonacoEditor({
     model = useRef<monaco.editor.ITextModel | null>(null);
   const applyingRemote = useRef(false);
   const [viewError, setViewError] = useState("");
+  const [language, setLanguage] = useState("auto");
+  const [detected, setDetected] = useState("plaintext");
   const changeRef = useRef(onChange),
     saveRef = useRef(onSave);
   changeRef.current = onChange;
@@ -59,32 +58,14 @@ export function MonacoEditor({
   useEffect(() => {
     const instance = editor.current;
     if (!instance) return;
-    const ext = document.path.split(".").pop()?.toLowerCase();
-    const languages: Record<string, string> = {
-      js: "javascript",
-      jsx: "javascript",
-      ts: "typescript",
-      tsx: "typescript",
-      json: "json",
-      md: "markdown",
-      go: "go",
-      py: "python",
-      sh: "shell",
-      bash: "shell",
-      html: "html",
-      css: "css",
-      yaml: "yaml",
-      yml: "yaml",
-      rs: "rust",
-      c: "c",
-      cpp: "cpp",
-      java: "java",
-      sql: "sql",
-    };
-    const current = monaco.editor.createModel(
-      document.text,
-      languages[ext || ""] || "plaintext",
-    );
+    const fileName = document.path.split("/").pop() || "file";
+    const uri = monaco.Uri.from({
+      scheme: "inmemory",
+      path: `/${++modelSequence}/${fileName}`,
+    });
+    const current = monaco.editor.createModel(document.text, undefined, uri);
+    setLanguage("auto");
+    setDetected(current.getLanguageId());
     current.setEOL(
       document.newline === "crlf"
         ? monaco.editor.EndOfLineSequence.CRLF
@@ -202,6 +183,36 @@ export function MonacoEditor({
         </div>
       )}
       <div className="workbench-monaco" ref={root} />
+      <div className="workbench-language-bar">
+        <label>
+          语言模式
+          <select
+            aria-label="代码语言模式"
+            value={language}
+            onChange={(event) => {
+              const value = event.target.value;
+              setLanguage(value);
+              if (model.current)
+                monaco.editor.setModelLanguage(
+                  model.current,
+                  value === "auto" ? detected : value,
+                );
+            }}
+          >
+            <option value="auto">自动（{detected}）</option>
+            {monaco.languages
+              .getLanguages()
+              .slice()
+              .sort((a, b) => a.id.localeCompare(b.id))
+              .map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.aliases?.[0] || item.id}
+                </option>
+              ))}
+          </select>
+        </label>
+        <span>查找 / 替换：Ctrl / ⌘ + F / H</span>
+      </div>
     </div>
   );
 }

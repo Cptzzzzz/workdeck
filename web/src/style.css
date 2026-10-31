@@ -2612,6 +2612,23 @@ main {
   min-height: 0;
   flex: 1;
 }
+.workbench-language-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 10px;
+  color: #91a491;
+  font-size: 11px;
+}
+.workbench-language-bar select {
+  margin-left: 6px;
+  background: #1b271e;
+  color: #c7d4c3;
+  border: 1px solid #39483b;
+  border-radius: 4px;
+  font-size: 11px;
+}
 .workbench-notice {
   padding: 8px 13px;
   background: #563c272e;
