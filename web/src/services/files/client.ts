@@ -16,6 +16,7 @@ import type {
   DirectoryPage,
   FileEntry,
   FileOperation,
+  PendingWrite,
   SaveTransaction,
   UploadTransaction,
   DeleteStatus,
@@ -835,6 +836,72 @@ export class FileClient {
   }
   newOperationID(): string {
     return this.id();
+  }
+  async pendingWrites(
+    offset: number,
+  ): Promise<{ items: PendingWrite[]; next: number; has_more: boolean }> {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 16)
+      throw new FileServiceError("INVALID_RANGE", "待处理写入分页无效");
+    const result = (await this.request("operation.pending.list", { offset }))
+      .value as { items?: PendingWrite[]; next?: number; has_more?: boolean };
+    if (
+      !result ||
+      !Array.isArray(result.items) ||
+      result.items.length > 1 ||
+      result.next !== offset + result.items.length ||
+      typeof result.has_more !== "boolean" ||
+      (result.has_more && result.items.length !== 1)
+    )
+      throw new FileServiceError("PROTOCOL_ERROR", "待处理写入分页无效");
+    for (const item of result.items) {
+      if (
+        !item ||
+        typeof item.id !== "string" ||
+        !/^[0-9a-f]{48}$/.test(item.id)
+      )
+        throw new FileServiceError("PROTOCOL_ERROR", "待处理写入标识无效");
+      this.checkOperation(item, item.id);
+      if (
+        !["receiving", "ready", "committing", "uncertain"].includes(
+          item.state,
+        ) ||
+        typeof item.path !== "string" ||
+        !item.path ||
+        new TextEncoder().encode(item.path).length > 4096 ||
+        !Number.isSafeInteger(item.size) ||
+        item.size < 0 ||
+        item.offset > item.size ||
+        typeof item.create !== "boolean" ||
+        !Number.isSafeInteger(item.updated_at) ||
+        item.updated_at < 1
+      )
+        throw new FileServiceError("PROTOCOL_ERROR", "待处理写入记录无效");
+    }
+    return result as { items: PendingWrite[]; next: number; has_more: boolean };
+  }
+  async cancelPendingWrite(item: PendingWrite): Promise<FileOperation> {
+    this.checkOperation(item, item.id);
+    if (
+      !/^[0-9a-f]{48}$/.test(item.id) ||
+      !["receiving", "ready"].includes(item.state) ||
+      !Number.isSafeInteger(item.updated_at) ||
+      item.updated_at < 1
+    )
+      throw new FileServiceError("INVALID_STATE", "此写入不能安全取消");
+    const result = this.checkOperation(
+      (
+        await this.request("operation.pending.cancel", {
+          op_id: item.id,
+          state: item.state,
+          offset: item.offset,
+          updated_at: item.updated_at,
+        })
+      ).value,
+      item.id,
+    );
+    if (result.state !== "aborted")
+      throw new FileServiceError("PROTOCOL_ERROR", "节点未确认取消");
+    return result;
   }
   async operationStatus(
     opID: string,

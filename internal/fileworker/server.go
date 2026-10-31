@@ -346,6 +346,25 @@ func (s *Server) dispatch(ctx context.Context, r request) (any, error) {
 			Items []files.DeleteOutcome `json:"items"`
 			Next  int                   `json:"next"`
 		}{items, next}, nil
+	case "operation.pending.list":
+		var p struct {
+			Offset int `json:"offset"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.PendingWrites(ctx, r.WorkspaceID, r.Revision, p.Offset)
+	case "operation.pending.cancel":
+		var p struct {
+			OpID      string `json:"op_id"`
+			State     string `json:"state"`
+			Offset    int64  `json:"offset"`
+			UpdatedAt int64  `json:"updated_at"`
+		}
+		if err := decode(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return s.engine.CancelPendingWrite(ctx, r.WorkspaceID, r.Revision, p.OpID, p.State, p.Offset, p.UpdatedAt)
 	case "operation.status":
 		var p struct {
 			OpID string `json:"op_id"`

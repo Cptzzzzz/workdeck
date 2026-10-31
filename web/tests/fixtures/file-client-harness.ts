@@ -1,6 +1,7 @@
 import * as drafts from "../../src/services/files/drafts";
 import * as viewState from "../../src/services/files/view-state";
 import * as terminalPressure from "../../src/services/files/terminal-pressure";
+import * as pendingCancels from "../../src/services/files/pending-cancel-store";
 import {
   FileClient,
   UncertainSaveError,
@@ -15,6 +16,7 @@ Object.assign(window, {
     drafts,
     viewState,
     terminalPressure,
+    pendingCancels,
     downloadFile,
   },
 });

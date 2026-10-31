@@ -17,6 +17,7 @@ import {
   UserRound,
   TerminalSquare,
   X,
+  ListChecks,
 } from "lucide-react";
 import type {
   WorkspaceController,
@@ -24,14 +25,21 @@ import type {
   ConflictSnapshot,
 } from "./use-workspace";
 import type { CreateIntent, DraftIdentity } from "../../services/files/drafts";
+import {
+  listPendingCancels,
+  rememberPendingCancel,
+  forgetPendingCancel,
+} from "../../services/files/pending-cancel-store";
 import { DirectoryPicker } from "../management/forms";
 import type { ComputeNode, TerminalRecord } from "../../types";
 import type {
   DeleteStatus,
   DeleteOutcome,
   ArchivedOperation,
+  PendingWrite,
 } from "../../services/files/types";
 import { formatBytes, formatLatency } from "../../network-metrics";
+import { FileServiceError } from "../../services/files/client";
 const MonacoEditor = lazy(() =>
   import("./monaco-editor").then((m) => ({ default: m.MonacoEditor })),
 );
@@ -63,6 +71,8 @@ export function WorkspaceSidebar({
   onChangeRoot,
   onArchivedIntent,
   onArchivedSave,
+  onPendingWrites,
+  supportsPending,
 }: {
   controller: WorkspaceController;
   onSessions: () => void;
@@ -79,6 +89,8 @@ export function WorkspaceSidebar({
   onChangeRoot: () => void;
   onArchivedIntent: (intent: CreateIntent) => void;
   onArchivedSave: (identity: DraftIdentity, source: "page" | "stored") => void;
+  onPendingWrites: () => void;
+  supportsPending: boolean;
 }) {
   const [filterInput, setFilterInput] = useState("");
   const [visibleCounts, setVisibleCounts] = useState<Map<string, number>>(
@@ -387,6 +399,20 @@ export function WorkspaceSidebar({
             />
             显示隐藏文件和目录
           </label>
+          <button
+            type="button"
+            className="file-tree-pending"
+            title={
+              supportsPending
+                ? "查看节点待处理写入"
+                : "升级节点后可查看待处理写入"
+            }
+            aria-label="查看节点待处理写入"
+            disabled={!supportsPending || !controller.fileReady}
+            onClick={onPendingWrites}
+          >
+            <ListChecks size={14} /> 节点待处理写入
+          </button>
         </form>
       )}
       {controller.workspace && !controller.fileReady && (
@@ -648,6 +674,430 @@ export function WorkspaceSidebar({
         </button>
         <button title="设置" aria-label="设置" onClick={onSettings}>
           <Settings2 size={17} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function PendingWritesForm({
+  controller,
+  onClose,
+  onBusy,
+}: {
+  controller: WorkspaceController;
+  onClose: () => void;
+  onBusy: (busy: boolean) => void;
+}) {
+  const latest = useRef(controller);
+  latest.current = controller;
+  const sequence = useRef(0);
+  const [items, setItems] = useState<PendingWrite[]>([]);
+  const [unconfirmed, setUnconfirmed] = useState<PendingWrite[]>([]);
+  const [review, setReview] = useState<PendingWrite | null>(null);
+  const [forgetReview, setForgetReview] = useState<PendingWrite | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const load = async () => {
+    const current = latest.current,
+      client = current.client,
+      workspace = current.workspace;
+    if (!client || !workspace || !current.fileReady) {
+      setError("文件连接未就绪，请重新连接后核对。");
+      return;
+    }
+    const seq = ++sequence.current;
+    setBusy(true);
+    onBusy(true);
+    setError("");
+    setReview(null);
+    try {
+      const stored = await listPendingCancels(workspace);
+      const found: PendingWrite[] = [];
+      let offset = 0;
+      for (;;) {
+        const page = await client.pendingWrites(offset);
+        found.push(...page.items);
+        if (found.length > 16 || page.next > 16)
+          throw new Error("待处理写入数量超出限制，请重新核对。");
+        if (!page.has_more) break;
+        offset = page.next;
+      }
+      if (
+        seq !== sequence.current ||
+        latest.current.client !== client ||
+        latest.current.workspace?.id !== workspace.id ||
+        latest.current.workspace?.root_revision !== workspace.root_revision
+      )
+        return;
+      setItems(found);
+      setUnconfirmed(stored);
+    } catch (e) {
+      if (seq === sequence.current) setError((e as Error).message);
+    } finally {
+      if (seq === sequence.current) {
+        setBusy(false);
+        onBusy(false);
+      }
+    }
+  };
+  useEffect(() => {
+    void load();
+    return () => {
+      sequence.current++;
+      onBusy(false);
+    };
+  }, [
+    controller.client,
+    controller.workspace?.id,
+    controller.workspace?.root_revision,
+  ]);
+  useEffect(() => {
+    setChecked(new Set());
+    setForgetReview(null);
+  }, [controller.workspace?.id, controller.workspace?.root_revision]);
+  const cancel = async () => {
+    const current = latest.current,
+      client = current.client,
+      item = review;
+    if (
+      !item ||
+      !client ||
+      !current.fileReady ||
+      current.transfer ||
+      current.renaming ||
+      current.workspace?.id !== item.workspace_id ||
+      current.workspace?.root_revision !== item.root_revision
+    ) {
+      setError("工作区或连接已改变，请重新核对。");
+      return;
+    }
+    if (
+      current.intents.some((entry) => entry.opID === item.id) ||
+      current.documents.some(
+        ([, doc]) => doc.pending?.opID === item.id || doc.saving,
+      )
+    ) {
+      setError("当前浏览器仍在处理此操作，请使用原有的恢复或取消入口。");
+      return;
+    }
+    setBusy(true);
+    onBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await rememberPendingCancel(current.workspace!, item);
+      setChecked((old) => {
+        const next = new Set(old);
+        next.delete(item.id);
+        return next;
+      });
+      setUnconfirmed(await listPendingCancels(current.workspace!));
+      if (
+        latest.current.client !== client ||
+        latest.current.workspace?.id !== item.workspace_id ||
+        latest.current.workspace?.root_revision !== item.root_revision
+      )
+        throw new Error("工作区或连接已改变，取消请求尚未发送，请核对记录。");
+      await client.cancelPendingWrite(item);
+      if (latest.current.client !== client)
+        throw new Error("连接已改变，请重新核对结果。");
+      await forgetPendingCancel(current.workspace!, item);
+      setMessage(
+        "节点已确认取消。目标文件不会被此操作删除；如暂存文件无法清理，可能需要人工检查。",
+      );
+      setReview(null);
+      await load();
+    } catch (e) {
+      setError(
+        `${(e as Error).message}。若连接中断，请刷新列表核对结果，不要盲目重复。`,
+      );
+    } finally {
+      setBusy(false);
+      onBusy(false);
+    }
+  };
+  const checkResult = async (item: PendingWrite) => {
+    const current = latest.current,
+      client = current.client;
+    if (
+      !client ||
+      !current.fileReady ||
+      current.transfer ||
+      current.renaming ||
+      current.workspace?.id !== item.workspace_id ||
+      !current.workspace ||
+      item.root_revision > current.workspace.root_revision
+    ) {
+      setError("工作区或连接已改变，请重新核对。");
+      return;
+    }
+    if (
+      current.intents.some((entry) => entry.opID === item.id) ||
+      current.documents.some(
+        ([, doc]) => doc.pending?.opID === item.id || doc.saving,
+      )
+    ) {
+      setError("当前浏览器仍在处理此操作，请使用原有的恢复入口。");
+      return;
+    }
+    setBusy(true);
+    onBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const status =
+        item.root_revision === current.workspace.root_revision
+          ? await client.operationStatus(item.id)
+          : await client.archivedOperationStatus(item.id, item.root_revision);
+      if (latest.current.client !== client)
+        throw new Error("连接已改变，请重新核对结果。");
+      if (
+        (status.state === "committed" && status.version) ||
+        status.state === "aborted"
+      ) {
+        await forgetPendingCancel(
+          { ...current.workspace, root_revision: item.root_revision },
+          item,
+        );
+      } else {
+        setChecked((old) => new Set([...old, item.id]));
+      }
+      setMessage(
+        status.state === "committed" && status.version
+          ? "节点已确认写入完成，请检查目标文件。"
+          : status.state === "aborted"
+            ? "节点已确认取消；目标文件没有由取消操作删除。"
+            : status.state === "receiving" || status.state === "ready"
+              ? "写入仍未提交；请刷新后重新核对是否需要取消。"
+              : "节点尚不能确认写入结果；记录会保留，请检查目标文件，不要盲目重复写入。",
+      );
+      await load();
+    } catch (e) {
+      if (e instanceof FileServiceError && e.code === "OPERATION_NOT_FOUND")
+        setChecked((old) => new Set([...old, item.id]));
+      setError(`${(e as Error).message}。请稍后再次核对。`);
+    } finally {
+      setBusy(false);
+      onBusy(false);
+    }
+  };
+  const forget = async () => {
+    const current = latest.current,
+      item = forgetReview,
+      workspace = current.workspace;
+    if (
+      !item ||
+      !workspace ||
+      workspace.id !== item.workspace_id ||
+      item.root_revision > workspace.root_revision ||
+      !checked.has(item.id)
+    ) {
+      setError("请先核对原操作结果。");
+      return;
+    }
+    setBusy(true);
+    onBusy(true);
+    setError("");
+    try {
+      await forgetPendingCancel(
+        { ...workspace, root_revision: item.root_revision },
+        item,
+      );
+      setUnconfirmed(await listPendingCancels(workspace));
+      setChecked((old) => {
+        const next = new Set(old);
+        next.delete(item.id);
+        return next;
+      });
+      setForgetReview(null);
+      setMessage("已移除本浏览器的追踪记录；节点写入未因此改变。");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      onBusy(false);
+    }
+  };
+  return (
+    <div className="management-panel">
+      <h2>节点待处理写入</h2>
+      <p className="modal-description">
+        仅显示当前工作区修订的节点记录。列表可能随其他设备的操作变化，请在处理前刷新核对。
+      </p>
+      <div className="management-toolbar">
+        <button
+          className="secondary"
+          disabled={busy || !controller.fileReady}
+          onClick={() => void load()}
+        >
+          刷新列表
+        </button>
+      </div>
+      {message && (
+        <div className="workbench-notice" role="status">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {busy && <p className="management-empty">正在核对节点记录…</p>}
+      {unconfirmed.length > 0 && (
+        <div className="workbench-notice">
+          <b>本浏览器待核对的取消请求</b>
+          <p>
+            这些请求可能已执行，也可能未送达。请先核对原操作，记录不会触发重试。
+          </p>
+          {unconfirmed.map((item) => (
+            <div key={item.id}>
+              <span title={item.path}>
+                修订 {item.root_revision} · {item.path} · {item.id}
+              </span>{" "}
+              <button
+                className="secondary"
+                disabled={
+                  busy || !controller.fileReady || !!controller.transfer
+                }
+                onClick={() => void checkResult(item)}
+              >
+                核对取消结果
+              </button>
+              <button
+                className="secondary"
+                disabled={busy || !checked.has(item.id)}
+                title={
+                  checked.has(item.id)
+                    ? "移除本浏览器的追踪记录"
+                    : "请先核对原操作结果"
+                }
+                onClick={() => setForgetReview(item)}
+              >
+                移除本地记录
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {!busy && !items.length && !error && (
+        <p className="management-empty">没有待处理的写入。</p>
+      )}
+      <div className="management-list">
+        {items.map((item) => {
+          const local =
+            controller.intents.some((entry) => entry.opID === item.id) ||
+            controller.documents.some(
+              ([, doc]) => doc.pending?.opID === item.id,
+            );
+          const cancellable =
+            item.state === "receiving" || item.state === "ready";
+          const state = (
+            {
+              receiving: "接收中",
+              ready: "等待提交",
+              committing: "提交中",
+              uncertain: "结果不明确",
+            } as Record<string, string>
+          )[item.state];
+          return (
+            <div className="management-item" key={item.id}>
+              <div className="management-item-text">
+                <b title={item.path}>{item.path}</b>
+                <small>
+                  {item.create ? "新建写入" : "已有文件保存"} · {item.offset} /{" "}
+                  {item.size} 字节 · {state}
+                </small>
+                <small>
+                  操作 {item.id} · 更新于{" "}
+                  {new Date(item.updated_at).toLocaleString()}
+                </small>
+                {local && <small>当前浏览器已有记录，请使用原恢复入口。</small>}
+                {!cancellable && (
+                  <small>提交结果尚需核对，不能在此取消。</small>
+                )}
+              </div>
+              <button
+                className="secondary"
+                disabled={
+                  busy ||
+                  !controller.fileReady ||
+                  !!controller.transfer ||
+                  local
+                }
+                onClick={() => {
+                  if (!cancellable) {
+                    void checkResult(item);
+                    return;
+                  }
+                  setReview(item);
+                  setError("");
+                  setMessage("");
+                }}
+              >
+                {cancellable ? "核对并取消" : "核对结果"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {review && (
+        <div className="workbench-notice" role="alert">
+          <p>
+            确认取消“{review.path}
+            ”的未提交写入？其他设备可能仍在使用该操作，取消会中断它。节点会在执行前再次核对进度；目标文件和本地草稿不会由此删除。
+          </p>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() => setReview(null)}
+          >
+            返回
+          </button>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() => void checkResult(review)}
+          >
+            核对该操作结果
+          </button>
+          <button
+            className="danger"
+            disabled={busy}
+            onClick={() => void cancel()}
+          >
+            确认取消写入
+          </button>
+        </div>
+      )}
+      {forgetReview && (
+        <div className="workbench-notice" role="alert">
+          <p>
+            确认移除“{forgetReview.path}
+            ”的本地取消追踪记录？此操作不会取消或修改节点写入。只有确认原请求结果后，才应考虑重新发送操作。
+          </p>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() => setForgetReview(null)}
+          >
+            返回
+          </button>
+          <button
+            className="danger"
+            disabled={busy}
+            onClick={() => void forget()}
+          >
+            确认移除本地记录
+          </button>
+        </div>
+      )}
+      <div className="form-actions">
+        <button className="secondary" disabled={busy} onClick={onClose}>
+          关闭
         </button>
       </div>
     </div>

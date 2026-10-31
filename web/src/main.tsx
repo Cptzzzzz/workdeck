@@ -51,6 +51,7 @@ import {
   WorkspaceRootForm,
   ArchivedIntentForm,
   ArchivedSaveForm,
+  PendingWritesForm,
 } from "./features/workspace/workspace-view";
 import type { CreateIntent, DraftIdentity } from "./services/files/drafts";
 import {
@@ -92,6 +93,7 @@ type Modal =
   | "workspace-root"
   | "archived-intent"
   | "archived-save"
+  | "pending-writes"
   | null;
 function layoutNumber(key: string, fallback: number, min: number, max: number) {
   try {
@@ -169,6 +171,7 @@ function App() {
   const [modalParent, setModalParent] = useState<Modal>(null);
   const [rootModalBusy, setRootModalBusy] = useState(false);
   const [archiveModalBusy, setArchiveModalBusy] = useState(false);
+  const [pendingModalBusy, setPendingModalBusy] = useState(false);
   const [archivedIntent, setArchivedIntent] = useState<CreateIntent | null>(
     null,
   );
@@ -179,6 +182,7 @@ function App() {
   const [closeDocumentTarget, setCloseDocumentTarget] =
     useState<WorkspaceDocument | null>(null);
   const closeModal = () => {
+    if (modal === "pending-writes" && pendingModalBusy) return;
     if (modal === "workspace-root" && rootModalBusy) return;
     if (
       (modal === "archived-intent" || modal === "archived-save") &&
@@ -219,6 +223,7 @@ function App() {
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (modal === "pending-writes" && pendingModalBusy) return;
         if (modal === "workspace-root" && rootModalBusy) return;
         if (
           (modal === "archived-intent" || modal === "archived-save") &&
@@ -264,6 +269,7 @@ function App() {
     closeDocumentTarget?.closing,
     rootModalBusy,
     archiveModalBusy,
+    pendingModalBusy,
   ]);
   const [mode, setMode] = useState<"terminal" | "workspace">(() => {
     try {
@@ -602,6 +608,12 @@ function App() {
         {mode === "workspace" && (
           <WorkspaceSidebar
             controller={workspace}
+            supportsPending={
+              !!data.nodes
+                .find((n) => n.id === current?.node_id)
+                ?.capabilities?.includes("workspace-pending-v1")
+            }
+            onPendingWrites={() => setModal("pending-writes")}
             onNewItem={() => setModal("file-create")}
             onChangeRoot={() => setModal("workspace-root")}
             onArchivedIntent={(intent) => {
@@ -1183,45 +1195,47 @@ function App() {
             role="dialog"
             aria-modal="true"
             aria-label={
-              modal === "sessions"
-                ? "会话管理"
-                : modal === "nodes"
-                  ? "节点管理"
-                  : modal === "account"
-                    ? "账户管理"
-                    : modal === "settings"
-                      ? "设置"
-                      : modal === "file-close"
-                        ? "关闭文件"
-                        : modal === "workspace-root"
-                          ? "更换工作区目录"
-                          : modal === "archived-intent"
-                            ? "核对旧目录操作"
-                            : modal === "archived-save"
-                              ? "核对旧目录保存"
-                              : modal === "file-create"
-                                ? "新建文件或文件夹"
-                                : modal === "file-discard-draft"
-                                  ? "移除本地草稿"
-                                  : modal === "file-save-as"
-                                    ? deletedSaveTarget?.unavailable
-                                      ? "另存不可访问的草稿"
-                                      : "另存已删除的草稿"
-                                    : modal === "file-delete"
-                                      ? "删除文件或文件夹"
-                                      : modal === "file-rename"
-                                        ? "重命名文件或文件夹"
-                                        : modal === "create"
-                                          ? "新建终端"
-                                          : modal === "join"
-                                            ? "接入节点"
-                                            : modal === "rename"
-                                              ? renameTarget?.kind === "node"
-                                                ? "重命名节点"
-                                                : "重命名终端"
-                                              : modal === "terminate"
-                                                ? "终止终端"
-                                                : "修改密码"
+              modal === "pending-writes"
+                ? "节点待处理写入"
+                : modal === "sessions"
+                  ? "会话管理"
+                  : modal === "nodes"
+                    ? "节点管理"
+                    : modal === "account"
+                      ? "账户管理"
+                      : modal === "settings"
+                        ? "设置"
+                        : modal === "file-close"
+                          ? "关闭文件"
+                          : modal === "workspace-root"
+                            ? "更换工作区目录"
+                            : modal === "archived-intent"
+                              ? "核对旧目录操作"
+                              : modal === "archived-save"
+                                ? "核对旧目录保存"
+                                : modal === "file-create"
+                                  ? "新建文件或文件夹"
+                                  : modal === "file-discard-draft"
+                                    ? "移除本地草稿"
+                                    : modal === "file-save-as"
+                                      ? deletedSaveTarget?.unavailable
+                                        ? "另存不可访问的草稿"
+                                        : "另存已删除的草稿"
+                                      : modal === "file-delete"
+                                        ? "删除文件或文件夹"
+                                        : modal === "file-rename"
+                                          ? "重命名文件或文件夹"
+                                          : modal === "create"
+                                            ? "新建终端"
+                                            : modal === "join"
+                                              ? "接入节点"
+                                              : modal === "rename"
+                                                ? renameTarget?.kind === "node"
+                                                  ? "重命名节点"
+                                                  : "重命名终端"
+                                                : modal === "terminate"
+                                                  ? "终止终端"
+                                                  : "修改密码"
             }
           >
             <button
@@ -1229,6 +1243,7 @@ function App() {
               aria-label="关闭对话框"
               disabled={
                 (modal === "workspace-root" && rootModalBusy) ||
+                (modal === "pending-writes" && pendingModalBusy) ||
                 ((modal === "archived-intent" || modal === "archived-save") &&
                   archiveModalBusy)
               }
@@ -1236,7 +1251,13 @@ function App() {
             >
               <X size={20} />
             </button>
-            {modal === "archived-save" && archivedSave ? (
+            {modal === "pending-writes" ? (
+              <PendingWritesForm
+                controller={workspace}
+                onClose={closeModal}
+                onBusy={setPendingModalBusy}
+              />
+            ) : modal === "archived-save" && archivedSave ? (
               <ArchivedSaveForm
                 controller={workspace}
                 identity={archivedSave.identity}

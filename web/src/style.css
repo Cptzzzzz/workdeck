@@ -2291,6 +2291,12 @@ main {
   gap: 6px;
   margin: 7px 0 0;
 }
+.file-tree-filter .file-tree-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+}
 .file-tree-filter button,
 .file-tree-more {
   color: #a6c4a7;

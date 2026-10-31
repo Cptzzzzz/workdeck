@@ -437,7 +437,27 @@ export function useWorkspace(
           if (!stopped && gen === generation.current)
             setError("无法读取待确认的文件操作：" + (e as Error).message);
         }
-        await loadDirectory(connected, ".", gen);
+        try {
+          await loadDirectory(connected, ".", gen);
+        } catch (e) {
+          if (
+            e instanceof FileServiceError &&
+            [
+              "ROOT_UNAVAILABLE",
+              "ROOT_REPLACED",
+              "DIRECTORY_UNAVAILABLE",
+              "NOT_DIRECTORY",
+              "NOT_FOUND",
+            ].includes(e.code) &&
+            !stopped &&
+            gen === generation.current &&
+            clientRef.current === connected
+          ) {
+            setError(
+              `无法读取工作区目录：${e.message}。仍可核对节点待处理写入。`,
+            );
+          } else throw e;
+        }
       } catch (e) {
         if (!stopped && gen === generation.current) {
           setError((e as Error).message);

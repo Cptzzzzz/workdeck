@@ -39,6 +39,12 @@ export type FileOperation = {
   version?: string;
   error?: { code: string; message: string };
 };
+export type PendingWrite = FileOperation & {
+  path: string;
+  size: number;
+  create: boolean;
+  updated_at: number;
+};
 export type DeleteStatus = FileOperation & {
   path: string;
   recursive: boolean;
