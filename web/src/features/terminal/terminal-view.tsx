@@ -19,6 +19,7 @@ import {
 import { initialTransportStatus, formatLatency } from "../../network-metrics";
 import { NetworkPanel } from "../../network-panel";
 import { TerminalFontControl } from "../../terminal-font-control";
+import { registerTerminalPressure } from "../../services/files/terminal-pressure";
 function sendInput(socket: TerminalTransport | null, bytes: Uint8Array) {
   if (socket?.readyState !== WebSocket.OPEN) return;
   for (let offset = 0; offset < bytes.length; offset += 16384)
@@ -104,6 +105,7 @@ export function TerminalView({
       currentReadonly = true,
       wheelDispatch = false,
       historyMayBeActive = true;
+    let pressure: ReturnType<typeof registerTerminalPressure> | undefined;
     const sendKeyboardInput = (bytes: Uint8Array) => {
       if (socket.current?.readyState !== WebSocket.OPEN || currentReadonly)
         return;
@@ -178,12 +180,18 @@ export function TerminalView({
       const gen = generation;
       if (retry) clearTimeout(retry);
       socket.current?.close();
+      pressure?.close();
+      const currentPressure = registerTerminalPressure(terminal.id);
+      pressure = currentPressure;
       setConnection("connecting");
       setFailure("");
       const ws = new TerminalTransport(
         `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/terminals/${terminal.id}/ws${takeover ? "?takeover=1" : ""}`,
         setTransport,
         terminal.node_id,
+        (route, rtt) => {
+          if (gen === generation) currentPressure.sample(route, rtt);
+        },
       );
       socket.current = ws;
       ws.onmessage = (e) => {
@@ -216,6 +224,7 @@ export function TerminalView({
       };
       ws.onclose = () => {
         if (disposed || gen !== generation) return;
+        currentPressure.close();
         setConnection("disconnected");
         retry = setTimeout(
           () => connect(),
@@ -253,6 +262,7 @@ export function TerminalView({
       window.removeEventListener("resize", viewport);
       window.removeEventListener("workdeck:resize-end", resizeEnd);
       socket.current?.close();
+      pressure?.close();
       socket.current = null;
       input.dispose();
       binary.dispose();

@@ -84,6 +84,7 @@ export class TerminalTransport {
     url: string,
     private report: (state: TransportStatus) => void,
     node: string,
+    private reportProbe?: (route: Route, rtt: number | null) => void,
   ) {
     this.key = node;
     this.ws = new WebSocket(url);
@@ -114,6 +115,7 @@ export class TerminalTransport {
 
   private recordProbe(route: Route, rtt: number | null) {
     if (this.closed || document.hidden) return;
+    if (route === this.active) this.reportProbe?.(route, rtt);
     const window = [...this.samples[route], rtt].slice(-12);
     this.samples[route] = window;
     const metric = describeSamples(window, Date.now());

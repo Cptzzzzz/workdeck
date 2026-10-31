@@ -1,5 +1,6 @@
 import * as drafts from "../../src/services/files/drafts";
 import * as viewState from "../../src/services/files/view-state";
+import * as terminalPressure from "../../src/services/files/terminal-pressure";
 import {
   FileClient,
   UncertainSaveError,
@@ -13,6 +14,7 @@ Object.assign(window, {
     setCSRF,
     drafts,
     viewState,
+    terminalPressure,
     downloadFile,
   },
 });

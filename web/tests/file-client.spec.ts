@@ -289,7 +289,55 @@ test("browser file client reads, saves, resumes, and leaves the terminal running
             (error as any).code === "VERSION_CONFLICT" ||
             (error as any).code === "CONFLICT";
         }
+        const pressure = harness.terminalPressure.registerTerminalPressure(
+          workspace.terminal_id,
+        );
+        const now = performance.now();
+        const samples = [20, 20, 20, 500, 500, 500, 500, 500, 500, 500, 500];
+        samples.forEach((latency, i) =>
+          pressure.sample(
+            "relay",
+            latency,
+            now - (samples.length - i - 1) * 5000,
+          ),
+        );
+        if (
+          harness.terminalPressure.terminalPressureDelay(
+            workspace.terminal_id,
+          ) !== 250
+        )
+          throw new Error("adaptive pacing did not engage");
+        const opened = await client.openRead("source.txt");
+        let chunkDone = false;
+        const delayed = client.readChunk(opened.id, 0, 1).then((v: any) => {
+          chunkDone = true;
+          return v;
+        });
+        await client.stat("source.txt");
+        if (chunkDone)
+          throw new Error("control request waited behind paced data");
+        if ((await delayed).length !== 1)
+          throw new Error("paced read lost data");
+        const abortDelay = new AbortController();
+        const canceled = client.readChunk(opened.id, 0, 1, abortDelay.signal);
+        abortDelay.abort();
+        try {
+          await canceled;
+          throw new Error("paced read ignored cancellation");
+        } catch (error) {
+          if ((error as Error).name !== "AbortError") throw error;
+        }
+        await client.closeRead(opened.id);
+        const nextRead = await client.openRead("source.txt");
+        const disconnectedWhilePaced = client.readChunk(nextRead.id, 0, 1);
         client.close();
+        try {
+          await disconnectedWhilePaced;
+          throw new Error("paced read survived connection close");
+        } catch (error) {
+          if ((error as any).code !== "CONNECTION_LOST") throw error;
+        }
+        pressure.close();
         return { uncertain, conflict, size: loaded.bytes.length };
       },
       { workspace, csrf },

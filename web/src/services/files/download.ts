@@ -71,6 +71,7 @@ export async function downloadFile(
           read.id,
           offset,
           Math.min(MAX_CHUNK, bytes.length - offset),
+          signal,
         );
         if (!chunk.length)
           throw new FileServiceError("PROTOCOL_ERROR", "文件读取提前结束");
@@ -94,6 +95,7 @@ export async function downloadFile(
         read.id,
         offset,
         Math.min(MAX_CHUNK, read.entry.size - offset),
+        signal,
       );
       if (!chunk.length)
         throw new FileServiceError("PROTOCOL_ERROR", "文件读取提前结束");

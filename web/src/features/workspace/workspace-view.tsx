@@ -527,7 +527,7 @@ export function WorkspaceEditor({
           className="workbench-route"
           title={
             controller.fileMetrics
-              ? `中转 ${formatLatency(controller.fileMetrics.relayLatency)}，直连 ${formatLatency(controller.fileMetrics.directLatency)}；文件数据上行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].sendRate)}/s，下行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].receiveRate)}/s`
+              ? `中转 ${formatLatency(controller.fileMetrics.relayLatency)}，直连 ${formatLatency(controller.fileMetrics.directLatency)}；文件数据上行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].sendRate)}/s，下行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].receiveRate)}/s${controller.fileMetrics.adaptiveDelayMs ? `；终端延迟持续升高，文件块间隔 ${controller.fileMetrics.adaptiveDelayMs} ms` : ""}`
               : "文件链路状态"
           }
         >
@@ -547,6 +547,7 @@ export function WorkspaceEditor({
                   .receiveRate,
               )}
               /s
+              {controller.fileMetrics.adaptiveDelayMs > 0 && <> · 终端优先</>}
             </>
           )}
         </span>

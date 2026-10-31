@@ -1,6 +1,7 @@
 import { api } from "../api";
 import { checkTransferAbort, hashBlob } from "./transfer";
 import { FileDirect } from "./direct";
+import { terminalPressureDelay } from "./terminal-pressure";
 import type { Route } from "../../transport-policy";
 import {
   decodeChunk,
@@ -51,6 +52,7 @@ export type FileTransportMetrics = {
   route: Route;
   relayLatency?: number;
   directLatency?: number;
+  adaptiveDelayMs: number;
   traffic: Record<Route, FileTraffic>;
 };
 type WireResult = {
@@ -98,6 +100,7 @@ export async function changeWorkspaceRoot(
 export class FileClient {
   private socket!: WebSocket;
   private pending = new Map<string, Pending>();
+  private paceWaiters = new Set<(error: Error) => void>();
   private tail: Promise<void> = Promise.resolve();
   private closed = false;
   private ready = false;
@@ -194,6 +197,7 @@ export class FileClient {
       route: this.activeRoute,
       relayLatency: this.relayLatency,
       directLatency: this.directLatency,
+      adaptiveDelayMs: terminalPressureDelay(this.workspace.terminal_id),
       traffic: {
         relay: { ...this.traffic.relay },
         direct: { ...this.traffic.direct },
@@ -211,6 +215,8 @@ export class FileClient {
     this.direct?.close();
     if (this.metricsTimer) clearInterval(this.metricsTimer);
     this.ready = false;
+    for (const reject of this.paceWaiters) reject(error);
+    this.paceWaiters.clear();
     this.onReadyError?.(error);
     this.onReady = undefined;
     this.onReadyError = undefined;
@@ -438,9 +444,44 @@ export class FileClient {
       binary?: ArrayBuffer;
       expectedOffset?: number;
       expectedLength?: number;
+      signal?: AbortSignal;
     } = {},
   ): Promise<{ value: unknown; data?: Uint8Array }> {
-    return this.serial(() => this.dispatch(type, payload, options));
+    const paced = type === "file.read.chunk" || type === "file.write.chunk";
+    return (
+      paced ? this.waitForTerminal(options.signal) : Promise.resolve()
+    ).then(() =>
+      this.serial(() => {
+        if (options.signal?.aborted)
+          throw new DOMException("已取消", "AbortError");
+        return this.dispatch(type, payload, options);
+      }),
+    );
+  }
+  private waitForTerminal(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted)
+      return Promise.reject(new DOMException("已取消", "AbortError"));
+    if (this.closed)
+      return Promise.reject(
+        new FileServiceError("CONNECTION_LOST", "文件连接已关闭"),
+      );
+    const delay = terminalPressureDelay(this.workspace.terminal_id);
+    if (!delay) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", aborted);
+        this.paceWaiters.delete(failed);
+        if (error) reject(error);
+        else resolve();
+      };
+      const failed = (error: Error) => finish(error);
+      const aborted = () => finish(new DOMException("已取消", "AbortError"));
+      const timer = window.setTimeout(() => finish(), delay);
+      this.paceWaiters.add(failed);
+      signal?.addEventListener("abort", aborted, { once: true });
+      if (signal?.aborted) aborted();
+    });
   }
   private dispatch(
     type: string,
@@ -606,6 +647,7 @@ export class FileClient {
     readID: string,
     offset: number,
     length: number,
+    signal?: AbortSignal,
   ): Promise<Uint8Array> {
     if (
       !Number.isSafeInteger(offset) ||
@@ -618,7 +660,7 @@ export class FileClient {
     const result = await this.request(
       "file.read.chunk",
       { read_id: readID, offset, length },
-      { expectedOffset: offset, expectedLength: length },
+      { expectedOffset: offset, expectedLength: length, signal },
     );
     return result.data || new Uint8Array();
   }
@@ -749,6 +791,7 @@ export class FileClient {
           await this.request("file.write.chunk", null, {
             id: transaction.opID,
             binary: encodeChunk(transaction.opID, start, 1, bytes),
+            signal,
           })
         ).value,
         transaction.opID,
