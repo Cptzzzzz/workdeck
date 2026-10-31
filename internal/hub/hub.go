@@ -113,6 +113,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("POST /api/enrollments", h.protected(h.newEnrollment))
 	m.HandleFunc("POST /api/terminals", h.protected(h.createTerminal))
 	m.HandleFunc("PATCH /api/terminals/{id}", h.protected(h.renameTerminal))
+	m.HandleFunc("PUT /api/terminals/{id}/task", h.protected(h.updateTask))
 	m.HandleFunc("DELETE /api/terminals/{id}", h.protected(h.closeTerminal))
 	m.HandleFunc("GET /api/terminals/{id}/workspace", h.protected(h.getWorkspace))
 	m.HandleFunc("POST /api/terminals/{id}/workspace", h.protected(h.createWorkspace))
@@ -234,7 +235,69 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 		terms = append(terms, t)
 	}
 	rows.Close()
+	rows, err = h.store.db.Query("SELECT terminal_id,note,tags,important,manual_status,codex_turn,codex_completed_at,codex_command FROM terminal_tasks")
+	if err != nil {
+		failure(w, 500, "读取任务失败")
+		return
+	}
+	tasks := map[string]*TaskInfo{}
+	for rows.Next() {
+		var id string
+		var task TaskInfo
+		if err = rows.Scan(&id, &task.Note, &task.Tags, &task.Important, &task.ManualStatus, &task.CodexTurn, &task.CodexCompletedAt, &task.CodexCommand); err != nil {
+			rows.Close()
+			failure(w, 500, "读取任务失败")
+			return
+		}
+		tasks[id] = &task
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		failure(w, 500, "读取任务失败")
+		return
+	}
+	for i := range terms {
+		terms[i].Task = tasks[terms[i].ID]
+	}
 	respond(w, 200, map[string]any{"nodes": nodes, "terminals": terms})
+}
+
+func (h *Hub) updateTask(w http.ResponseWriter, r *http.Request, l login) {
+	var in struct {
+		Note         string `json:"note"`
+		Tags         string `json:"tags"`
+		Important    bool   `json:"important"`
+		ManualStatus string `json:"manual_status"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Note = strings.TrimSpace(in.Note)
+	in.Tags = strings.TrimSpace(in.Tags)
+	if len(in.Note) > 2000 || len(in.Tags) > 300 {
+		failure(w, 400, "备注或标签过长")
+		return
+	}
+	switch in.ManualStatus {
+	case "", "doing", "waiting", "done":
+	default:
+		failure(w, 400, "任务状态无效")
+		return
+	}
+	if _, err := h.store.terminal(r.PathValue("id")); errors.Is(err, sql.ErrNoRows) {
+		failure(w, 404, "终端不存在")
+		return
+	} else if err != nil {
+		failure(w, 500, "读取失败")
+		return
+	}
+	_, err := h.store.db.Exec("INSERT INTO terminal_tasks(terminal_id,note,tags,important,manual_status) VALUES(?,?,?,?,?) ON CONFLICT(terminal_id) DO UPDATE SET note=excluded.note,tags=excluded.tags,important=excluded.important,manual_status=excluded.manual_status", r.PathValue("id"), in.Note, in.Tags, in.Important, in.ManualStatus)
+	if err != nil {
+		failure(w, 500, "保存任务失败")
+		return
+	}
+	respond(w, 200, map[string]bool{"ok": true})
 }
 func (h *Hub) newEnrollment(w http.ResponseWriter, r *http.Request, l login) {
 	token := randomID()
@@ -461,10 +524,18 @@ func (h *Hub) applyInventory(node string, msg protocol.Message) {
 			continue
 		}
 		seen[session.ID] = true
-		_, err = tx.Exec("UPDATE terminals SET observed_state=?,error=?,exit_code=?,updated_at=? WHERE id=? AND node_id=?", session.State, session.Error, session.ExitCode, now(), session.ID, node)
+		result, err := tx.Exec("UPDATE terminals SET observed_state=?,error=?,exit_code=?,updated_at=? WHERE id=? AND node_id=?", session.State, session.Error, session.ExitCode, now(), session.ID, node)
 		if err != nil {
 			log.Printf("inventory session update: %v", err)
 			return
+		}
+		matched, _ := result.RowsAffected()
+		if matched > 0 && session.Codex != nil && len(session.Codex.TurnID) <= 128 && len(session.Codex.CompletedAt) <= 64 && len(session.Codex.LaunchCommand) <= 4096 {
+			_, err = tx.Exec("INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command) VALUES(?,?,?,?) ON CONFLICT(terminal_id) DO UPDATE SET codex_turn=CASE WHEN excluded.codex_turn<>'' THEN excluded.codex_turn ELSE terminal_tasks.codex_turn END,codex_completed_at=CASE WHEN excluded.codex_turn<>'' THEN excluded.codex_completed_at ELSE terminal_tasks.codex_completed_at END,codex_command=excluded.codex_command", session.ID, session.Codex.TurnID, session.Codex.CompletedAt, session.Codex.LaunchCommand)
+			if err != nil {
+				log.Printf("task inventory update: %v", err)
+				return
+			}
 		}
 		if session.State == "lost" || session.State == "closed" || session.State == "error" {
 			detach = append(detach, session.ID)

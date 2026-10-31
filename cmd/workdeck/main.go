@@ -31,6 +31,20 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	switch os.Args[1] {
+	case "tracked-codex", "codex-event":
+		f := flag.NewFlagSet(os.Args[1], flag.ContinueOnError)
+		dir := f.String("data-dir", "", "node data directory")
+		id := f.String("terminal-id", "", "terminal identifier")
+		if err := f.Parse(os.Args[2:]); err != nil {
+			return err
+		}
+		if os.Args[1] == "tracked-codex" {
+			return agent.CodexLaunch(*dir, *id, f.Args())
+		}
+		if f.NArg() != 1 {
+			return fmt.Errorf("invalid notification")
+		}
+		return agent.CodexEvent(*dir, *id, f.Arg(0))
 	case "file-worker":
 		f := flag.NewFlagSet("file-worker", flag.ContinueOnError)
 		dir := f.String("data-dir", "", "private file worker state directory")

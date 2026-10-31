@@ -4,16 +4,25 @@ import "workdeck/internal/files"
 
 // Session is metadata only. The live process and terminal screen remain on the node.
 type Session struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Cwd       string `json:"cwd"`
-	State     string `json:"state"`
-	Error     string `json:"error,omitempty"`
-	ExitCode  *int   `json:"exit_code,omitempty"`
-	CreatedAt string `json:"created_at"`
-	BootID    string `json:"boot_id,omitempty"`
-	RunUser   string `json:"run_user,omitempty"`
-	Scope     string `json:"scope,omitempty"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Cwd       string            `json:"cwd"`
+	State     string            `json:"state"`
+	Error     string            `json:"error,omitempty"`
+	ExitCode  *int              `json:"exit_code,omitempty"`
+	CreatedAt string            `json:"created_at"`
+	BootID    string            `json:"boot_id,omitempty"`
+	RunUser   string            `json:"run_user,omitempty"`
+	Scope     string            `json:"scope,omitempty"`
+	Codex     *CodexObservation `json:"codex,omitempty"`
+}
+
+// CodexObservation contains no prompts or model output. A completion records
+// one turn, not whether the user's overall objective was achieved.
+type CodexObservation struct {
+	TurnID        string `json:"turn_id,omitempty"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+	LaunchCommand string `json:"launch_command,omitempty"`
 }
 
 type Directory struct {

@@ -175,6 +175,7 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 				snapshotErr = err
 			}
 		}
+		t.Codex = s.codexObservation(t.ID)
 		list = append(list, t)
 	}
 	return list, snapshotErr

@@ -42,6 +42,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY,name TEXT NOT NULL,public_key TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT NOT NULL DEFAULT '',hostname TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT '',home TEXT NOT NULL DEFAULT '',shell TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS terminals(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),name TEXT NOT NULL,cwd TEXT NOT NULL,desired_state TEXT NOT NULL,observed_state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',exit_code INTEGER);
  CREATE INDEX IF NOT EXISTS terminals_node ON terminals(node_id);
+ CREATE TABLE IF NOT EXISTS terminal_tasks(terminal_id TEXT PRIMARY KEY REFERENCES terminals(id), note TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', important INTEGER NOT NULL DEFAULT 0, manual_status TEXT NOT NULL DEFAULT '', codex_turn TEXT NOT NULL DEFAULT '', codex_completed_at TEXT NOT NULL DEFAULT '', codex_command TEXT NOT NULL DEFAULT '');
  CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,terminal_id TEXT NOT NULL UNIQUE REFERENCES terminals(id),node_id TEXT NOT NULL REFERENCES nodes(id),root_path TEXT NOT NULL,root_revision INTEGER NOT NULL,run_user TEXT NOT NULL DEFAULT '',device TEXT NOT NULL DEFAULT '',inode TEXT NOT NULL DEFAULT '',state TEXT NOT NULL CHECK(state IN ('initializing','ready','changing')),pending_id TEXT NOT NULL DEFAULT '',pending_target TEXT NOT NULL DEFAULT '',pending_candidate TEXT NOT NULL DEFAULT '');`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
@@ -122,17 +123,28 @@ type Node struct {
 	Capabilities []string `json:"capabilities"`
 }
 type Terminal struct {
-	ID        string `json:"id"`
-	NodeID    string `json:"node_id"`
-	Name      string `json:"name"`
-	Cwd       string `json:"cwd"`
-	Desired   string `json:"desired_state"`
-	State     string `json:"state"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	Error     string `json:"error"`
-	ExitCode  *int   `json:"exit_code"`
-	Viewers   int    `json:"viewers"`
+	ID        string    `json:"id"`
+	NodeID    string    `json:"node_id"`
+	Name      string    `json:"name"`
+	Cwd       string    `json:"cwd"`
+	Desired   string    `json:"desired_state"`
+	State     string    `json:"state"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
+	Error     string    `json:"error"`
+	ExitCode  *int      `json:"exit_code"`
+	Viewers   int       `json:"viewers"`
+	Task      *TaskInfo `json:"task,omitempty"`
+}
+
+type TaskInfo struct {
+	Note             string `json:"note"`
+	Tags             string `json:"tags"`
+	Important        bool   `json:"important"`
+	ManualStatus     string `json:"manual_status"`
+	CodexTurn        string `json:"codex_turn"`
+	CodexCompletedAt string `json:"codex_completed_at"`
+	CodexCommand     string `json:"codex_command"`
 }
 
 const terminalFields = "id,node_id,name,cwd,desired_state,observed_state,created_at,updated_at,error,exit_code"

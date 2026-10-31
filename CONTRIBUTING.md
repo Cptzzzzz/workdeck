@@ -63,4 +63,4 @@ WORKDECK_TEST_NODE_NAME=dev-node npx playwright test
 - 运行 `python3 scripts/check-publication.py --history`，并人工检查 `git diff --cached`。可通过 `--deny-file` 加载私有词表检查真实域名、地址和个人路径，词表本身必须位于被忽略的目录。
 - 不要使用 `git add -f` 绕过忽略规则。
 
-GitHub Actions 会运行 Go 检查、前端构建和无需生产环境的浏览器回归。涉及真实节点的行为还需按验证指南完成隔离验收。
+提交前请在本地运行 Go 检查、前端构建和适用的浏览器回归。涉及真实节点的行为还需按验证指南完成隔离验收。

@@ -22,6 +22,15 @@ export type TerminalRecord = {
   error: string;
   viewers: number;
   exit_code: number | null;
+  task?: {
+    note: string;
+    tags: string;
+    important: boolean;
+    manual_status: string;
+    codex_turn: string;
+    codex_completed_at: string;
+    codex_command: string;
+  };
 };
 export type Snapshot = { nodes: ComputeNode[]; terminals: TerminalRecord[] };
 export type User = { username: string; csrf: string };

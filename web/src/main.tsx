@@ -486,6 +486,45 @@ function App() {
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
   }, [user, refresh]);
+  const knownCodexTurns = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    if (!user) {
+      knownCodexTurns.current = null;
+      return;
+    }
+    if (!data.nodes.length) return;
+    const previous = knownCodexTurns.current;
+    const current = new Map(
+      data.terminals.map((terminal) => [
+        terminal.id,
+        terminal.task?.codex_turn || "",
+      ]),
+    );
+    if (previous) {
+      for (const terminal of data.terminals) {
+        const turn = terminal.task?.codex_turn;
+        if (
+          !turn ||
+          !previous.has(terminal.id) ||
+          previous.get(terminal.id) === turn
+        )
+          continue;
+        const key = `workdeck-notified-${terminal.id}`;
+        if (
+          localStorage.getItem("workdeck-task-notifications") === "on" &&
+          "Notification" in window &&
+          Notification.permission === "granted" &&
+          localStorage.getItem(key) !== turn
+        ) {
+          localStorage.setItem(key, turn);
+          new Notification("Codex 本轮已结束", {
+            body: `${terminal.name}：请查看结果和后续操作。`,
+          });
+        }
+      }
+    }
+    knownCodexTurns.current = current;
+  }, [user, data]);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 5000);

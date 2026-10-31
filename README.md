@@ -6,6 +6,7 @@
 
 - **统一管理**：节点接入、重命名、终端创建 / 关闭 / 重命名，目录逐级选择。
 - **持久会话**：tmux + systemd 独立托管终端，SQLite 和节点记录保存管理状态。
+- **任务管理**：为会话添加备注、标签、重要标记与手动状态；可跟踪 Codex 单轮结束并开启浏览器通知，详见[任务管理说明](docs/task-management.md)。
 - **多设备登录**：默认记住登录 30 天，设备之间独立；每个终端一个控制者，其他连接只读，可明确接管。
 - **自适应链路**：WebSocket 中转立即可用，默认优先使用稳定的 WebRTC 直连；可以选择平衡延迟，失败自动回退。
 - **网络可视化**：展示实际链路、两条路径的延迟，以及终端数据的上传 / 下载速率。
@@ -121,6 +122,7 @@ docs/                中文设计、部署、运维和验证文档
 - [双模式工作区技术方案](docs/workspace-design.md) · [开发进度与验证](docs/workspace-progress.md)
 - [部署指南](docs/deployment.md) · [节点接入](docs/agent-setup.md)
 - [运维手册](docs/operations.md) · [验证指南](docs/verification.md)
+- [任务管理与 Codex 跟踪](docs/task-management.md)
 - [敏感信息与脱敏规则](docs/security.md) · [安全问题反馈](SECURITY.md)
 - [开发与贡献](CONTRIBUTING.md) · [第三方许可](THIRD_PARTY_NOTICES.md)
 
