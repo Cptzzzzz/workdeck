@@ -154,6 +154,10 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       await expect
         .poll(() => nodeDiagnostic?.remoteApplied ?? 0)
         .toBeGreaterThan(0);
+      expect(nodeDiagnostic!.pairs.length).toBeGreaterThan(0);
+      expect(
+        Object.keys(nodeDiagnostic!.localCandidates).length,
+      ).toBeGreaterThan(0);
       expect(nodeDiagnostic).toMatchObject({
         gathering: expect.any(String),
         ice: expect.any(String),
