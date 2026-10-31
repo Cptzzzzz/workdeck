@@ -132,6 +132,11 @@ func (h *Hub) signIn(w http.ResponseWriter, r *http.Request) {
 		failure(w, 500, "保存登录状态失败")
 		return
 	}
+	// Successful authentication must not consume the failure budget for this
+	// address. In particular, several legitimate devices may share a NAT.
+	h.mu.Lock()
+	delete(h.attempts, host)
+	h.mu.Unlock()
 	_, _ = h.store.db.Exec("DELETE FROM logins WHERE expires<?", time.Now().Unix())
 	h.setLoginCookie(w, token, expires)
 	respond(w, 200, map[string]string{"username": in.Username, "csrf": digest(token + ":csrf")})
