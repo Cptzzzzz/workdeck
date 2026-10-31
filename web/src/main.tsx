@@ -9,6 +9,11 @@ import {
   LogOut,
   Menu,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelTop,
+  PanelBottom,
+  RotateCcw,
   Plus,
   Radio,
   RefreshCw,
@@ -246,6 +251,10 @@ function App() {
   const [editorHeight, setEditorHeight] = useState(() =>
     layoutNumber("workdeck.editor-height.v1", 55, 20, 80),
   );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [panelLayout, setPanelLayout] = useState<
+    "split" | "editor" | "terminal"
+  >("split");
   useEffect(() => {
     try {
       localStorage.setItem("workdeck.mode.v1", mode);
@@ -441,13 +450,24 @@ function App() {
       className={"app " + (mode === "workspace" ? "workbench-mode" : "")}
       style={
         {
-          "--workbench-sidebar-width": `${sidebarWidth}px`,
+          "--workbench-sidebar-width":
+            sidebarCollapsed && mode === "workspace"
+              ? "0px"
+              : `min(${sidebarWidth}px, max(180px, calc(100vw - 340px)))`,
           "--workbench-editor-height": `${editorHeight}%`,
         } as React.CSSProperties
       }
     >
       {menu && <div className="scrim" onClick={() => setMenu(false)} />}
-      <aside className={"sidebar " + (menu ? "shown" : "")}>
+      <aside
+        className={
+          "sidebar " +
+          (menu ? "shown " : "") +
+          (mode === "workspace" && sidebarCollapsed
+            ? "workbench-sidebar-collapsed"
+            : "")
+        }
+      >
         <div className={mode === "workspace" ? "hidden" : "legacy-sidebar"}>
           <Brand />
           <div className="workspace-label">PERSONAL WORKSPACE</div>
@@ -564,18 +584,54 @@ function App() {
           />
         )}
       </aside>
-      {mode === "workspace" && (
+      {mode === "workspace" && !sidebarCollapsed && (
         <div
           className="workbench-sidebar-grip"
           role="separator"
           aria-label="调整文件树宽度"
+          aria-orientation="vertical"
+          aria-valuemin={180}
+          aria-valuemax={Math.max(180, Math.min(600, window.innerWidth - 340))}
+          aria-valuenow={Math.round(
+            Math.max(180, Math.min(sidebarWidth, window.innerWidth - 340)),
+          )}
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            setSidebarWidth((width) =>
+              Math.max(
+                180,
+                Math.min(
+                  600,
+                  window.innerWidth - 340,
+                  width + (event.key === "ArrowLeft" ? -10 : 10),
+                ),
+              ),
+            );
+          }}
           onPointerDown={(event) => {
             event.currentTarget.setPointerCapture(event.pointerId);
           }}
           onPointerMove={(event) => {
             if (event.currentTarget.hasPointerCapture(event.pointerId))
-              setSidebarWidth(Math.max(180, Math.min(600, event.clientX)));
+              setSidebarWidth(
+                Math.max(
+                  180,
+                  Math.min(
+                    600,
+                    Math.max(180, window.innerWidth - 340),
+                    event.clientX,
+                  ),
+                ),
+              );
           }}
+          onPointerUp={() =>
+            window.dispatchEvent(new Event("workdeck:resize-end"))
+          }
+          onPointerCancel={() =>
+            window.dispatchEvent(new Event("workdeck:resize-end"))
+          }
         />
       )}
       <main>
@@ -593,6 +649,71 @@ function App() {
             <b>{active ? "终端" : selected?.name || "全部终端"}</b>
           </div>
           <div className="topbar-right">
+            {mode === "workspace" && (
+              <div className="workbench-layout-actions" aria-label="工作区布局">
+                <button
+                  className="icon-button"
+                  aria-label={sidebarCollapsed ? "显示文件树" : "隐藏文件树"}
+                  title={sidebarCollapsed ? "显示文件树" : "隐藏文件树"}
+                  onClick={() => setSidebarCollapsed((value) => !value)}
+                >
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen size={16} />
+                  ) : (
+                    <PanelLeftClose size={16} />
+                  )}
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label={
+                    panelLayout === "editor"
+                      ? "恢复编辑区和终端分栏"
+                      : "最大化编辑区"
+                  }
+                  title={panelLayout === "editor" ? "恢复分栏" : "最大化编辑区"}
+                  aria-pressed={panelLayout === "editor"}
+                  disabled={!active}
+                  onClick={() =>
+                    setPanelLayout((value) =>
+                      value === "editor" ? "split" : "editor",
+                    )
+                  }
+                >
+                  <PanelTop size={16} />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label={
+                    panelLayout === "terminal"
+                      ? "恢复终端和编辑区分栏"
+                      : "最大化终端"
+                  }
+                  title={panelLayout === "terminal" ? "恢复分栏" : "最大化终端"}
+                  aria-pressed={panelLayout === "terminal"}
+                  disabled={!active}
+                  onClick={() =>
+                    setPanelLayout((value) =>
+                      value === "terminal" ? "split" : "terminal",
+                    )
+                  }
+                >
+                  <PanelBottom size={16} />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label="恢复默认布局"
+                  title="恢复默认布局"
+                  onClick={() => {
+                    setSidebarWidth(280);
+                    setEditorHeight(55);
+                    setSidebarCollapsed(false);
+                    setPanelLayout("split");
+                  }}
+                >
+                  <RotateCcw size={16} />
+                </button>
+              </div>
+            )}
             <div className="mode-switch" aria-label="视图模式">
               <button
                 className={mode === "terminal" ? "active" : ""}
@@ -890,7 +1011,10 @@ function App() {
             <span>v0.1</span>
           </footer>
         </div>
-        <div className={"sessions-host " + (!active ? "hidden" : "")}>
+        <div
+          className={"sessions-host " + (!active ? "hidden" : "")}
+          data-workbench-panel={mode === "workspace" ? panelLayout : undefined}
+        >
           {mode === "workspace" && active && (
             <WorkspaceEditor
               controller={workspace}
@@ -927,6 +1051,22 @@ function App() {
               className="workbench-height-grip"
               role="separator"
               aria-label="调整编辑器和终端高度"
+              aria-orientation="horizontal"
+              aria-valuemin={20}
+              aria-valuemax={80}
+              aria-valuenow={Math.round(editorHeight)}
+              tabIndex={0}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown")
+                  return;
+                event.preventDefault();
+                setEditorHeight((height) =>
+                  Math.max(
+                    20,
+                    Math.min(80, height + (event.key === "ArrowUp" ? -2 : 2)),
+                  ),
+                );
+              }}
               onPointerDown={(event) =>
                 event.currentTarget.setPointerCapture(event.pointerId)
               }
@@ -946,6 +1086,12 @@ function App() {
                     ),
                   );
               }}
+              onPointerUp={() =>
+                window.dispatchEvent(new Event("workdeck:resize-end"))
+              }
+              onPointerCancel={() =>
+                window.dispatchEvent(new Event("workdeck:resize-end"))
+              }
             />
           )}
           <div className="terminal-sessions">
@@ -958,6 +1104,9 @@ function App() {
                   terminal={t}
                   node={data.nodes.find((n) => n.id === t.node_id)}
                   visible={active === id}
+                  layoutVisible={
+                    mode !== "workspace" || panelLayout !== "editor"
+                  }
                   fontSize={fontSize}
                   onFontSizeChange={changeFontSize}
                   onBack={() => setActive(null)}

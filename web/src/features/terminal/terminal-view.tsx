@@ -28,6 +28,7 @@ export function TerminalView({
   terminal,
   node,
   visible,
+  layoutVisible = true,
   fontSize,
   onFontSizeChange,
   onBack,
@@ -37,6 +38,7 @@ export function TerminalView({
   terminal: Term;
   node?: Node;
   visible: boolean;
+  layoutVisible?: boolean;
   fontSize: number;
   onFontSizeChange: (size: number) => void;
   onBack: () => void;
@@ -61,8 +63,8 @@ export function TerminalView({
   const stopped =
     terminal.desired_state === "closed" ||
     ["closed", "lost", "error"].includes(terminal.state);
-  const visibleRef = useRef(visible);
-  visibleRef.current = visible;
+  const visibleRef = useRef(visible && layoutVisible);
+  visibleRef.current = visible && layoutVisible;
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
   const focusTerminal = useCallback(() => instance.current?.focus(), []);
@@ -132,22 +134,44 @@ export function TerminalView({
       }
       return true;
     });
-    const sendSize = () => {
-      if (!visibleRef.current) return;
+    let lastResize = 0,
+      resizeTimer = 0;
+    const transmitSize = () => {
+      resizeTimer = 0;
+      if (
+        disposed ||
+        !visibleRef.current ||
+        socket.current?.readyState !== WebSocket.OPEN
+      )
+        return;
+      lastResize = performance.now();
+      socket.current.send(
+        JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+      );
+    };
+    const sendSize = (force = false) => {
+      if (
+        disposed ||
+        !visibleRef.current ||
+        !container.current?.clientWidth ||
+        !container.current?.clientHeight
+      )
+        return;
       try {
         fit.fit();
         setSize(`${term.cols} × ${term.rows}`);
-        if (socket.current?.readyState === WebSocket.OPEN)
-          socket.current.send(
-            JSON.stringify({
-              type: "resize",
-              cols: term.cols,
-              rows: term.rows,
-            }),
+        if (force || performance.now() - lastResize >= 100) {
+          if (resizeTimer) clearTimeout(resizeTimer);
+          transmitSize();
+        } else if (!resizeTimer) {
+          resizeTimer = window.setTimeout(
+            transmitSize,
+            100 - (performance.now() - lastResize),
           );
+        }
       } catch {}
     };
-    fitRef.current = sendSize;
+    fitRef.current = () => sendSize(true);
     const connect = (takeover = false) => {
       if (disposed) return;
       generation++;
@@ -175,7 +199,7 @@ export function TerminalView({
               term.options.disableStdin = frame.readonly;
               setConnection("connected");
               attempt = 0;
-              requestAnimationFrame(sendSize);
+              requestAnimationFrame(() => sendSize());
               if (visibleRef.current) term.focus();
             } else if (frame.type === "error") {
               setFailure(frame.message);
@@ -209,19 +233,25 @@ export function TerminalView({
     const binary = term.onBinary((data) => {
       sendKeyboardInput(Uint8Array.from(data, (c) => c.charCodeAt(0)));
     });
-    const observer = new ResizeObserver(() => requestAnimationFrame(sendSize));
+    const observer = new ResizeObserver(() =>
+      requestAnimationFrame(() => sendSize()),
+    );
     observer.observe(container.current);
-    const viewport = () => requestAnimationFrame(sendSize);
+    const viewport = () => requestAnimationFrame(() => sendSize());
+    const resizeEnd = () => requestAnimationFrame(() => sendSize(true));
     window.visualViewport?.addEventListener("resize", viewport);
     window.addEventListener("resize", viewport);
+    window.addEventListener("workdeck:resize-end", resizeEnd);
     connect();
     return () => {
       disposed = true;
       generation++;
       if (retry) clearTimeout(retry);
       observer.disconnect();
+      if (resizeTimer) clearTimeout(resizeTimer);
       window.visualViewport?.removeEventListener("resize", viewport);
       window.removeEventListener("resize", viewport);
+      window.removeEventListener("workdeck:resize-end", resizeEnd);
       socket.current?.close();
       socket.current = null;
       input.dispose();
@@ -239,6 +269,12 @@ export function TerminalView({
       });
     }
   }, [visible]);
+  useEffect(() => {
+    if (visible && layoutVisible) {
+      const frame = requestAnimationFrame(() => fitRef.current());
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [layoutVisible, visible]);
   useEffect(() => {
     // Hidden tabs are measured when shown, including browsers which use DOM
     // font measurement and cannot measure inside display:none.

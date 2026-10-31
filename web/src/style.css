@@ -2130,6 +2130,18 @@ main {
   width: var(--workbench-sidebar-width);
   padding: 0;
 }
+.workbench-mode .sidebar.workbench-sidebar-collapsed {
+  display: none;
+}
+.workbench-layout-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.workbench-layout-actions button[aria-pressed="true"] {
+  color: #e7ae7a;
+  background: #354335;
+}
 .workbench-mode main {
   margin-left: var(--workbench-sidebar-width);
   height: 100dvh;
@@ -2382,6 +2394,23 @@ main {
 }
 .workbench-mode .terminal-sessions {
   display: block;
+  flex: 1;
+  min-height: 0;
+}
+.workbench-mode
+  .sessions-host[data-workbench-panel="editor"]
+  .terminal-sessions,
+.workbench-mode
+  .sessions-host[data-workbench-panel="terminal"]
+  .workbench-editor,
+.workbench-mode
+  .sessions-host:not([data-workbench-panel="split"])
+  .workbench-height-grip {
+  display: none;
+}
+.workbench-mode
+  .sessions-host[data-workbench-panel="editor"]
+  .workbench-editor {
   flex: 1;
   min-height: 0;
 }

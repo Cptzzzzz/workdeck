@@ -38,6 +38,21 @@ test("modes share the terminal and the workspace edits and saves files", async (
     );
     await page.addInitScript(() => {
       (window as any).__download = [];
+      (window as any).__terminalResizes = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (data) {
+        if (this.url.includes("/api/terminals/") && typeof data === "string") {
+          try {
+            const message = JSON.parse(data);
+            if (message.type === "resize")
+              (window as any).__terminalResizes.push({
+                ...message,
+                time: performance.now(),
+              });
+          } catch {}
+        }
+        return send.call(this, data);
+      };
       (window as any).showSaveFilePicker = async () => ({
         createWritable: async () => ({
           write: async (chunk: Uint8Array) =>
@@ -250,16 +265,101 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await expect(page.locator(".monaco-editor")).toContainText(
       "unsaved while switching",
     );
+    await page.getByRole("button", { name: "隐藏文件树" }).click();
+    await expect(page.locator(".workbench-sidebar")).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "显示文件树" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "显示文件树" }).click();
+    await expect(page.locator(".workbench-sidebar")).toBeVisible();
+    await page.getByRole("button", { name: "最大化终端" }).click();
+    await expect(page.locator(".workbench-editor")).toBeHidden();
+    await expect(
+      page.locator('.terminal-mount[data-fixture-stable="yes"]'),
+    ).toBeVisible();
+    await page.waitForTimeout(300);
+    const paneSize = () =>
+      execFileSync(
+        "tmux",
+        [
+          "-L",
+          `workdeck-${id}`,
+          "display-message",
+          "-p",
+          "-t",
+          "main",
+          "#{pane_width}x#{pane_height}",
+        ],
+        { encoding: "utf8" },
+      ).trim();
+    const terminalSizeBeforeHide = paneSize();
+    await page.evaluate(() => ((window as any).__terminalResizes = []));
+    await page.getByRole("button", { name: "最大化编辑区" }).click();
+    await expect(page.locator(".workbench-editor")).toBeVisible();
+    await expect(
+      page.locator('.terminal-mount[data-fixture-stable="yes"]'),
+    ).toBeHidden();
+    await expect(page.locator(".monaco-editor")).toContainText(
+      "unsaved while switching",
+    );
+    await page.waitForTimeout(300);
+    expect(paneSize()).toBe(terminalSizeBeforeHide);
+    expect(
+      await page.evaluate(() => (window as any).__terminalResizes),
+    ).toEqual([]);
+    await page.getByRole("button", { name: "恢复默认布局" }).click();
+    await expect(
+      page.getByRole("button", { name: "恢复默认布局" }),
+    ).toBeFocused();
+    await expect(page.locator(".workbench-editor")).toBeVisible();
+    await expect(
+      page.locator('.terminal-mount[data-fixture-stable="yes"]'),
+    ).toBeVisible();
+    await page.setViewportSize({ width: 1024, height: 900 });
+    const layoutButtons = page.locator(".workbench-layout-actions");
+    await expect(layoutButtons).toBeVisible();
+    await expect
+      .poll(() =>
+        layoutButtons.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.left >= 0 && rect.right <= innerWidth;
+        }),
+      )
+      .toBe(true);
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const grip = page.getByRole("separator", { name: "调整文件树宽度" });
     const before = await grip.boundingBox();
     if (!before) throw new Error("missing sidebar handle");
+    await page.evaluate(() => ((window as any).__terminalResizes = []));
     await page.mouse.move(before.x + 3, before.y + 120);
     await page.mouse.down();
-    await page.mouse.move(before.x + 83, before.y + 120, { steps: 5 });
+    for (let step = 1; step <= 15; step++) {
+      await page.mouse.move(before.x + 3 + (80 * step) / 15, before.y + 120);
+      await page.waitForTimeout(25);
+    }
     await page.mouse.up();
+    await page.waitForTimeout(150);
+    const dragResizes = await page.evaluate(
+      () =>
+        (window as any).__terminalResizes as { cols: number; rows: number }[],
+    );
+    expect(dragResizes.length).toBeGreaterThan(0);
+    expect(dragResizes.length).toBeLessThanOrEqual(9);
+    expect(dragResizes.every((size) => size.cols > 0 && size.rows > 0)).toBe(
+      true,
+    );
     await expect
       .poll(async () => (await grip.boundingBox())?.x)
       .toBeGreaterThan(before.x + 60);
+    const widthBeforeKeyboard = Number(
+      await grip.getAttribute("aria-valuenow"),
+    );
+    await grip.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(grip).toHaveAttribute(
+      "aria-valuenow",
+      String(widthBeforeKeyboard - 10),
+    );
     const heightGrip = page.getByRole("separator", {
       name: "调整编辑器和终端高度",
     });
@@ -272,6 +372,15 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await expect
       .poll(async () => (await heightGrip.boundingBox())?.y)
       .toBeLessThan(vertical.y - 40);
+    const heightBeforeKeyboard = Number(
+      await heightGrip.getAttribute("aria-valuenow"),
+    );
+    await heightGrip.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(heightGrip).toHaveAttribute(
+      "aria-valuenow",
+      String(heightBeforeKeyboard + 2),
+    );
     await expect
       .poll(() =>
         page
@@ -300,11 +409,8 @@ test("modes share the terminal and the workspace edits and saves files", async (
     await page.reload();
     await page.getByRole("button", { name, exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "example.txt", exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("button", { name: "example.txt", exact: true })
-      .click();
+      page.locator(".workbench-tab.active .workbench-tab-select"),
+    ).toHaveAttribute("title", "example.txt");
     await expect(page.locator(".monaco-editor")).toContainText(
       "unsaved while switching",
     );
