@@ -612,7 +612,16 @@ export class TerminalTransport {
     }
     this.checking = true;
     try {
-      if (!(await this.isDirectPair())) {
+      // The data channel may open before Chromium exposes its selected ICE pair.
+      // Give the stats time to settle before treating a missing pair as non-direct.
+      let directPair = false;
+      for (let attempt = 0; attempt < 6 && !directPair; attempt++) {
+        if (this.closed || this.channel?.readyState !== "open") return;
+        directPair = await this.isDirectPair();
+        if (!directPair && attempt < 5)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!directPair) {
         this.abandon("not_direct");
         return;
       }
