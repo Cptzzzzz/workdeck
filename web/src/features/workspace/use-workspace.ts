@@ -23,6 +23,7 @@ import {
   markDeletedDrafts,
   listDeletedDrafts,
   listRecoverableDrafts,
+  listArchivedDrafts,
 } from "../../services/files/drafts";
 import type {
   FileEntry,
@@ -109,6 +110,9 @@ export function useWorkspace(
   const [recoverableDrafts, setRecoverableDrafts] = useState<DraftIdentity[]>(
     [],
   );
+  const [archivedRecords, setArchivedRecords] = useState<
+    { identity: DraftIdentity; pending: boolean }[]
+  >([]);
   const [transfer, setTransfer] = useState("");
   const [downloadMessage, setDownloadMessage] = useState("");
   const [renaming, setRenaming] = useState(false);
@@ -343,6 +347,87 @@ export function useWorkspace(
     reconnect,
     loadDirectory,
   ]);
+
+  useEffect(() => {
+    setArchivedRecords([]);
+    if (!enabled || !workspace || !terminal || !account) return;
+    const scope = {
+      account,
+      nodeID: terminal.node_id,
+      workspaceID: workspace.id,
+      rootRevision: workspace.root_revision,
+    };
+    let stopped = false;
+    const refreshArchives = async () => {
+      try {
+        const drafts = await listArchivedDrafts(scope);
+        if (!stopped) setArchivedRecords(drafts);
+      } catch (e) {
+        if (!stopped) setError("无法读取旧目录草稿：" + (e as Error).message);
+      }
+    };
+    const visible = () => {
+      if (globalThis.document.visibilityState === "visible")
+        void refreshArchives();
+    };
+    void refreshArchives();
+    const timer = window.setInterval(visible, 10000);
+    globalThis.document.addEventListener("visibilitychange", visible);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      globalThis.document.removeEventListener("visibilitychange", visible);
+    };
+  }, [
+    enabled,
+    workspace?.id,
+    workspace?.root_revision,
+    terminal?.node_id,
+    account,
+  ]);
+
+  const exportArchivedDraft = useCallback(
+    async (
+      identity: DraftIdentity,
+      source: "page" | "stored",
+    ): Promise<Draft> => {
+      if (
+        !workspace ||
+        !terminal ||
+        identity.account !== account ||
+        identity.nodeID !== terminal.node_id ||
+        identity.workspaceID !== workspace.id ||
+        identity.rootRevision === workspace.root_revision
+      )
+        throw new Error("旧目录草稿不属于当前工作区");
+      const doc = docs.current.get(documentKey(identity));
+      if (source === "page") {
+        if (!doc) throw new Error("页面中的旧目录草稿已关闭");
+        return {
+          identity: doc.identity,
+          baseVersion: doc.version,
+          baseText: doc.base,
+          text: doc.text,
+          sequence: doc.sequence,
+          encoding: doc.encoding,
+          newline: doc.newline,
+          pendingSave: doc.pending,
+          deleted: doc.deleted,
+          unavailable: doc.unavailable,
+          manualSaveRequired: doc.manualSaveRequired,
+        };
+      }
+      const draft = await loadDraft(identity);
+      if (
+        !draft ||
+        typeof draft.text !== "string" ||
+        typeof draft.baseText !== "string"
+      )
+        throw new Error("旧目录草稿不可用");
+      return draft;
+    },
+    [account, workspace, terminal?.node_id],
+  );
 
   const refreshActive = useRef(false);
   const refreshPending = useRef(false);
@@ -2832,6 +2917,62 @@ export function useWorkspace(
       supportsCreate,
     ],
   );
+  const archivedRows = new Map<
+    string,
+    {
+      identity: DraftIdentity;
+      page: boolean;
+      stored: boolean;
+      pagePending: boolean;
+      storedPending: boolean;
+    }
+  >();
+  for (const item of archivedRecords) {
+    const id = item.identity;
+    if (
+      workspace &&
+      terminal &&
+      id.account === account &&
+      id.nodeID === terminal.node_id &&
+      id.workspaceID === workspace.id &&
+      id.rootRevision !== workspace.root_revision
+    )
+      archivedRows.set(documentKey(id), {
+        identity: id,
+        page: false,
+        stored: true,
+        pagePending: false,
+        storedPending: item.pending,
+      });
+  }
+  for (const doc of docs.current.values()) {
+    if (
+      !workspace ||
+      !terminal ||
+      doc.identity.account !== account ||
+      doc.identity.nodeID !== terminal.node_id ||
+      doc.identity.workspaceID !== workspace.id ||
+      doc.identity.rootRevision === workspace.root_revision ||
+      !(
+        doc.text !== doc.base ||
+        doc.pending ||
+        doc.deleted ||
+        doc.unavailable ||
+        doc.manualSaveRequired ||
+        doc.persistenceError
+      )
+    )
+      continue;
+    const key = documentKey(doc.identity),
+      old = archivedRows.get(key);
+    archivedRows.set(key, {
+      identity: doc.identity,
+      page: true,
+      stored: old?.stored || false,
+      pagePending: !!doc.pending,
+      storedPending: old?.storedPending || false,
+    });
+  }
   return {
     workspace,
     connection,
@@ -2850,6 +2991,12 @@ export function useWorkspace(
     retryRename,
     deletedDrafts,
     recoverableDrafts,
+    archivedDrafts: Array.from(archivedRows.values()).sort(
+      (a, b) =>
+        b.identity.rootRevision - a.identity.rootRevision ||
+        a.identity.path.localeCompare(b.identity.path),
+    ),
+    exportArchivedDraft,
     openDeletedDraft,
     openRecoverableDraft,
     saveDeletedAs,

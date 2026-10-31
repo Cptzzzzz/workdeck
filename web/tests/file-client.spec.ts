@@ -570,6 +570,84 @@ test("draft storage prevents stale writes and preserves a pending save", async (
       return { staleDelete, deleted: !(await drafts.loadDraft(identity)) };
     });
     expect(result).toEqual({ staleDelete: true, deleted: true });
+    const archived = await page.evaluate(async () => {
+      const drafts = (window as any).workdeckFileTest.drafts;
+      const scope = {
+        account: "archive-account",
+        nodeID: crypto.randomUUID(),
+        workspaceID: "archive-workspace",
+        rootRevision: 2,
+      };
+      const make = (identity: any, extra: any = {}) => ({
+        identity,
+        baseVersion: "v",
+        baseText: "base",
+        text: "dirty",
+        sequence: 1,
+        encoding: "utf8",
+        newline: "lf",
+        ...extra,
+      });
+      const records = [
+        make(
+          { ...scope, rootRevision: 1, path: "pending.txt" },
+          {
+            pendingSave: {
+              opID: "op",
+              spec: { path: "pending.txt", size: 1, sha256: "x" },
+              content: new Uint8Array([7]),
+            },
+          },
+        ),
+        make(
+          { ...scope, rootRevision: 1, path: "clean.txt" },
+          { text: "base" },
+        ),
+        make({ ...scope, rootRevision: 2, path: "current.txt" }),
+        make({
+          ...scope,
+          account: "another-account",
+          rootRevision: 1,
+          path: "other.txt",
+        }),
+        make({
+          ...scope,
+          nodeID: "other-node",
+          rootRevision: 1,
+          path: "other-node.txt",
+        }),
+        make({
+          ...scope,
+          workspaceID: "other-workspace",
+          rootRevision: 1,
+          path: "other-workspace.txt",
+        }),
+        make(
+          { ...scope, rootRevision: 3, path: "deleted.txt" },
+          { deleted: true, text: "base" },
+        ),
+      ];
+      const saved = await Promise.all(
+        records.map((record) => drafts.saveDraft(record, null)),
+      );
+      const listed = await drafts.listArchivedDrafts(scope);
+      await Promise.all(
+        saved.map((record: any) =>
+          drafts.deleteDraft(record.identity, record.token),
+        ),
+      );
+      return listed
+        .map((entry: any) => ({
+          path: entry.identity.path,
+          revision: entry.identity.rootRevision,
+          pending: entry.pending,
+        }))
+        .sort((a: any, b: any) => a.path.localeCompare(b.path));
+    });
+    expect(archived).toEqual([
+      { path: "deleted.txt", revision: 3, pending: false },
+      { path: "pending.txt", revision: 1, pending: true },
+    ]);
     const viewState = await page.evaluate(async () => {
       const views = (window as any).workdeckFileTest.viewState;
       const id = {

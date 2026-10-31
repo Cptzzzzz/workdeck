@@ -2774,3 +2774,20 @@ main {
   white-space: nowrap;
   font-size: 10px;
 }
+.archived-drafts > small {
+  display: block;
+  margin-top: 6px;
+  color: #9aa99b;
+}
+.archived-drafts > div {
+  display: block;
+}
+.archived-drafts > div > span {
+  display: block;
+}
+.archived-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}

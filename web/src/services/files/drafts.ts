@@ -361,6 +361,50 @@ export async function listRecoverableDrafts(
     db.close();
   }
 }
+
+// Old revisions remain available after another device changes the root. They
+// are never automatically attached to a new directory with the same path.
+export async function listArchivedDrafts(
+  scope: DraftScope,
+): Promise<{ identity: DraftIdentity; pending: boolean }[]> {
+  const db = await openDB();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly"),
+        cursor = tx.objectStore(STORE).openCursor(),
+        result: { identity: DraftIdentity; pending: boolean }[] = [];
+      cursor.onsuccess = () => {
+        const item = cursor.result;
+        if (!item) return;
+        const draft = item.value as StoredDraft,
+          id = draft?.identity;
+        if (
+          id &&
+          id.account === scope.account &&
+          id.nodeID === scope.nodeID &&
+          id.workspaceID === scope.workspaceID &&
+          Number.isSafeInteger(id.rootRevision) &&
+          id.rootRevision > 0 &&
+          id.rootRevision !== scope.rootRevision &&
+          typeof id.path === "string" &&
+          item.primaryKey === key(id) &&
+          (draft.deleted ||
+            draft.unavailable ||
+            draft.pendingSave ||
+            draft.manualSaveRequired ||
+            draft.text !== draft.baseText)
+        )
+          result.push({ identity: id, pending: !!draft.pendingSave });
+        item.continue();
+      };
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error || new Error("无法读取旧目录草稿"));
+      tx.onerror = () => {};
+    });
+  } finally {
+    db.close();
+  }
+}
 export async function loadDraft(
   identity: DraftIdentity,
 ): Promise<StoredDraft | undefined> {

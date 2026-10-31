@@ -22,7 +22,7 @@ import type {
   Document,
   ConflictSnapshot,
 } from "./use-workspace";
-import type { CreateIntent } from "../../services/files/drafts";
+import type { CreateIntent, DraftIdentity } from "../../services/files/drafts";
 import type { DeleteStatus, DeleteOutcome } from "../../services/files/types";
 import { formatBytes, formatLatency } from "../../network-metrics";
 const MonacoEditor = lazy(() =>
@@ -304,6 +304,87 @@ export function WorkspaceSidebar({
           ))}
         </div>
       )}
+      {controller.archivedDrafts.length > 0 && (
+        <div className="workbench-intents archived-drafts">
+          <b>旧目录的本地草稿</b>
+          <small>草稿不会自动写入当前目录；待确认操作可导出完整记录。</small>
+          {controller.archivedDrafts.map(
+            ({ identity, page, stored, pagePending, storedPending }) => (
+              <div key={JSON.stringify(identity)}>
+                <span title={identity.path}>
+                  修订 {identity.rootRevision} · {identity.path}
+                </span>
+                <div className="archived-actions">
+                  {page && (
+                    <button
+                      onClick={() =>
+                        void downloadArchived(
+                          controller,
+                          identity,
+                          "page",
+                          false,
+                        ).catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
+                      }
+                    >
+                      导出页面文本
+                    </button>
+                  )}
+                  {page && pagePending && (
+                    <button
+                      onClick={() =>
+                        void downloadArchived(
+                          controller,
+                          identity,
+                          "page",
+                          true,
+                        ).catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
+                      }
+                    >
+                      导出页面记录
+                    </button>
+                  )}
+                  {stored && (
+                    <button
+                      onClick={() =>
+                        void downloadArchived(
+                          controller,
+                          identity,
+                          "stored",
+                          false,
+                        ).catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
+                      }
+                    >
+                      导出已保存文本
+                    </button>
+                  )}
+                  {stored && storedPending && (
+                    <button
+                      onClick={() =>
+                        void downloadArchived(
+                          controller,
+                          identity,
+                          "stored",
+                          true,
+                        ).catch((e) =>
+                          controller.reportError((e as Error).message),
+                        )
+                      }
+                    >
+                      导出已保存记录
+                    </button>
+                  )}
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      )}
       {controller.transfer && (
         <div className="workbench-hint" role="status">
           {controller.transfer}
@@ -401,6 +482,60 @@ export function WorkspaceSidebar({
       </div>
     </div>
   );
+}
+
+async function downloadArchived(
+  controller: WorkspaceController,
+  identity: DraftIdentity,
+  source: "page" | "stored",
+  record: boolean,
+) {
+  const draft = await controller.exportArchivedDraft(identity, source);
+  let blob = new Blob([draft.text], { type: "text/plain;charset=utf-8" }),
+    suffix = ".workdeck-draft.txt";
+  if (record) {
+    const pending = draft.pendingSave;
+    if (
+      !pending ||
+      !(pending.content instanceof Uint8Array) ||
+      pending.content.byteLength > 64 * 1024 * 1024
+    )
+      throw new Error(
+        "待确认记录无效或超过 64 MiB，请保留浏览器草稿并先导出文本",
+      );
+    const { pendingSave: _ignored, ...rest } = draft;
+    const prefix = JSON.stringify({
+      ...rest,
+      format: "workdeck-draft-v1",
+    }).slice(0, -1);
+    const pendingPrefix = JSON.stringify({
+      ...pending,
+      content: undefined,
+      contentBase64: undefined,
+    }).slice(0, -1);
+    const parts: BlobPart[] = [
+      prefix + ',"pendingSave":' + pendingPrefix + ',"contentBase64":"',
+    ];
+    // 49152 is divisible by three, so concatenating encoded chunks preserves
+    // the original bytes without allocating one large binary string.
+    for (let offset = 0; offset < pending.content.length; offset += 49152)
+      parts.push(
+        btoa(
+          String.fromCharCode(
+            ...pending.content.subarray(offset, offset + 49152),
+          ),
+        ),
+      );
+    parts.push('"}}');
+    blob = new Blob(parts, { type: "application/json;charset=utf-8" });
+    suffix = ".workdeck-draft.json";
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = (identity.path.split("/").pop() || "draft") + suffix;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function exportDraft(doc: Document) {
