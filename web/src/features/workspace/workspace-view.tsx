@@ -47,6 +47,9 @@ const ImagePreview = lazy(() =>
 const PDFPreview = lazy(() =>
   import("./pdf-preview").then((m) => ({ default: m.PDFPreview })),
 );
+const LargeTextPreview = lazy(() =>
+  import("./large-text-preview").then((m) => ({ default: m.LargeTextPreview })),
+);
 
 export function WorkspaceSidebar({
   controller,
@@ -1496,11 +1499,22 @@ export function WorkspaceEditor({
         >
           {preview.kind === "image" ? (
             <ImagePreview client={controller.client} preview={preview} />
-          ) : (
+          ) : preview.kind === "pdf" ? (
             <PDFPreview
               key={JSON.stringify(preview.identity)}
               client={controller.client}
               preview={preview}
+            />
+          ) : (
+            <LargeTextPreview
+              key={JSON.stringify(preview.identity)}
+              client={controller.client}
+              preview={preview}
+              onDownload={() =>
+                void controller
+                  .download(preview.path)
+                  .catch((e) => controller.reportError((e as Error).message))
+              }
             />
           )}
         </Suspense>

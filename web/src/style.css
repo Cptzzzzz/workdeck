@@ -2641,6 +2641,50 @@ main {
   min-height: 0;
   overflow: hidden;
 }
+.large-text-preview {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.large-text-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--line);
+}
+.large-text-toolbar button {
+  color: #a6c4a7;
+  padding: 4px 6px;
+}
+.large-text-toolbar form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.large-text-toolbar input {
+  width: 70px;
+  color: #eff3eb;
+  background: #1c2820;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px;
+}
+.large-text-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 16px;
+  color: #d3ddd2;
+  font: 12px/1.6 monospace;
+  white-space: pre;
+}
 .workbench-code {
   display: flex;
   flex: 1;

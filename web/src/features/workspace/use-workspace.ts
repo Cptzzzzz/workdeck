@@ -74,7 +74,7 @@ export type Document = {
 export type BinaryPreview = {
   identity: DraftIdentity;
   path: string;
-  kind: "image" | "pdf";
+  kind: "image" | "pdf" | "large-text";
   version: string;
   size: number;
 };
@@ -938,7 +938,46 @@ export function useWorkspace(
           update();
           return;
         }
-        const { entry, bytes } = await client.readBytes(path);
+        let content: Awaited<ReturnType<FileClient["readBytes"]>>;
+        try {
+          content = await client.readBytes(path);
+        } catch (e) {
+          if (!(e instanceof FileServiceError) || e.code !== "FILE_TOO_LARGE")
+            throw e;
+          const entry = await client.stat(path);
+          if (!allowed()) return;
+          if (docs.current.has(key)) {
+            if (!restore) {
+              resolvePending();
+              selections.current.set(w.id, key);
+              setSelected(key);
+            }
+            return;
+          }
+          if (
+            entry.kind !== "file" ||
+            !entry.version ||
+            !Number.isSafeInteger(entry.size) ||
+            entry.size < 0
+          )
+            throw new Error("文件无法预览");
+          if (previews.current.has(key) && restore) return;
+          previews.current.set(key, {
+            identity,
+            path,
+            kind: "large-text",
+            version: entry.version,
+            size: entry.size,
+          });
+          if (!restore) {
+            resolvePending();
+            selections.current.set(w.id, key);
+            setSelected(key);
+          }
+          update();
+          return;
+        }
+        const { entry, bytes } = content;
         if (!entry.version) throw new Error("文件缺少版本信息");
         const bom =
           bytes.length >= 3 &&
@@ -1034,6 +1073,7 @@ export function useWorkspace(
             : "",
           persistenceError,
         };
+        previews.current.delete(key);
         docs.current.set(key, doc);
         if (!restore) {
           resolvePending();
