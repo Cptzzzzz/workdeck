@@ -56,6 +56,24 @@ for (const platform of ["Win32", "MacIntel"]) {
         page.evaluate(() => (window as any).testTerminal.getSelection()),
       )
       .toContain("\nsecond");
+    await page.mouse.move(second.x + cell * 12, second.y + second.height / 2);
+    await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as any).testTerminal.getSelection()),
+      )
+      .toContain("COPY-ME");
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          (window as any).testTerminal.write("\x1b[?1003l\x1b[?1003h", resolve),
+        ),
+    );
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as any).testTerminal.getSelection()),
+      )
+      .toContain("COPY-ME");
     await page.keyboard.press(platform === "MacIntel" ? "Meta+c" : "Control+c");
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -80,6 +98,19 @@ for (const platform of ["Win32", "MacIntel"]) {
     await expect
       .poll(() =>
         page.evaluate(() => (window as any).testInputs.includes("\x03")),
+      )
+      .toBe(true);
+    await page.evaluate(() => {
+      (window as any).testInputs.length = 0;
+    });
+    await page.mouse.move(box.x + cell * 8, box.y + box.height / 2);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (window as any).testInputs.some((s: string) =>
+            s.startsWith("\x1b[<"),
+          ),
+        ),
       )
       .toBe(true);
     await page.evaluate(() => {

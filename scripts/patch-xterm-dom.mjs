@@ -6,6 +6,7 @@
 // inline-block layout rounds each run separately, accumulating another error
 // on ANSI-colored/bold TUI rows even after the width measurement is fixed.
 // Keep the pinned dependency and fail closed when its implementation changes.
+// Also preserve a selection when a TUI repeats its active mouse mode.
 import { readFileSync, writeFileSync } from "node:fs";
 
 const root = new URL("../web/node_modules/@xterm/xterm/", import.meta.url);
@@ -17,6 +18,17 @@ if (version !== "5.5.0")
     `Review the xterm DOM width patch before upgrading from 5.5.0 (found ${version})`,
   );
 const patches = [
+  // Repeated TUI mouse-mode declarations must not erase an existing selection.
+  [
+    "lib/xterm.js",
+    "disable(){this.clearSelection(),this._enabled=!1}",
+    "disable(){this._enabled=!1}",
+  ],
+  [
+    "src/browser/services/SelectionService.ts",
+    "  public disable(): void {\n    this.clearSelection();\n    this._enabled = false;\n  }",
+    "  public disable(): void {\n    this._enabled = false;\n  }",
+  ],
   ["lib/xterm.js", "i.offsetWidth/32", "i.getBoundingClientRect().width/32"],
   [
     "src/browser/renderer/dom/WidthCache.ts",

@@ -11,7 +11,7 @@ installTerminalSelection(term);
 const inputs: string[] = [];
 term.onData((value) => inputs.push(value));
 term.write(
-  "\x1b[?1049h\x1b[?1002h\x1b[?1006hCOPY-ME-TERMINAL-TEXT\r\nsecond line",
+  "\x1b[?1049h\x1b[?1003h\x1b[?1006hCOPY-ME-TERMINAL-TEXT\r\nsecond line",
 );
 term.focus();
 Object.assign(window, { testTerminal: term, testInputs: inputs });

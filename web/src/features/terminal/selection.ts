@@ -7,6 +7,12 @@ export function installTerminalSelection(term: Terminal): () => void {
   if (!element) return () => {};
   let replaying = false;
   let cancelPending: (() => void) | undefined;
+  // In any-motion mode xterm treats hover reports as input, which otherwise
+  // clears an existing selection before the user can copy it.
+  const onHover = (event: MouseEvent) => {
+    if (event.buttons === 0 && term.hasSelection())
+      event.stopImmediatePropagation();
+  };
   const onDown = (event: MouseEvent) => {
     if (
       replaying ||
@@ -82,6 +88,7 @@ export function installTerminalSelection(term: Terminal): () => void {
     window.addEventListener("blur", cleanup);
   };
   element.addEventListener("mousedown", onDown, true);
+  element.addEventListener("mousemove", onHover, true);
   term.attachCustomKeyEventHandler((event) => {
     const mac = /Mac/.test(navigator.platform);
     const copyShortcut = mac
@@ -100,5 +107,6 @@ export function installTerminalSelection(term: Terminal): () => void {
   return () => {
     cancelPending?.();
     element.removeEventListener("mousedown", onDown, true);
+    element.removeEventListener("mousemove", onHover, true);
   };
 }
