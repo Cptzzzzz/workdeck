@@ -4,6 +4,7 @@ import {
   ChevronRight,
   File,
   Folder,
+  FolderCog,
   RefreshCw,
   Save,
   Download,
@@ -23,6 +24,8 @@ import type {
   ConflictSnapshot,
 } from "./use-workspace";
 import type { CreateIntent, DraftIdentity } from "../../services/files/drafts";
+import { DirectoryPicker } from "../management/forms";
+import type { ComputeNode, TerminalRecord } from "../../types";
 import type { DeleteStatus, DeleteOutcome } from "../../services/files/types";
 import { formatBytes, formatLatency } from "../../network-metrics";
 const MonacoEditor = lazy(() =>
@@ -50,6 +53,7 @@ export function WorkspaceSidebar({
   onNewItem,
   onRename,
   onDelete,
+  onChangeRoot,
 }: {
   controller: WorkspaceController;
   onSessions: () => void;
@@ -63,6 +67,7 @@ export function WorkspaceSidebar({
     directory: boolean,
     intent?: (typeof controller.intents)[number],
   ) => void;
+  onChangeRoot: () => void;
 }) {
   const uploadInput = useRef<HTMLInputElement>(null);
   const uploadTarget = useRef<{
@@ -183,6 +188,19 @@ export function WorkspaceSidebar({
       <div className="workbench-sidebar-title">
         <span>资源管理器</span>
         <div className="workbench-tree-actions">
+          <button
+            className="icon-button"
+            title="更换工作区目录"
+            aria-label="更换工作区目录"
+            disabled={
+              !controller.workspace ||
+              !controller.fileReady ||
+              controller.renaming
+            }
+            onClick={onChangeRoot}
+          >
+            <FolderCog size={16} />
+          </button>
           <input
             ref={uploadInput}
             type="file"
@@ -546,6 +564,96 @@ function exportDraft(doc: Document) {
   a.download = (doc.path.split("/").pop() || "draft") + ".workdeck-draft.txt";
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+export function WorkspaceRootForm({
+  controller,
+  terminal,
+  node,
+  onCancel,
+  onBusy,
+  onDone,
+}: {
+  controller: WorkspaceController;
+  terminal: TerminalRecord;
+  node?: ComputeNode;
+  onCancel: () => void;
+  onBusy: (busy: boolean) => void;
+  onDone: (state: "changed" | "pending") => void;
+}) {
+  const [original] = useState(() => ({
+    workspace: controller.workspace?.id || "",
+    revision: controller.workspace?.root_revision || 0,
+    terminal: terminal.id,
+    root: controller.workspace?.root_path || "",
+  }));
+  const [path, setPath] = useState(original.root),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  return (
+    <form
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        onBusy(true);
+        setError("");
+        try {
+          onDone(
+            await controller.changeRoot(
+              path,
+              original.workspace,
+              original.revision,
+              original.terminal,
+            ),
+          );
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+          onBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        <FolderCog size={24} />
+      </div>
+      <h2>更换工作区目录</h2>
+      <p className="modal-description">
+        选择新的文件树根目录。现有终端会继续运行，Shell
+        当前目录不会改变。切换前请处理未保存草稿和待确认文件操作。
+      </p>
+      <fieldset className="directory-fieldset" disabled={busy}>
+        <DirectoryPicker
+          node={node}
+          value={path}
+          onChange={setPath}
+          purpose="workspace"
+          autoFocus
+        />
+      </fieldset>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          取消
+        </button>
+        <button
+          className="primary"
+          disabled={busy || !path || path === original.root}
+        >
+          {busy ? "正在切换…" : "确认切换目录"}
+        </button>
+      </div>
+    </form>
+  );
 }
 export function WorkspaceEditor({
   controller,

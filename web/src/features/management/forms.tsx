@@ -279,14 +279,18 @@ type DirectoryListing = {
   entries: { name: string; path: string }[];
   truncated: boolean;
 };
-function DirectoryPicker({
+export function DirectoryPicker({
   node,
   value,
   onChange,
+  purpose = "terminal",
+  autoFocus = false,
 }: {
   node?: Node;
   value: string;
   onChange: (value: string) => void;
+  purpose?: "terminal" | "workspace";
+  autoFocus?: boolean;
 }) {
   const [listing, setListing] = useState<DirectoryListing | null>(null),
     [busy, setBusy] = useState(false),
@@ -327,11 +331,12 @@ function DirectoryPicker({
   return (
     <div className="directory-picker">
       <label>
-        工作目录
+        {purpose === "workspace" ? "工作区目录" : "工作目录"}
         <input
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="使用节点的用户主目录"
+          autoFocus={autoFocus}
         />
       </label>
       <div className="directory-actions">
@@ -396,7 +401,9 @@ function DirectoryPicker({
       )}
       {listing && (
         <small className="directory-hint">
-          将在当前所选目录创建终端。
+          {purpose === "workspace"
+            ? "目录浏览使用节点服务账户，最终访问权限以终端账户为准。"
+            : "将在当前所选目录创建终端。"}
           {listing.truncated
             ? "目录过多，仅显示部分结果；可直接输入完整路径。"
             : "也可在上方直接输入完整路径。"}

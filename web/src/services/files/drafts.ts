@@ -348,6 +348,7 @@ export async function listRecoverableDrafts(
           !draft.deleted &&
           (draft.unavailable ||
             draft.pendingSave ||
+            draft.manualSaveRequired ||
             draft.text !== draft.baseText)
         )
           result.push(draft.identity);

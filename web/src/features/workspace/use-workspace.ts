@@ -5,6 +5,7 @@ import {
   type FileTransportMetrics,
   getWorkspace,
   initializeWorkspace,
+  changeWorkspaceRoot,
   UncertainSaveError,
 } from "../../services/files/client";
 import {
@@ -127,6 +128,7 @@ export function useWorkspace(
   const activeIntents = useRef(new Set<string>());
   const transferAbort = useRef<AbortController | null>(null);
   const renameLock = useRef(false);
+  const creatingItems = useRef(0);
   const tabInteraction = useRef(0);
   const restoringTabs = useRef<{ scope: string; closed: Set<string> } | null>(
     null,
@@ -262,7 +264,11 @@ export function useWorkspace(
         let view = await getWorkspace(terminal.id);
         if (!view.initialized) view = await initializeWorkspace(terminal.id);
         if (view.state !== "ready" || !view.workspace)
-          throw new Error("工作区正在恢复，请稍后重试");
+          throw new Error(
+            view.state === "changing" && view.pending_target
+              ? `工作区目录正在恢复：${view.pending_target}，请稍后重试`
+              : "工作区正在恢复，请稍后重试",
+          );
         const connected = await FileClient.connect(view.workspace);
         if (stopped || gen !== generation.current) {
           connected.close();
@@ -1785,6 +1791,7 @@ export function useWorkspace(
   );
   const runCreateIntent = useCallback(
     async (intent: CreateIntent) => {
+      if (renameLock.current) throw new Error("工作区正在处理其他操作");
       if (intent.kind === "upload" || intent.kind === "rename")
         throw new Error("请重新选择原文件以核对并继续上传");
       const client = clientRef.current;
@@ -2902,11 +2909,16 @@ export function useWorkspace(
         path: childPath(parent, name),
         createdAt: Date.now(),
       };
-      await recordCreateIntent(intent); // durable before the node sees the request
-      if (gen !== generation.current || clientRef.current !== client)
-        throw new Error("工作区已切换，操作已保存，请返回原工作区核对");
-      setIntents((old) => [...old, intent]);
-      await runCreateIntent(intent);
+      creatingItems.current++;
+      try {
+        await recordCreateIntent(intent); // durable before the node sees the request
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区已切换，操作已保存，请返回原工作区核对");
+        setIntents((old) => [...old, intent]);
+        await runCreateIntent(intent);
+      } finally {
+        creatingItems.current--;
+      }
     },
     [
       account,
@@ -2916,6 +2928,153 @@ export function useWorkspace(
       runCreateIntent,
       supportsCreate,
     ],
+  );
+  const changeRoot = useCallback(
+    async (
+      target: string,
+      expectedWorkspace: string,
+      expectedRevision: number,
+      expectedTerminal: string,
+    ): Promise<"changed" | "pending"> => {
+      if (renameLock.current) throw new Error("工作区正在处理其他操作");
+      const w = workspace,
+        client = clientRef.current,
+        gen = generation.current;
+      if (
+        !w ||
+        !terminal ||
+        !client ||
+        terminal.id !== expectedTerminal ||
+        w.id !== expectedWorkspace ||
+        w.root_revision !== expectedRevision ||
+        client.workspace.id !== w.id ||
+        client.workspace.root_revision !== w.root_revision
+      )
+        throw new Error("工作区已改变，请重新打开目录选择器");
+      if (
+        !target.startsWith("/") ||
+        target.includes("\0") ||
+        new TextEncoder().encode(target).length > 4096
+      )
+        throw new Error("请输入有效的绝对目录路径");
+      if (target === w.root_path) throw new Error("请选择不同的目录");
+      if (
+        creatingItems.current ||
+        activeIntents.current.size ||
+        transferAbort.current ||
+        restoringTabs.current
+      )
+        throw new Error("请先等待文件操作、传输和标签恢复结束");
+      renameLock.current = true;
+      setRenaming(true);
+      let sent = false;
+      const assertClean = () => {
+        if (
+          creatingItems.current ||
+          activeIntents.current.size ||
+          transferAbort.current ||
+          restoringTabs.current
+        )
+          throw new Error("请先等待文件操作、传输和标签恢复结束");
+        for (const [id, doc] of docs.current) {
+          if (
+            doc.identity.account !== account ||
+            doc.identity.nodeID !== terminal.node_id ||
+            doc.identity.workspaceID !== w.id ||
+            doc.identity.rootRevision !== w.root_revision
+          )
+            continue;
+          if (
+            doc.text !== doc.base ||
+            doc.pending ||
+            doc.saving ||
+            doc.closing ||
+            doc.conflict ||
+            doc.deleted ||
+            doc.unavailable ||
+            doc.manualSaveRequired ||
+            doc.persistenceError ||
+            queues.current.has(id)
+          )
+            throw new Error("请先保存或处理当前工作区的未保存草稿及待确认操作");
+        }
+      };
+      try {
+        assertClean();
+        const scope = {
+          account,
+          nodeID: terminal.node_id,
+          workspaceID: w.id,
+          rootRevision: w.root_revision,
+        };
+        const [pending, deleted, drafts] = await Promise.all([
+          listCreateIntents(scope),
+          listDeletedDrafts(scope),
+          listRecoverableDrafts(scope),
+        ]);
+        if (pending.length || deleted.length || drafts.length)
+          throw new Error("当前工作区仍有本地草稿或待确认文件操作，请先处理");
+        assertClean();
+        if (gen !== generation.current || clientRef.current !== client)
+          throw new Error("工作区连接已改变，请重新选择目录");
+        sent = true;
+        try {
+          const result = await changeWorkspaceRoot(
+            terminal.id,
+            target,
+            w.root_revision,
+          );
+          if (
+            result.state !== "ready" ||
+            result.workspace?.id !== w.id ||
+            result.workspace.root_revision !== w.root_revision + 1
+          )
+            throw new Error("节点返回的目录切换状态无效");
+          return "changed";
+        } catch (error) {
+          let state;
+          try {
+            state = await getWorkspace(terminal.id);
+          } catch {
+            throw new Error(
+              "目录切换结果暂无法确认，工作区会自动重新连接并核对，请稍后查看",
+            );
+          }
+          if (
+            state.workspace?.id === w.id &&
+            state.state === "ready" &&
+            state.workspace.root_revision === w.root_revision + 1 &&
+            state.workspace.root_path === target
+          )
+            return "changed";
+          if (
+            state.workspace?.id === w.id &&
+            state.state === "changing" &&
+            state.pending_target === target
+          )
+            return "pending";
+          if (state.workspace?.id === w.id && state.state === "changing")
+            throw new Error("工作区正在切换到其他目录，请稍后查看");
+          if (
+            state.workspace?.id === w.id &&
+            state.workspace.root_revision !== w.root_revision
+          )
+            throw new Error("工作区已改变，请查看当前目录并重新选择");
+          throw new Error(
+            `目录切换未确认：${(error as Error).message}。请查看当前目录后重试`,
+          );
+        }
+      } finally {
+        renameLock.current = false;
+        setRenaming(false);
+        if (sent && gen === generation.current) {
+          if (clientRef.current === client) clientRef.current = null;
+          client.close();
+          setReconnect((n) => n + 1);
+        }
+      }
+    },
+    [account, workspace, terminal?.id, terminal?.node_id],
   );
   const archivedRows = new Map<
     string,
@@ -2987,6 +3146,7 @@ export function useWorkspace(
     renaming,
     supportsRename,
     supportsDelete,
+    changeRoot,
     renameItem,
     retryRename,
     deletedDrafts,
