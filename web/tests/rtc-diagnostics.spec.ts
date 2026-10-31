@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   candidateCountsFromSdp,
+  RtcRecorder,
   cleanReport,
   summarizeCandidatePairs,
 } from "../src/rtc-diagnostics";
@@ -89,4 +90,24 @@ test("diagnostics aggregate candidate types and counters without retaining addre
     expect(json).not.toContain(secret);
   expect(sanitized?.pairs?.[0].responsesReceived).toBe(0);
   expect(sanitized?.pairs?.[0].requestsReceived).toBeUndefined();
+});
+
+test("incremental candidates are counted once and never appear in the saved report", () => {
+  let current: any;
+  const recorder = new RtcRecorder(
+    "",
+    (report) => {
+      current = report;
+    },
+    true,
+  );
+  const first = "candidate:private-a 1 udp 123 192.0.2.2 54321 typ host";
+  const later = "candidate:private-b 1 udp 123 198.51.100.7 12345 typ srflx";
+  recorder.remoteDescription(`v=0\r\na=${first}\r\n`);
+  recorder.remoteCandidate(first);
+  recorder.remoteCandidate(later);
+  expect(current.remoteCandidates).toEqual({ "host/udp": 1, "srflx/udp": 1 });
+  expect(current.trickle).toBe(true);
+  expect(JSON.stringify(current)).not.toContain("192.0.2");
+  expect(JSON.stringify(current)).not.toContain("198.51.100");
 });

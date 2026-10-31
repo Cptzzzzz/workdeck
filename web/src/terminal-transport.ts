@@ -19,6 +19,8 @@ type Frame = {
   route?: Route;
   sdp?: string;
   ice_servers?: string[];
+  rtc_trickle?: boolean;
+  candidate?: RTCIceCandidateInit;
 };
 type Payload = string | Uint8Array;
 type Probe = {
@@ -42,6 +44,11 @@ export class TerminalTransport {
   private peer: RTCPeerConnection | null = null;
   private rtc?: RtcRecorder;
   private rtcSampling?: ReturnType<typeof setInterval>;
+  private rtcDeadline?: ReturnType<typeof setTimeout>;
+  private remoteReady = false;
+  private remoteCandidates: RTCIceCandidateInit[] = [];
+  private remoteCandidateCount = 0;
+  private candidateChain = Promise.resolve();
   private channel: RTCDataChannel | null = null;
   private active: Route = "relay";
   private closed = false;
@@ -331,7 +338,7 @@ export class TerminalTransport {
       return;
     }
     if (frame.type === "rtc-config" && route === "relay") {
-      void this.startPeer(frame.ice_servers || []);
+      void this.startPeer(frame.ice_servers || [], frame.rtc_trickle === true);
       return;
     }
     if (frame.type === "rtc-answer" && route === "relay") {
@@ -341,12 +348,37 @@ export class TerminalTransport {
         void peer
           .setRemoteDescription({ type: "answer", sdp: frame.sdp })
           .then(() => {
-            if (this.peer === peer) this.rtc?.mark("answer_received");
+            if (this.peer !== peer) return;
+            this.rtc?.mark("answer_received");
+            this.remoteReady = true;
+            for (const candidate of this.remoteCandidates)
+              this.addRemoteCandidate(peer, candidate);
+            this.remoteCandidates = [];
+            if (this.rtcDeadline) clearTimeout(this.rtcDeadline);
+            this.rtcDeadline = this.later(() => {
+              if (this.peer === peer && this.channel?.readyState !== "open")
+                this.abandon("timeout");
+            }, 20000);
           })
           .catch(() => {
             if (this.peer === peer) this.abandon("answer_error");
           });
       }
+      return;
+    }
+    if (
+      frame.type === "rtc-candidate" &&
+      route === "relay" &&
+      this.peer &&
+      frame.candidate &&
+      typeof frame.candidate.candidate === "string" &&
+      frame.candidate.candidate.length <= 2048 &&
+      this.remoteCandidateCount < 128
+    ) {
+      this.remoteCandidateCount++;
+      this.rtc?.remoteCandidate(frame.candidate.candidate);
+      if (this.remoteReady) this.addRemoteCandidate(this.peer, frame.candidate);
+      else this.remoteCandidates.push(frame.candidate);
       return;
     }
     if (frame.type === "rtc-unavailable") {
@@ -404,7 +436,21 @@ export class TerminalTransport {
     }
   }
 
-  private async startPeer(urls: string[]) {
+  private addRemoteCandidate(
+    peer: RTCPeerConnection,
+    candidate: RTCIceCandidateInit,
+  ) {
+    this.candidateChain = this.candidateChain.then(async () => {
+      if (this.peer !== peer || this.closed) return;
+      try {
+        await peer.addIceCandidate(candidate);
+      } catch {
+        /* A stale or invalid candidate does not end the relay. */
+      }
+    });
+  }
+
+  private async startPeer(urls: string[], trickle: boolean) {
     if (this.attempted || this.closed) return;
     if (typeof RTCPeerConnection === "undefined") {
       this.publish({
@@ -437,8 +483,14 @@ export class TerminalTransport {
       return;
     }
     this.attempted = true;
-    this.rtc = new RtcRecorder(this.terminalID, (current, previous) =>
-      this.publish({ rtcDiagnostic: current, previousRtcDiagnostic: previous }),
+    this.rtc = new RtcRecorder(
+      this.terminalID,
+      (current, previous) =>
+        this.publish({
+          rtcDiagnostic: current,
+          previousRtcDiagnostic: previous,
+        }),
+      trickle,
     );
     this.publish({
       direct: {
@@ -461,9 +513,23 @@ export class TerminalTransport {
       this.rtcSampling = setInterval(() => {
         if (this.peer === peer) void this.rtc?.sample(peer);
       }, 2000);
+      let offerSent = false;
+      const localCandidates: RTCIceCandidateInit[] = [];
       peer.onicecandidate = (event) => {
-        if (this.peer === peer && event.candidate)
-          this.rtc?.localCandidate(event.candidate);
+        if (this.peer !== peer) return;
+        if (event.candidate) this.rtc?.localCandidate(event.candidate);
+        if (!trickle) return;
+        const candidate = event.candidate
+          ? event.candidate.toJSON()
+          : { candidate: "" };
+        if (!offerSent) {
+          if (localCandidates.length < 128) localCandidates.push(candidate);
+        } else {
+          this.rawSend(
+            "relay",
+            JSON.stringify({ type: "rtc-candidate", candidate }),
+          );
+        }
       };
       peer.onicecandidateerror = (event) => {
         if (this.peer === peer) this.rtc?.stunError(event.errorCode);
@@ -496,11 +562,11 @@ export class TerminalTransport {
             peer.connectionState === "failed" ? "ice_failed" : "peer_closed",
           );
       };
-      const deadline = this.later(() => {
+      this.rtcDeadline = this.later(() => {
         if (channel.readyState !== "open") this.abandon("timeout");
-      }, 18000);
+      }, 30000);
       channel.onopen = () => {
-        clearTimeout(deadline);
+        if (this.rtcDeadline) clearTimeout(this.rtcDeadline);
         if (this.closed || this.peer !== peer) return;
         this.rtc?.states(peer, channel);
         this.rtc?.mark("channel_open");
@@ -509,27 +575,38 @@ export class TerminalTransport {
         void this.compare();
       };
       await peer.setLocalDescription(await peer.createOffer());
-      await new Promise<void>((resolve) => {
-        if (peer.iceGatheringState === "complete") {
-          resolve();
-          return;
-        }
-        const done = () => {
-          peer.removeEventListener("icegatheringstatechange", changed);
-          clearTimeout(timer);
-          resolve();
-        };
-        const changed = () => {
-          if (peer.iceGatheringState === "complete") done();
-        };
-        const timer = setTimeout(done, 5000);
-        peer.addEventListener("icegatheringstatechange", changed);
-      });
+      if (!trickle)
+        await new Promise<void>((resolve) => {
+          if (peer.iceGatheringState === "complete") {
+            resolve();
+            return;
+          }
+          const done = () => {
+            peer.removeEventListener("icegatheringstatechange", changed);
+            clearTimeout(timer);
+            resolve();
+          };
+          const changed = () => {
+            if (peer.iceGatheringState === "complete") done();
+          };
+          const timer = setTimeout(done, 5000);
+          peer.addEventListener("icegatheringstatechange", changed);
+        });
       if (!this.closed && this.peer === peer && peer.localDescription) {
         this.rawSend(
           "relay",
-          JSON.stringify({ type: "rtc-offer", sdp: peer.localDescription.sdp }),
+          JSON.stringify({
+            type: "rtc-offer",
+            sdp: peer.localDescription.sdp,
+            rtc_trickle: trickle,
+          }),
         );
+        offerSent = true;
+        for (const candidate of localCandidates)
+          this.rawSend(
+            "relay",
+            JSON.stringify({ type: "rtc-candidate", candidate }),
+          );
         this.rtc?.mark("offer_sent");
       }
     } catch {

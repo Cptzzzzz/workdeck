@@ -28,16 +28,19 @@ type routeChange struct {
 // terminalLink keeps the authenticated relay alive as the authorization lease.
 // An optional peer transports bytes for this attachment, never a new shell.
 type terminalLink struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	ws              *protocol.Socket
-	incoming        chan linkPacket
-	mu              sync.Mutex
-	active          string
-	pending         *routeChange
-	peer            *webrtc.PeerConnection
-	direct          *webrtc.DataChannel
-	offered, closed bool
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	ws                   *protocol.Socket
+	incoming             chan linkPacket
+	mu                   sync.Mutex
+	active               string
+	pending              *routeChange
+	peer                 *webrtc.PeerConnection
+	direct               *webrtc.DataChannel
+	offered, closed      bool
+	remoteReady          bool
+	remoteCandidates     []webrtc.ICECandidateInit
+	remoteCandidateCount int
 }
 
 func stunURLs() []string {
@@ -73,7 +76,7 @@ func newTerminalLink(ctx context.Context, cancel context.CancelFunc, ws *protoco
 		}
 	}()
 	if os.Getenv("WORKDECK_DIRECT") != "0" {
-		_ = ws.JSON(protocol.Frame{Type: "rtc-config", ICEServers: stunURLs()})
+		_ = ws.JSON(protocol.Frame{Type: "rtc-config", ICEServers: stunURLs(), RTCTrickle: true})
 	}
 	return l
 }
@@ -213,7 +216,25 @@ func (l *terminalLink) probe(source string, frame protocol.Frame) error {
 	return err
 }
 
-func (l *terminalLink) negotiate(sdp string) {
+func (l *terminalLink) addRemoteCandidate(c protocol.ICECandidate) {
+	if len(c.Candidate) > 2048 || (c.SDPMid != nil && len(*c.SDPMid) > 256) || (c.UsernameFragment != nil && len(*c.UsernameFragment) > 256) {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.offered || l.closed || l.remoteCandidateCount >= 128 {
+		return
+	}
+	l.remoteCandidateCount++
+	candidate := webrtc.ICECandidateInit{Candidate: c.Candidate, SDPMid: c.SDPMid, SDPMLineIndex: c.SDPMLineIndex, UsernameFragment: c.UsernameFragment}
+	if !l.remoteReady || l.peer == nil {
+		l.remoteCandidates = append(l.remoteCandidates, candidate)
+		return
+	}
+	_ = l.peer.AddICECandidate(candidate)
+}
+
+func (l *terminalLink) negotiate(sdp string, trickle bool) {
 	l.mu.Lock()
 	if l.offered || l.closed || os.Getenv("WORKDECK_DIRECT") == "0" || len(sdp) > 60000 {
 		l.mu.Unlock()
@@ -222,13 +243,13 @@ func (l *terminalLink) negotiate(sdp string) {
 	l.offered = true
 	l.mu.Unlock()
 	go func() {
-		if err := l.answer(sdp); err != nil && l.ctx.Err() == nil {
+		if err := l.answer(sdp, trickle); err != nil && l.ctx.Err() == nil {
 			_ = l.ws.JSON(protocol.Frame{Type: "rtc-unavailable"})
 		}
 	}()
 }
 
-func (l *terminalLink) answer(sdp string) error {
+func (l *terminalLink) answer(sdp string, trickle bool) error {
 	settings := webrtc.SettingEngine{}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6})
 	settings.SetSCTPMaxMessageSize(65536)
@@ -284,6 +305,35 @@ func (l *terminalLink) answer(sdp string) error {
 	if err = peer.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdp}); err != nil {
 		return err
 	}
+	l.mu.Lock()
+	for _, candidate := range l.remoteCandidates {
+		_ = peer.AddICECandidate(candidate)
+	}
+	l.remoteCandidates = nil
+	l.remoteReady = true
+	l.mu.Unlock()
+	var candidateMu sync.Mutex
+	var pending []protocol.ICECandidate
+	answerSent := false
+	if trickle {
+		peer.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+			var init webrtc.ICECandidateInit
+			if candidate != nil {
+				init = candidate.ToJSON()
+			}
+			c := protocol.ICECandidate{Candidate: init.Candidate, SDPMid: init.SDPMid, SDPMLineIndex: init.SDPMLineIndex, UsernameFragment: init.UsernameFragment}
+			candidateMu.Lock()
+			defer candidateMu.Unlock()
+			if l.ctx.Err() != nil {
+				return
+			}
+			if !answerSent {
+				pending = append(pending, c)
+				return
+			}
+			_ = l.ws.JSON(protocol.Frame{Type: "rtc-candidate", Candidate: &c})
+		})
+	}
 	answer, err := peer.CreateAnswer(nil)
 	if err != nil {
 		return err
@@ -292,16 +342,29 @@ func (l *terminalLink) answer(sdp string) error {
 	if err = peer.SetLocalDescription(answer); err != nil {
 		return err
 	}
-	select {
-	case <-gathered:
-	case <-time.After(5 * time.Second): // Existing host candidates can still work.
-	case <-l.ctx.Done():
-		return l.ctx.Err()
+	if !trickle {
+		select {
+		case <-gathered:
+		case <-time.After(5 * time.Second): // Existing host candidates can still work.
+		case <-l.ctx.Done():
+			return l.ctx.Err()
+		}
 	}
 	if l.ctx.Err() != nil {
 		return l.ctx.Err()
 	}
+	candidateMu.Lock()
 	err = l.ws.JSON(protocol.Frame{Type: "rtc-answer", SDP: peer.LocalDescription().SDP})
+	if err == nil && trickle {
+		answerSent = true
+		for _, c := range pending {
+			if err = l.ws.JSON(protocol.Frame{Type: "rtc-candidate", Candidate: &c}); err != nil {
+				break
+			}
+		}
+		pending = nil
+	}
+	candidateMu.Unlock()
 	succeeded = err == nil
 	return err
 }

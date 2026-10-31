@@ -978,10 +978,10 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 					if !a.readonly && controlling {
 						e = data.JSON(f)
 					}
-				case "probe", "rtc-offer", "route-request", "route-commit":
+				case "probe", "rtc-offer", "rtc-candidate", "route-request", "route-commit":
 					// Signaling shares this authenticated attachment. Its lifetime
 					// remains the authority for any direct data channel as well.
-					if len(f.ID) <= 64 && len(f.SDP) <= 60000 && len(f.Padding) <= 1024 {
+					if len(f.ID) <= 64 && len(f.SDP) <= 60000 && len(f.Padding) <= 1024 && (f.Candidate == nil || (len(f.Candidate.Candidate) <= 2048 && (f.Candidate.SDPMid == nil || len(*f.Candidate.SDPMid) <= 256) && (f.Candidate.UsernameFragment == nil || len(*f.Candidate.UsernameFragment) <= 256))) {
 						e = data.JSON(f)
 					}
 				case "resize":

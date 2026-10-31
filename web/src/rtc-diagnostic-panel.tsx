@@ -92,6 +92,16 @@ export function RtcDiagnosticPanel({
             </dd>
           </div>
           <div>
+            <dt>候选交换</dt>
+            <dd>
+              {report.trickle === undefined
+                ? "未记录"
+                : report.trickle
+                  ? "增量交换"
+                  : "一次性协商（兼容旧节点）"}
+            </dd>
+          </div>
+          <div>
             <dt>浏览器候选</dt>
             <dd>{counts(report.localCandidates)}</dd>
           </div>

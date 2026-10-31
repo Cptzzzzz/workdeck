@@ -21,6 +21,7 @@ export type RtcReport = {
   ice: string;
   connection: string;
   channel: string;
+  trickle?: boolean;
   localCandidates: CandidateCounts;
   remoteCandidates: CandidateCounts;
   gatherMs?: number;
@@ -194,6 +195,7 @@ export function cleanReport(value: unknown): RtcReport | undefined {
     pairs: null,
     stunErrorCodes: [],
   };
+  if (typeof raw.trickle === "boolean") result.trickle = raw.trickle;
   for (const field of [
     "gatherMs",
     "offerMs",
@@ -271,6 +273,7 @@ export class RtcRecorder {
   readonly previous?: RtcReport;
   private readonly started = performance.now();
   private finished = false;
+  private readonly remoteSeen = new Set<string>();
   private report: RtcReport = {
     schema: 1,
     startedAt: Date.now(),
@@ -289,7 +292,9 @@ export class RtcRecorder {
   constructor(
     private terminal: string,
     private update: (current: RtcReport, previous?: RtcReport) => void,
+    trickle: boolean,
   ) {
+    this.report.trickle = trickle;
     this.previous = loadRtcReport(terminal);
     this.publish();
   }
@@ -354,7 +359,23 @@ export class RtcRecorder {
   }
   remoteDescription(sdp: string) {
     if (this.finished) return;
-    this.report.remoteCandidates = candidateCountsFromSdp(sdp);
+    for (const line of sdp.split(/\r?\n/)) {
+      if (line.startsWith("a=candidate:")) this.remoteCandidate(line.slice(2));
+    }
+  }
+  remoteCandidate(candidate: string) {
+    if (
+      this.finished ||
+      !candidate.startsWith("candidate:") ||
+      this.remoteSeen.has(candidate) ||
+      this.remoteSeen.size >= 128
+    )
+      return;
+    this.remoteSeen.add(candidate);
+    const counts = candidateCountsFromSdp(`a=${candidate}`);
+    for (const [key, value] of Object.entries(counts))
+      this.report.remoteCandidates[key] =
+        (this.report.remoteCandidates[key] || 0) + value;
     this.publish();
   }
   stunError(code: number) {

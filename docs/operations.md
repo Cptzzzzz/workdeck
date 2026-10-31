@@ -108,7 +108,7 @@ Environment=WORKDECK_STUN_URLS=stun:stun.example.com:3478
 Environment=WORKDECK_FILE_RATE_BYTES_PER_SEC=8388608
 ```
 
-默认使用 `stun:stun.cloudflare.com:3478` 发现地址，STUN 不传送终端内容。受限 NAT、UDP 不通、STUN 不可达均会回退，不需要因此放开大范围入站端口。未配置 TURN。地址候选和 SDP 含网络拓扑信息，避免公开日志。
+默认使用 `stun:stun.cloudflare.com:3478` 发现地址，STUN 不传送终端内容。受限 NAT、UDP 不通、STUN 不可达均会回退，不需要因此放开大范围入站端口。未配置 TURN。地址候选和 SDP 含网络拓扑信息，避免公开日志。支持增量候选交换的浏览器页面与节点会通过已认证的 WebSocket 信令逐个交换 ICE 候选，并在收到应答后单独计时连接检查；旧版节点或旧页面仍使用兼容的完整 SDP 协商。中转链路保持授权有效，不因直连失败关闭终端。
 
 诊断时可使用 `?transport=relay` 打开页面，关闭该页面的直连探测。修改配置后只需重启 Agent。
 

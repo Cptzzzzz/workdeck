@@ -96,17 +96,33 @@ test("automatic direct path carries terminal bytes; failure falls back without r
   });
   await login(page);
   let relayBinary = 0,
-    readyCount = 0;
-  page.on("websocket", (ws) =>
+    readyCount = 0,
+    browserCandidates = 0,
+    nodeCandidates = 0,
+    trickleOffer = false;
+  page.on("websocket", (ws) => {
+    ws.on("framesent", (frame) => {
+      if (typeof frame.payload !== "string") return;
+      try {
+        const payload = JSON.parse(frame.payload);
+        if (payload.type === "rtc-offer" && payload.rtc_trickle === true)
+          trickleOffer = true;
+        if (payload.type === "rtc-candidate" && payload.candidate?.candidate)
+          browserCandidates++;
+      } catch {}
+    });
     ws.on("framereceived", (frame) => {
       if (typeof frame.payload !== "string") relayBinary++;
       else {
         try {
-          if (JSON.parse(frame.payload).type === "ready") readyCount++;
+          const payload = JSON.parse(frame.payload);
+          if (payload.type === "ready") readyCount++;
+          if (payload.type === "rtc-candidate" && payload.candidate?.candidate)
+            nodeCandidates++;
         } catch {}
       }
-    }),
-  );
+    });
+  });
   const id = await create(page);
   try {
     await type(
@@ -126,6 +142,11 @@ test("automatic direct path carries terminal bytes; failure falls back without r
         timeout: 25000,
       },
     );
+    if (process.env.WORKDECK_TRICKLE_ACCEPTANCE === "1") {
+      expect(trickleOffer).toBe(true);
+      await expect.poll(() => browserCandidates).toBeGreaterThan(0);
+      await expect.poll(() => nodeCandidates).toBeGreaterThan(0);
+    }
     await expect(page.locator(".xterm-screen")).toContainText("handover-11");
     const screen = await page.locator(".xterm-screen").innerText();
     for (let i = 0; i < 12; i++)
@@ -473,7 +494,9 @@ test("switching to direct preference moves a stable slower path without restarti
       /自动比较/,
       { timeout: 25000 },
     );
-    await expect(network.locator(":scope > summary")).toContainText("WebSocket");
+    await expect(network.locator(":scope > summary")).toContainText(
+      "WebSocket",
+    );
     await network.locator(":scope > summary").click();
     await network.getByLabel("链路策略").selectOption("prefer-direct");
     await expect(network.getByLabel("链路策略")).toHaveValue("prefer-direct");

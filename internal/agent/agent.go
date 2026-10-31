@@ -324,7 +324,11 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 					}
 				case "rtc-offer":
 					if packet.route == "relay" {
-						link.negotiate(frame.SDP)
+						link.negotiate(frame.SDP, frame.RTCTrickle)
+					}
+				case "rtc-candidate":
+					if packet.route == "relay" && frame.Candidate != nil {
+						link.addRemoteCandidate(*frame.Candidate)
 					}
 				case "probe":
 					e = link.probe(packet.route, frame)
