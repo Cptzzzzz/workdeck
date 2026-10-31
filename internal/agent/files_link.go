@@ -313,6 +313,9 @@ func (l *fileLink) control(request fileprotocol.Envelope) error {
 		var data []byte
 		err := l.call("read.chunk", map[string]any{"handle": handle, "offset": p.Offset, "length": p.Length}, &data)
 		if err == nil && len(data) > 0 {
+			if e := l.worker.waitFileBytes(l.ctx, len(data)); e != nil {
+				return e
+			}
 			encoded, e := fileprotocol.EncodeChunk(fileprotocol.Chunk{Kind: fileprotocol.DownloadChunk, RequestID: id, Offset: p.Offset, RouteEpoch: l.epoch, Data: data})
 			if e != nil {
 				return e
@@ -385,6 +388,9 @@ func (l *fileLink) control(request fileprotocol.Envelope) error {
 func (l *fileLink) upload(chunk fileprotocol.Chunk) error {
 	if !l.uploads[chunk.RequestID] {
 		return l.send(chunk.RequestID, "file.write.progress", nil, &files.Error{Code: "OPERATION_SCOPE", Message: "请先开始或恢复此文件上传"})
+	}
+	if err := l.worker.waitFileBytes(l.ctx, len(chunk.Data)); err != nil {
+		return err
 	}
 	var result files.Operation
 	err := l.call("write.chunk", map[string]any{"op_id": chunk.RequestID, "offset": chunk.Offset, "data": chunk.Data}, &result)

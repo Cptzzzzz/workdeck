@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 	"workdeck/internal/protocol"
 )
 
@@ -28,6 +29,9 @@ type Agent struct {
 	controllers    map[string]string
 	fileCommitOnce sync.Once
 	fileCommitGate chan struct{}
+	fileRateBytes  int
+	fileRatesMu    sync.Mutex
+	fileRates      map[string]*rate.Limiter
 }
 
 func (a *Agent) commitGate() chan struct{} {
@@ -36,6 +40,10 @@ func (a *Agent) commitGate() chan struct{} {
 }
 
 func New(dir, version string) (*Agent, error) {
+	fileRate, err := configuredFileRate(os.Getenv("WORKDECK_FILE_RATE_BYTES_PER_SEC"))
+	if err != nil {
+		return nil, err
+	}
 	identity, key, err := loadIdentity(dir)
 	if err != nil {
 		return nil, err
@@ -44,7 +52,7 @@ func New(dir, version string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{identity: identity, key: key, sessions: sessions, version: version}, nil
+	return &Agent{identity: identity, key: key, sessions: sessions, version: version, fileRateBytes: fileRate}, nil
 }
 func (a *Agent) dial(path, ticket string) (*protocol.Socket, error) {
 	url := "ws" + strings.TrimPrefix(a.identity.Hub, "http") + path

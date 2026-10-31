@@ -102,11 +102,15 @@ systemctl --user stop workdeck-session-TERMINAL_ID.service
 Environment=WORKDECK_DIRECT=0
 # 或指定逗号分隔的 STUN 地址；显式留空则禁用外部 STUN。
 Environment=WORKDECK_STUN_URLS=stun:stun.example.com:3478
+# 文件上传和下载在同一系统账户内共享的总速率上限，单位为字节/秒。
+Environment=WORKDECK_FILE_RATE_BYTES_PER_SEC=8388608
 ```
 
 默认使用 `stun:stun.cloudflare.com:3478` 发现地址，STUN 不传送终端内容。受限 NAT、UDP 不通、STUN 不可达均会回退，不需要因此放开大范围入站端口。未配置 TURN。地址候选和 SDP 含网络拓扑信息，避免公开日志。
 
 诊断时可使用 `?transport=relay` 打开页面，关闭该页面的直连探测。修改配置后只需重启 Agent。
+
+文件速率默认每个系统账户 8 MiB/s，允许设置为 262144 至 1073741824 字节/秒。同一账户的多个工作区、浏览器及上传和下载共用额度，中转与文件直连均受限；终端数据与文件控制消息不计入该额度。限速是节点侧的应用数据控制，不等同于网络接口总带宽限制，也不会自动根据终端延迟调整。无效配置会阻止 Agent 启动，修改后按上述方式重启 Agent 生效；独立运行的终端任务不会因此关闭。
 
 ## 重启恢复与持久登录
 

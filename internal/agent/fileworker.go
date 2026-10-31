@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/time/rate"
 	"workdeck/internal/files"
 )
 
@@ -132,6 +133,7 @@ func (p *fileWorkerPool) forTerminal(ctx context.Context, terminalID string) (*f
 	}
 	worker := newFileWorkerClient(cmd, stdin, stdout)
 	worker.commitGate = p.agent.commitGate()
+	worker.fileLimiter = p.agent.fileLimiter(account.Uid)
 	p.workers[accountKey] = worker
 	return worker, nil
 }
@@ -191,16 +193,17 @@ type workerWrite struct {
 }
 
 type fileWorkerClient struct {
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	mu         sync.Mutex
-	pending    map[string]chan workerResponse
-	closed     bool
-	writes     chan workerWrite
-	stopping   chan struct{}
-	done       chan struct{}
-	once       sync.Once
-	commitGate chan struct{}
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	mu          sync.Mutex
+	pending     map[string]chan workerResponse
+	closed      bool
+	writes      chan workerWrite
+	stopping    chan struct{}
+	done        chan struct{}
+	once        sync.Once
+	commitGate  chan struct{}
+	fileLimiter *rate.Limiter
 }
 
 func newFileWorkerClient(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser) *fileWorkerClient {
