@@ -19,6 +19,9 @@ test("failed ICE diagnostic remains available after reconnect and excludes sensi
   await expect(diagnostic).toContainText("srflx/udp：1");
   await expect(diagnostic).toContainText("发请求 4 / 收响应 0");
   await expect(diagnostic).toContainText("应用 2 / 失败 1", { timeout: 10000 });
+  await expect(diagnostic).toContainText("最近一次包含候选对的节点采样", {
+    timeout: 10000,
+  });
   await expect(diagnostic).toContainText("发请求 9 / 收响应 0");
   await diagnostic.getByRole("button", { name: "复制诊断摘要" }).click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
@@ -40,6 +43,10 @@ test("failed ICE diagnostic remains available after reconnect and excludes sensi
     node: {
       remoteApplied: 2,
       remoteRejected: 1,
+      pairs: [],
+    },
+    nodeLastWithPairs: {
+      sampleMs: 1000,
       pairs: [{ requestsSent: 9, responsesReceived: 0 }],
     },
   });

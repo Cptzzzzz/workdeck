@@ -51,7 +51,7 @@ class FakeWebSocket {
             data: JSON.stringify({
               type: "rtc-diagnostic",
               node_diagnostic: {
-                sampleMs: 2700,
+                sampleMs: 1000,
                 gathering: "complete",
                 ice: "checking",
                 connection: "connecting",
@@ -80,7 +80,32 @@ class FakeWebSocket {
               },
             }),
           }),
-        2800,
+        1200,
+      );
+    if (frame.type === "rtc-offer")
+      setTimeout(
+        () =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              type: "rtc-diagnostic",
+              node_diagnostic: {
+                sampleMs: 2800,
+                gathering: "complete",
+                ice: "failed",
+                connection: "failed",
+                stunServers: 1,
+                localCandidates: {},
+                remoteCandidates: {},
+                remoteReceived: 3,
+                remoteApplied: 2,
+                remoteRejected: 1,
+                remotePending: 0,
+                pairs: [],
+                secret: "private-password",
+              },
+            }),
+          }),
+        2900,
       );
   }
   close() {

@@ -175,6 +175,35 @@ export function RtcDiagnosticPanel({
                   ))}
                 </div>
               )}
+              {report.nodeLastWithPairs && (
+                <>
+                  <p>
+                    最近一次包含候选对的节点采样：应答后{" "}
+                    {elapsed(report.nodeLastWithPairs.sampleMs)} · 收集{" "}
+                    {report.nodeLastWithPairs.gathering} · ICE{" "}
+                    {report.nodeLastWithPairs.ice} · 连接{" "}
+                    {report.nodeLastWithPairs.connection}
+                  </p>
+                  <p>
+                    当时节点候选：
+                    {counts(report.nodeLastWithPairs.localCandidates)} ·
+                    已知浏览器候选：
+                    {counts(report.nodeLastWithPairs.remoteCandidates)}
+                  </p>
+                  <div className="rtc-pair-list">
+                    {report.nodeLastWithPairs.pairs?.map((pair, index) => (
+                      <p key={index}>
+                        {pair.local} → {pair.remote} · {pair.state} · 发请求{" "}
+                        {pair.requestsSent ?? "—"} / 收响应{" "}
+                        {pair.responsesReceived ?? "—"} · 收请求{" "}
+                        {pair.requestsReceived ?? "—"} / 发响应{" "}
+                        {pair.responsesSent ?? "—"}
+                      </p>
+                    ))}
+                  </div>
+                  <p>以上为先前采样；不能将其当作节点失败时的最终计数。</p>
+                </>
+              )}
               <p>
                 节点候选对逐条展示，但不能仅靠类型将其与浏览器候选对一一对应。计数不能确定丢包位置。
               </p>

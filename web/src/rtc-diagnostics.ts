@@ -37,6 +37,7 @@ export type RtcReport = {
   channel: string;
   trickle?: boolean;
   node?: RtcNodeReport;
+  nodeLastWithPairs?: RtcNodeReport;
   localCandidates: CandidateCounts;
   remoteCandidates: CandidateCounts;
   gatherMs?: number;
@@ -258,6 +259,15 @@ export function cleanReport(value: unknown): RtcReport | undefined {
       };
     }
   }
+  if (raw.nodeLastWithPairs && typeof raw.nodeLastWithPairs === "object") {
+    const historical = cleanReport({
+      schema: 1,
+      startedAt: raw.startedAt,
+      node: raw.nodeLastWithPairs,
+    });
+    if (historical?.node?.pairs?.length)
+      result.nodeLastWithPairs = historical.node;
+  }
   for (const field of [
     "gatherMs",
     "offerMs",
@@ -443,6 +453,12 @@ export class RtcRecorder {
   nodeDiagnostic(node: unknown) {
     const safe = cleanReport({ ...this.report, node });
     if (!safe?.node) return;
+    const previous = this.report.node;
+    if (safe.node.pairs?.length) {
+      this.report.nodeLastWithPairs = undefined;
+    } else if (previous?.pairs?.length) {
+      this.report.nodeLastWithPairs = previous;
+    }
     this.report.node = safe.node;
     this.publish();
   }
