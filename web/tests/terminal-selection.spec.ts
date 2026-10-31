@@ -23,6 +23,16 @@ for (const platform of ["Win32", "MacIntel"]) {
     await page.locator("#outside").focus();
     await page.mouse.move(box.x + cell * 0.2, box.y + box.height / 2);
     await page.mouse.down();
+    // A TUI may redraw its text between mouse press and drag.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          (window as any).testTerminal.write(
+            "\x1b[1;1HCOPY-ME-TERMINAL-TEXT",
+            resolve,
+          ),
+        ),
+    );
     await page.mouse.move(box.x + cell * 11.5, box.y + box.height / 2, {
       steps: 8,
     });

@@ -27,7 +27,7 @@ export function installTerminalSelection(term: Terminal): () => void {
       replaying = true;
       try {
         const mac = /Mac/.test(navigator.platform);
-        target.dispatchEvent(
+        (target.isConnected ? target : element).dispatchEvent(
           new MouseEvent(type, {
             bubbles: true,
             cancelable: true,
