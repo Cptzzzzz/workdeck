@@ -429,20 +429,92 @@ export function WorkspaceSidebar({
               清除筛选
             </button>
           )}
-          <button
-            type="button"
-            className="file-tree-pending"
-            title={
-              supportsPending
-                ? "查看节点待处理写入"
-                : "升级节点后可查看待处理写入"
-            }
-            aria-label="查看节点待处理写入"
-            disabled={!supportsPending || !controller.fileReady}
-            onClick={onPendingWrites}
-          >
-            <ListChecks size={14} /> 节点待处理写入
-          </button>
+          <div className="file-tree-status-row">
+            <button
+              type="button"
+              className="file-tree-pending"
+              title={
+                supportsPending
+                  ? "查看节点待处理写入"
+                  : "升级节点后可查看待处理写入"
+              }
+              aria-label="查看节点待处理写入"
+              disabled={!supportsPending || !controller.fileReady}
+              onClick={onPendingWrites}
+            >
+              <ListChecks size={14} /> 节点待处理写入
+            </button>
+            <details className="file-network">
+              <summary title="查看文件传输网络详情">
+                {controller.fileMetrics ? (
+                  <>
+                    {controller.fileMetrics.route === "direct"
+                      ? "直连"
+                      : "中转"}{" "}
+                    {formatLatency(
+                      controller.fileMetrics.route === "direct"
+                        ? controller.fileMetrics.directLatency
+                        : controller.fileMetrics.relayLatency,
+                    )}{" "}
+                    · ↑
+                    {formatBytes(
+                      controller.fileMetrics.traffic[
+                        controller.fileMetrics.route
+                      ].sendRate,
+                    )}
+                    /s ↓
+                    {formatBytes(
+                      controller.fileMetrics.traffic[
+                        controller.fileMetrics.route
+                      ].receiveRate,
+                    )}
+                    /s
+                  </>
+                ) : (
+                  controller.connection
+                )}
+              </summary>
+              <div className="file-network-details" role="status">
+                <div>文件链路：{controller.connection}</div>
+                {controller.fileMetrics && (
+                  <>
+                    <div>
+                      中转延迟：
+                      {formatLatency(controller.fileMetrics.relayLatency)}
+                    </div>
+                    <div>
+                      直连延迟：
+                      {formatLatency(controller.fileMetrics.directLatency)}
+                    </div>
+                    <div>
+                      上行：
+                      {formatBytes(
+                        controller.fileMetrics.traffic[
+                          controller.fileMetrics.route
+                        ].sendRate,
+                      )}
+                      /s
+                    </div>
+                    <div>
+                      下行：
+                      {formatBytes(
+                        controller.fileMetrics.traffic[
+                          controller.fileMetrics.route
+                        ].receiveRate,
+                      )}
+                      /s
+                    </div>
+                    {controller.fileMetrics.adaptiveDelayMs > 0 && (
+                      <div>
+                        终端优先：文件块间隔{" "}
+                        {controller.fileMetrics.adaptiveDelayMs} ms
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </details>
+          </div>
         </form>
       )}
       {controller.workspace && !controller.fileReady && (
@@ -1737,7 +1809,28 @@ export function WorkspaceEditor({
     [doc?.identity.workspaceID, doc?.path],
   );
   return (
-    <section className="workbench-editor" aria-label="文件工作区">
+    <section
+      className="workbench-editor"
+      aria-label="文件工作区"
+      onKeyDownCapture={(event) => {
+        if (
+          doc &&
+          (event.ctrlKey || event.metaKey) &&
+          event.key.toLowerCase() === "s"
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (
+            !doc.saving &&
+            !controller.renaming &&
+            !doc.warning &&
+            !doc.conflict &&
+            controller.fileReady
+          )
+            void controller.save(doc);
+        }
+      }}
+    >
       <div className="workbench-tabs">
         {controller.documents.map(([id, item]) => (
           <div
@@ -1753,7 +1846,7 @@ export function WorkspaceEditor({
             >
               <File size={14} />
               <span>{item.path.split("/").pop()}</span>
-              {item.text !== item.base && <i aria-label="未保存">●</i>}
+              {item.text !== item.base && <i aria-label="未保存">*</i>}
             </button>
             <button
               className="workbench-tab-close"
@@ -1790,43 +1883,6 @@ export function WorkspaceEditor({
             </button>
           </div>
         ))}
-        {layoutActions}
-      </div>
-      <div className="workbench-editor-toolbar">
-        <span>
-          {doc?.path ||
-            preview?.path ||
-            controller.workspace?.root_path ||
-            "文件工作区"}
-        </span>
-        <span
-          className="workbench-route"
-          title={
-            controller.fileMetrics
-              ? `中转 ${formatLatency(controller.fileMetrics.relayLatency)}，直连 ${formatLatency(controller.fileMetrics.directLatency)}；文件数据上行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].sendRate)}/s，下行 ${formatBytes(controller.fileMetrics.traffic[controller.fileMetrics.route].receiveRate)}/s${controller.fileMetrics.adaptiveDelayMs ? `；终端延迟持续升高，文件块间隔 ${controller.fileMetrics.adaptiveDelayMs} ms` : ""}`
-              : "文件链路状态"
-          }
-        >
-          文件 · {controller.connection}
-          {controller.fileMetrics && (
-            <>
-              {" "}
-              · 中转 {formatLatency(controller.fileMetrics.relayLatency)} / 直连{" "}
-              {formatLatency(controller.fileMetrics.directLatency)} · ↑
-              {formatBytes(
-                controller.fileMetrics.traffic[controller.fileMetrics.route]
-                  .sendRate,
-              )}
-              /s ↓
-              {formatBytes(
-                controller.fileMetrics.traffic[controller.fileMetrics.route]
-                  .receiveRate,
-              )}
-              /s
-              {controller.fileMetrics.adaptiveDelayMs > 0 && <> · 终端优先</>}
-            </>
-          )}
-        </span>
         {markdown && (
           <div className="markdown-modes" aria-label="Markdown 视图">
             <button
@@ -1851,7 +1907,11 @@ export function WorkspaceEditor({
         )}
         {doc && (
           <button
-            className="secondary"
+            className="workbench-tab-save"
+            aria-label={
+              doc.saving ? "保存中…" : doc.pending ? "确认并继续保存" : "保存"
+            }
+            title={doc.pending ? "确认并继续保存" : "保存 (Ctrl/⌘+S)"}
             disabled={
               doc.saving ||
               controller.renaming ||
@@ -1862,9 +1922,9 @@ export function WorkspaceEditor({
             onClick={() => void controller.save(doc)}
           >
             <Save size={14} />
-            {doc.saving ? "保存中…" : doc.pending ? "确认并继续保存" : "保存"}
           </button>
         )}
+        {layoutActions}
       </div>
       {controller.error && (
         <div className="workbench-notice">

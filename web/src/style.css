@@ -3163,3 +3163,13 @@ main {
 .node-hardware li span:last-child, .hardware-muted, .hardware-note { color: #859989; }
 .hardware-note { margin: 10px 0 0; font-size: 11px; line-height: 1.6; }
 .management-item-text .node-hardware { margin: 4px 0 0; background: #141e17; }
+
+.file-tree-filter .file-tree-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 5px; margin-top: 5px; }
+.file-tree-filter .file-tree-pending { margin-top: 0; white-space: nowrap; }
+.file-network { position: relative; min-width: 0; flex: 1; }
+.file-network summary { cursor: pointer; color: #a6c4a7; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; list-style: none; }
+.file-network summary::-webkit-details-marker { display: none; }
+.file-tree-filter .file-network-details { position: absolute; z-index: 20; top: 100%; right: 0; display: block; min-width: 175px; padding: 9px 12px; line-height: 1.8; color: #dce4da; background: #202a22; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px #0008; }
+.file-tree-filter .file-network-details div { display: block; }
+.workbench-tabs .markdown-modes { flex-shrink: 0; }
+.workbench-tabs .workbench-tab-save { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; color: #a6c4a7; }

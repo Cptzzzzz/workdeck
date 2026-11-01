@@ -26,8 +26,6 @@ export function MonacoEditor({
     model = useRef<monaco.editor.ITextModel | null>(null);
   const applyingRemote = useRef(false);
   const [viewError, setViewError] = useState("");
-  const [language, setLanguage] = useState("auto");
-  const [detected, setDetected] = useState("plaintext");
   const changeRef = useRef(onChange),
     saveRef = useRef(onSave);
   changeRef.current = onChange;
@@ -64,8 +62,6 @@ export function MonacoEditor({
       path: `/${++modelSequence}/${fileName}`,
     });
     const current = monaco.editor.createModel(document.text, undefined, uri);
-    setLanguage("auto");
-    setDetected(current.getLanguageId());
     current.setEOL(
       document.newline === "crlf"
         ? monaco.editor.EndOfLineSequence.CRLF
@@ -183,36 +179,6 @@ export function MonacoEditor({
         </div>
       )}
       <div className="workbench-monaco" ref={root} />
-      <div className="workbench-language-bar">
-        <label>
-          语言模式
-          <select
-            aria-label="代码语言模式"
-            value={language}
-            onChange={(event) => {
-              const value = event.target.value;
-              setLanguage(value);
-              if (model.current)
-                monaco.editor.setModelLanguage(
-                  model.current,
-                  value === "auto" ? detected : value,
-                );
-            }}
-          >
-            <option value="auto">自动（{detected}）</option>
-            {monaco.languages
-              .getLanguages()
-              .slice()
-              .sort((a, b) => a.id.localeCompare(b.id))
-              .map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.aliases?.[0] || item.id}
-                </option>
-              ))}
-          </select>
-        </label>
-        <span>查找 / 替换：Ctrl / ⌘ + F / H</span>
-      </div>
     </div>
   );
 }
