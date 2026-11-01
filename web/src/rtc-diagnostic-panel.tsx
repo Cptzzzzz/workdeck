@@ -158,6 +158,18 @@ export function RtcDiagnosticPanel({
                 / 等待 {report.node.remotePending}（含收集结束标记；不含 SDP
                 中的候选）
               </p>
+              {report.node.wire && (
+                <p>
+                  节点 UDP 套接字：发检查 {report.node.wire.requestsSent} /
+                  收检查 {report.node.wire.requestsReceived} · 发成功响应{" "}
+                  {report.node.wire.successResponsesSent} / 收成功响应{" "}
+                  {report.node.wire.successResponsesReceived} · 发错误响应{" "}
+                  {report.node.wire.errorResponsesSent} / 收错误响应{" "}
+                  {report.node.wire.errorResponsesReceived} · 发送错误{" "}
+                  {report.node.wire.writeErrors}
+                  。套接字收发不代表对端已收到或接受。
+                </p>
+              )}
               {report.node.pairs === null ? (
                 <p>节点未提供候选对统计。</p>
               ) : report.node.pairs.length === 0 ? (

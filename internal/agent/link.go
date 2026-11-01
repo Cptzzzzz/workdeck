@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/transport/v5/stdnet"
 	"github.com/pion/webrtc/v4"
 	"workdeck/internal/protocol"
 )
@@ -43,6 +44,9 @@ type terminalLink struct {
 	remoteCandidateCount int
 	remoteApplied        int
 	remoteRejected       int
+	traceDir             string
+	trace                *rtcTraceSink
+	wire                 *iceWireTrace
 }
 
 func stunURLs() []string {
@@ -63,8 +67,11 @@ func stunURLs() []string {
 	return urls
 }
 
-func newTerminalLink(ctx context.Context, cancel context.CancelFunc, ws *protocol.Socket) *terminalLink {
+func newTerminalLink(ctx context.Context, cancel context.CancelFunc, ws *protocol.Socket, dirs ...string) *terminalLink {
 	l := &terminalLink{ctx: ctx, cancel: cancel, ws: ws, active: "relay", incoming: make(chan linkPacket, 64)}
+	if len(dirs) > 0 {
+		l.traceDir = dirs[0]
+	}
 	go func() {
 		for {
 			kind, data, err := ws.Conn.ReadMessage()
@@ -78,7 +85,7 @@ func newTerminalLink(ctx context.Context, cancel context.CancelFunc, ws *protoco
 		}
 	}()
 	if os.Getenv("WORKDECK_DIRECT") != "0" {
-		_ = ws.JSON(protocol.Frame{Type: "rtc-config", ICEServers: stunURLs(), RTCTrickle: true})
+		_ = ws.JSON(protocol.Frame{Type: "rtc-config", ICEServers: stunURLs(), RTCTrickle: true, RTCTraceAvailable: rtcTraceEnabled(l.traceDir)})
 	}
 	return l
 }
@@ -100,10 +107,12 @@ func (l *terminalLink) close() {
 	l.mu.Lock()
 	l.closed = true
 	peer := l.peer
+	sink := l.trace
 	l.mu.Unlock()
 	if peer != nil {
 		_ = peer.Close()
 	}
+	sink.close()
 }
 
 func (l *terminalLink) writeLocked(route string, kind int, data []byte) error {
@@ -240,13 +249,16 @@ func (l *terminalLink) addRemoteCandidate(c protocol.ICECandidate) {
 	}
 }
 
-func (l *terminalLink) negotiate(sdp string, trickle bool, diagnostics bool) {
+func (l *terminalLink) negotiate(sdp string, trickle bool, diagnostics bool, trace bool) {
 	l.mu.Lock()
 	if l.offered || l.closed || os.Getenv("WORKDECK_DIRECT") == "0" || len(sdp) > 60000 {
 		l.mu.Unlock()
 		return
 	}
 	l.offered = true
+	if trace && diagnostics {
+		l.trace = openRTCTrace(l.traceDir)
+	}
 	l.mu.Unlock()
 	go func() {
 		if err := l.answer(sdp, trickle, diagnostics); err != nil && l.ctx.Err() == nil {
@@ -257,6 +269,14 @@ func (l *terminalLink) negotiate(sdp string, trickle bool, diagnostics bool) {
 
 func (l *terminalLink) answer(sdp string, trickle bool, diagnostics bool) error {
 	settings := webrtc.SettingEngine{}
+	l.mu.Lock()
+	if l.trace != nil {
+		if network, err := stdnet.NewNet(); err == nil {
+			l.wire = &iceWireTrace{}
+			settings.SetNet(&iceTraceNet{Net: network, trace: l.wire})
+		}
+	}
+	l.mu.Unlock()
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6})
 	settings.SetSCTPMaxMessageSize(65536)
 	settings.SetSCTPMaxReceiveBufferSize(1 << 20)

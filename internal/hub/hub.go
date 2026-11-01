@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -43,6 +44,7 @@ type attachment struct {
 	browser                           *protocol.Socket
 	agent                             *protocol.Socket
 	readonly                          bool
+	windows                           bool
 	cancel                            context.CancelFunc
 }
 type waiter struct {
@@ -855,6 +857,22 @@ func clampSize(n uint16, min, max uint16) uint16 {
 	}
 	return n
 }
+
+// Capture only when Windows attachments to this node belong to one login.
+// Multiple terminal tabs from that login are fine; ambiguous devices are not.
+func (h *Hub) allowWindowsRTCTrace(a *attachment) bool {
+	if !a.windows {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, other := range h.attachments {
+		if other.nodeID == a.nodeID && other.windows && other.loginHash != a.loginHash {
+			return false
+		}
+	}
+	return true
+}
 func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 	t, err := h.store.terminal(r.PathValue("id"))
 	if err != nil {
@@ -881,7 +899,7 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer browser.Close()
-	a := &attachment{id: randomID(), terminalID: t.ID, nodeID: t.NodeID, loginHash: l.Hash, browser: browser, cancel: cancel}
+	a := &attachment{id: randomID(), terminalID: t.ID, nodeID: t.NodeID, loginHash: l.Hash, browser: browser, cancel: cancel, windows: strings.Contains(r.UserAgent(), "Windows")}
 	ticket := randomID()
 	p := &pending{nodeID: t.NodeID, terminalID: t.ID, ch: make(chan *protocol.Socket), expires: time.Now().Add(15 * time.Second)}
 	h.mu.Lock()
@@ -930,6 +948,7 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 		return
 	}
 	errorsCh := make(chan error, 2)
+	var nodeTraceAvailable atomic.Bool
 	go func() {
 		for {
 			kind, b, e := data.Conn.ReadMessage()
@@ -939,6 +958,12 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 			}
 			if kind != websocket.BinaryMessage && kind != websocket.TextMessage {
 				continue
+			}
+			if kind == websocket.TextMessage {
+				var f protocol.Frame
+				if json.Unmarshal(b, &f) == nil && f.Type == "rtc-config" {
+					nodeTraceAvailable.Store(f.RTCTraceAvailable)
+				}
 			}
 			if e = browser.Write(kind, b); e != nil {
 				errorsCh <- e
@@ -978,7 +1003,10 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 					if !a.readonly && controlling {
 						e = data.JSON(f)
 					}
-				case "probe", "rtc-offer", "rtc-candidate", "route-request", "route-commit":
+				case "probe", "rtc-offer", "rtc-candidate", "rtc-trace", "route-request", "route-commit":
+					if f.Type == "rtc-offer" {
+						f.RTCTraceRequested = nodeTraceAvailable.Load() && h.allowWindowsRTCTrace(a)
+					}
 					// Signaling shares this authenticated attachment. Its lifetime
 					// remains the authority for any direct data channel as well.
 					if len(f.ID) <= 64 && len(f.SDP) <= 60000 && len(f.Padding) <= 1024 && (f.Candidate == nil || (len(f.Candidate.Candidate) <= 2048 && (f.Candidate.SDPMid == nil || len(*f.Candidate.SDPMid) <= 256) && (f.Candidate.UsernameFragment == nil || len(*f.Candidate.UsernameFragment) <= 256))) {

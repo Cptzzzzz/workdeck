@@ -13,6 +13,15 @@ export type PairSummary = {
 };
 export type RtcNodeReport = {
   sampleMs: number;
+  wire?: {
+    requestsSent: number;
+    requestsReceived: number;
+    successResponsesSent: number;
+    successResponsesReceived: number;
+    errorResponsesSent: number;
+    errorResponsesReceived: number;
+    writeErrors: number;
+  };
   gathering: string;
   ice: string;
   connection: string;
@@ -257,6 +266,23 @@ export function cleanReport(value: unknown): RtcReport | undefined {
         remotePending: Math.min(remotePending, 128),
         pairs: nested.pairs,
       };
+      if (node.wire && typeof node.wire === "object") {
+        const wire = node.wire as Record<string, unknown>;
+        const fields = [
+          "requestsSent",
+          "requestsReceived",
+          "successResponsesSent",
+          "successResponsesReceived",
+          "errorResponsesSent",
+          "errorResponsesReceived",
+          "writeErrors",
+        ] as const;
+        if (fields.every((field) => count(wire[field]) !== undefined)) {
+          result.node.wire = Object.fromEntries(
+            fields.map((field) => [field, count(wire[field])!]),
+          ) as NonNullable<RtcNodeReport["wire"]>;
+        }
+      }
     }
   }
   if (raw.nodeLastWithPairs && typeof raw.nodeLastWithPairs === "object") {

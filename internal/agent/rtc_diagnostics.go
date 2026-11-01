@@ -84,9 +84,15 @@ func (l *terminalLink) sampleRTC(peer *webrtc.PeerConnection) {
 			return
 		}
 		received, applied, rejected, pending := l.remoteCandidateCount, l.remoteApplied, l.remoteRejected, len(l.remoteCandidates)
+		wire, sink := l.wire, l.trace
 		l.mu.Unlock()
 		local, remote, pairs := summarizeRTCStats(peer.GetStats())
 		d := &protocol.RTCNodeDiagnostic{SampleMs: time.Since(started).Milliseconds(), Gathering: peer.ICEGatheringState().String(), ICE: peer.ICEConnectionState().String(), Connection: peer.ConnectionState().String(), STUNServers: len(stunURLs()), LocalCandidates: local, RemoteCandidates: remote, RemoteReceived: received, RemoteApplied: applied, RemoteRejected: rejected, RemotePending: pending, Pairs: pairs}
+		if wire != nil {
+			summary := wire.snapshot()
+			d.Wire = &summary
+		}
+		sink.write("node", nil, d)
 		if l.ws.JSON(protocol.Frame{Type: "rtc-diagnostic", NodeDiagnostic: d}) != nil {
 			return
 		}

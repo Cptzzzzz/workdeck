@@ -93,35 +93,67 @@ type RTCNodePair struct {
 	ResponsesSent     uint64 `json:"responsesSent"`
 	ResponsesReceived uint64 `json:"responsesReceived"`
 }
+type RTCWireSummary struct {
+	Sent            uint64 `json:"requestsSent"`
+	Received        uint64 `json:"requestsReceived"`
+	SuccessSent     uint64 `json:"successResponsesSent"`
+	SuccessReceived uint64 `json:"successResponsesReceived"`
+	ErrorSent       uint64 `json:"errorResponsesSent"`
+	ErrorReceived   uint64 `json:"errorResponsesReceived"`
+	WriteErrors     uint64 `json:"writeErrors"`
+}
+
+// RTCBrowserTrace intentionally has no free-form strings, addresses, or IDs.
+type RTCBrowserTrace struct {
+	ElapsedMs         uint32 `json:"elapsedMs"`
+	Stage             uint8  `json:"stage"`
+	Outcome           uint8  `json:"outcome"`
+	ICE               uint8  `json:"ice"`
+	Connection        uint8  `json:"connection"`
+	LocalHost         uint16 `json:"localHost"`
+	LocalSrflx        uint16 `json:"localSrflx"`
+	RemoteHost        uint16 `json:"remoteHost"`
+	RemoteSrflx       uint16 `json:"remoteSrflx"`
+	PairCount         uint16 `json:"pairCount"`
+	RequestsSent      uint32 `json:"requestsSent"`
+	ResponsesReceived uint32 `json:"responsesReceived"`
+	RequestsReceived  uint32 `json:"requestsReceived"`
+	ResponsesSent     uint32 `json:"responsesSent"`
+	CountersMask      uint8  `json:"countersMask"`
+}
 type RTCNodeDiagnostic struct {
-	SampleMs         int64          `json:"sampleMs"`
-	Gathering        string         `json:"gathering"`
-	ICE              string         `json:"ice"`
-	Connection       string         `json:"connection"`
-	STUNServers      int            `json:"stunServers"`
-	LocalCandidates  map[string]int `json:"localCandidates"`
-	RemoteCandidates map[string]int `json:"remoteCandidates"`
-	RemoteReceived   int            `json:"remoteReceived"`
-	RemoteApplied    int            `json:"remoteApplied"`
-	RemoteRejected   int            `json:"remoteRejected"`
-	RemotePending    int            `json:"remotePending"`
-	Pairs            []RTCNodePair  `json:"pairs"`
+	Wire             *RTCWireSummary `json:"wire,omitempty"`
+	SampleMs         int64           `json:"sampleMs"`
+	Gathering        string          `json:"gathering"`
+	ICE              string          `json:"ice"`
+	Connection       string          `json:"connection"`
+	STUNServers      int             `json:"stunServers"`
+	LocalCandidates  map[string]int  `json:"localCandidates"`
+	RemoteCandidates map[string]int  `json:"remoteCandidates"`
+	RemoteReceived   int             `json:"remoteReceived"`
+	RemoteApplied    int             `json:"remoteApplied"`
+	RemoteRejected   int             `json:"remoteRejected"`
+	RemotePending    int             `json:"remotePending"`
+	Pairs            []RTCNodePair   `json:"pairs"`
 }
 
 type Frame struct {
-	Type           string             `json:"type"`
-	Cols           uint16             `json:"cols,omitempty"`
-	Rows           uint16             `json:"rows,omitempty"`
-	Bytes          int                `json:"bytes,omitempty"`
-	ReadOnly       bool               `json:"readonly"`
-	Message        string             `json:"message,omitempty"`
-	ID             string             `json:"id,omitempty"`
-	SDP            string             `json:"sdp,omitempty"`
-	Route          string             `json:"route,omitempty"`
-	Padding        string             `json:"padding,omitempty"`
-	ICEServers     []string           `json:"ice_servers,omitempty"`
-	RTCDiagnostics bool               `json:"rtc_diagnostics,omitempty"`
-	NodeDiagnostic *RTCNodeDiagnostic `json:"node_diagnostic,omitempty"`
-	RTCTrickle     bool               `json:"rtc_trickle,omitempty"`
-	Candidate      *ICECandidate      `json:"candidate,omitempty"`
+	Type              string             `json:"type"`
+	Cols              uint16             `json:"cols,omitempty"`
+	Rows              uint16             `json:"rows,omitempty"`
+	Bytes             int                `json:"bytes,omitempty"`
+	ReadOnly          bool               `json:"readonly"`
+	Message           string             `json:"message,omitempty"`
+	ID                string             `json:"id,omitempty"`
+	SDP               string             `json:"sdp,omitempty"`
+	Route             string             `json:"route,omitempty"`
+	Padding           string             `json:"padding,omitempty"`
+	ICEServers        []string           `json:"ice_servers,omitempty"`
+	RTCTraceAvailable bool               `json:"rtc_trace_available,omitempty"`
+	RTCTraceRequested bool               `json:"rtc_trace_requested,omitempty"`
+	BrowserTrace      *RTCBrowserTrace   `json:"browser_trace,omitempty"`
+	RTCDiagnostics    bool               `json:"rtc_diagnostics,omitempty"`
+	NodeDiagnostic    *RTCNodeDiagnostic `json:"node_diagnostic,omitempty"`
+	RTCTrickle        bool               `json:"rtc_trickle,omitempty"`
+	Candidate         *ICECandidate      `json:"candidate,omitempty"`
 }

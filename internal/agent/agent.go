@@ -282,7 +282,7 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	link := newTerminalLink(ctx, cancel, socket)
+	link := newTerminalLink(ctx, cancel, socket, a.sessions.dir)
 	defer func() {
 		cancel()
 		link.close()
@@ -324,11 +324,15 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 					}
 				case "rtc-offer":
 					if packet.route == "relay" {
-						link.negotiate(frame.SDP, frame.RTCTrickle, frame.RTCDiagnostics)
+						link.negotiate(frame.SDP, frame.RTCTrickle, frame.RTCDiagnostics, frame.RTCTraceRequested)
 					}
 				case "rtc-candidate":
 					if packet.route == "relay" && frame.Candidate != nil {
 						link.addRemoteCandidate(*frame.Candidate)
+					}
+				case "rtc-trace":
+					if packet.route == "relay" && frame.BrowserTrace != nil {
+						link.recordBrowserTrace(*frame.BrowserTrace)
 					}
 				case "probe":
 					e = link.probe(packet.route, frame)

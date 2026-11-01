@@ -1,5 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
   readState,
@@ -64,7 +64,37 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     process.env.WORKDECK_DIRECT_ACCEPTANCE !== "1",
     "requires a directly reachable test Agent",
   );
+  if (process.env.WORKDECK_ICE_TRACE_LEGACY === "1") {
+    await page.setExtraHTTPHeaders({
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140",
+    });
+    await page.addInitScript(() => {
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (data) {
+        if (typeof data === "string") {
+          try {
+            const msg = JSON.parse(data);
+            if (msg.type === "rtc-offer") {
+              delete msg.rtc_trace_requested;
+              data = JSON.stringify(msg);
+            }
+          } catch {}
+        }
+        return send.call(this, data);
+      };
+    });
+  }
   await page.addInitScript(delayRelayProbesForDirectTest);
+  if (process.env.WORKDECK_ICE_TRACE_TEST_DIR) {
+    await page.setExtraHTTPHeaders({
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140",
+    });
+    await page.addInitScript(() =>
+      Object.defineProperty(navigator, "userAgent", {
+        get: () => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140",
+      }),
+    );
+  }
   await page.addInitScript(() => {
     const Native = window.RTCPeerConnection;
     (window as any).__peers = [];
@@ -94,6 +124,13 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       }
     };
   });
+  const beforeTraceFiles = new Set<string>();
+  if (process.env.WORKDECK_ICE_TRACE_TEST_DIR) {
+    try {
+      for (const name of readdirSync(process.env.WORKDECK_ICE_TRACE_TEST_DIR))
+        beforeTraceFiles.add(name);
+    } catch {}
+  }
   await login(page);
   let relayBinary = 0,
     readyCount = 0,
@@ -179,8 +216,38 @@ test("automatic direct path carries terminal bytes; failure falls back without r
           "remoteRejected",
           "sampleMs",
           "stunServers",
+          ...(process.env.WORKDECK_ICE_TRACE_TEST_DIR ? ["wire"] : []),
         ].sort(),
       );
+    }
+    if (process.env.WORKDECK_ICE_TRACE_TEST_DIR) {
+      const dir = process.env.WORKDECK_ICE_TRACE_TEST_DIR;
+      await expect
+        .poll(
+          () => {
+            try {
+              const lines = readdirSync(dir)
+                .filter((name) => !beforeTraceFiles.has(name))
+                .flatMap((name) =>
+                  readFileSync(`${dir}/${name}`, "utf8")
+                    .trim()
+                    .split("\n")
+                    .filter(Boolean)
+                    .map((x) => JSON.parse(x)),
+                );
+              return (
+                lines.some((x) => x.side === "browser") &&
+                lines.some(
+                  (x) => x.side === "node" && x.node?.wire?.requestsSent > 0,
+                )
+              );
+            } catch {
+              return false;
+            }
+          },
+          { timeout: 15000 },
+        )
+        .toBe(true);
     }
     await expect(page.locator(".xterm-screen")).toContainText("handover-11");
     const screen = await page.locator(".xterm-screen").innerText();

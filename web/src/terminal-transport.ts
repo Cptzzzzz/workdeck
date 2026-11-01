@@ -5,7 +5,7 @@ import {
   type Samples,
 } from "./transport-policy";
 import { readRoutePreference } from "./transport-preferences";
-import { loadRtcReport, RtcRecorder } from "./rtc-diagnostics";
+import { loadRtcReport, RtcRecorder, type RtcReport } from "./rtc-diagnostics";
 import {
   describeSamples,
   initialTransportStatus,
@@ -20,6 +20,7 @@ type Frame = {
   sdp?: string;
   ice_servers?: string[];
   rtc_trickle?: boolean;
+  rtc_trace_available?: boolean;
   node_diagnostic?: unknown;
   candidate?: RTCIceCandidateInit;
 };
@@ -45,6 +46,9 @@ export class TerminalTransport {
   private peer: RTCPeerConnection | null = null;
   private rtc?: RtcRecorder;
   private rtcSampling?: ReturnType<typeof setInterval>;
+  private traceRequested = false;
+  private traceLast = 0;
+  private traceLastOutcome = "";
   private rtcDeadline?: ReturnType<typeof setTimeout>;
   private remoteReady = false;
   private remoteCandidates: RTCIceCandidateInit[] = [];
@@ -339,7 +343,11 @@ export class TerminalTransport {
       return;
     }
     if (frame.type === "rtc-config" && route === "relay") {
-      void this.startPeer(frame.ice_servers || [], frame.rtc_trickle === true);
+      void this.startPeer(
+        frame.ice_servers || [],
+        frame.rtc_trickle === true,
+        frame.rtc_trace_available === true,
+      );
       return;
     }
     if (frame.type === "rtc-answer" && route === "relay") {
@@ -459,7 +467,127 @@ export class TerminalTransport {
     });
   }
 
-  private async startPeer(urls: string[], trickle: boolean) {
+  private emitTrace(report: RtcReport) {
+    if (!this.traceRequested || this.closed) return;
+    const now = performance.now();
+    if (now - this.traceLast < 1000 && report.outcome === this.traceLastOutcome)
+      return;
+    this.traceLast = now;
+    this.traceLastOutcome = report.outcome;
+    const stages = [
+      "starting",
+      "gathering",
+      "offer_sent",
+      "answer_received",
+      "checking",
+      "channel_open",
+      "comparing",
+      "finished",
+    ];
+    const outcomes = [
+      "in_progress",
+      "available",
+      "timeout",
+      "ice_failed",
+      "peer_closed",
+      "channel_closed",
+      "channel_error",
+      "answer_error",
+      "agent_unavailable",
+      "setup_error",
+      "not_direct",
+      "route_interrupted",
+      "cancelled",
+    ];
+    const states = [
+      "new",
+      "checking",
+      "connected",
+      "completed",
+      "disconnected",
+      "failed",
+      "closed",
+    ];
+    const connections = [
+      "new",
+      "connecting",
+      "connected",
+      "disconnected",
+      "failed",
+      "closed",
+    ];
+    const code = (v: string, list: string[]) =>
+      Math.max(0, list.indexOf(v) + 1);
+    const add = (v: unknown) =>
+      typeof v === "number" && Number.isSafeInteger(v) && v >= 0
+        ? Math.min(v, 1000000000)
+        : 0;
+    const pairs = report.pairs || [];
+    const sum = (
+      field:
+        | "requestsSent"
+        | "responsesReceived"
+        | "requestsReceived"
+        | "responsesSent",
+    ) =>
+      Math.min(
+        1000000000,
+        pairs.reduce((n, p) => n + add(p[field]), 0),
+      );
+    const candidateCount = (counts: Record<string, number>, name: string) =>
+      Math.min(
+        128,
+        Object.entries(counts)
+          .filter(([k]) => k.startsWith(name + "/"))
+          .reduce((n, [, v]) => n + add(v), 0),
+      );
+    this.rawSend(
+      "relay",
+      JSON.stringify({
+        type: "rtc-trace",
+        browser_trace: {
+          elapsedMs: Math.min(120000, Math.round(report.elapsedMs)),
+          stage: code(report.stage, stages),
+          outcome: code(report.outcome, outcomes),
+          ice: code(report.ice, states),
+          connection: code(report.connection, connections),
+          localHost: candidateCount(report.localCandidates, "host"),
+          localSrflx: candidateCount(report.localCandidates, "srflx"),
+          remoteHost: candidateCount(report.remoteCandidates, "host"),
+          remoteSrflx: candidateCount(report.remoteCandidates, "srflx"),
+          pairCount: Math.min(
+            128,
+            pairs.reduce((n, p) => n + add(p.count), 0),
+          ),
+          requestsSent: sum("requestsSent"),
+          responsesReceived: sum("responsesReceived"),
+          requestsReceived: sum("requestsReceived"),
+          responsesSent: sum("responsesSent"),
+          countersMask: (
+            [
+              "requestsSent",
+              "responsesReceived",
+              "requestsReceived",
+              "responsesSent",
+            ] as const
+          ).reduce(
+            (mask, field, index) =>
+              mask |
+              (pairs.length && pairs.every((p) => typeof p[field] === "number")
+                ? 1 << index
+                : 0),
+            0,
+          ),
+        },
+      }),
+    );
+  }
+
+  private async startPeer(
+    urls: string[],
+    trickle: boolean,
+    traceAvailable: boolean,
+  ) {
     if (this.attempted || this.closed) return;
     if (typeof RTCPeerConnection === "undefined") {
       this.publish({
@@ -492,13 +620,17 @@ export class TerminalTransport {
       return;
     }
     this.attempted = true;
+    this.traceRequested =
+      traceAvailable && /Windows/i.test(navigator.userAgent);
     this.rtc = new RtcRecorder(
       this.terminalID,
-      (current, previous) =>
+      (current, previous) => {
         this.publish({
           rtcDiagnostic: current,
           previousRtcDiagnostic: previous,
-        }),
+        });
+        this.emitTrace(current);
+      },
       trickle,
     );
     this.publish({
@@ -609,6 +741,7 @@ export class TerminalTransport {
             sdp: peer.localDescription.sdp,
             rtc_trickle: trickle,
             rtc_diagnostics: true,
+            rtc_trace_requested: this.traceRequested,
           }),
         );
         offerSent = true;
