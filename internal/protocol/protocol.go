@@ -43,6 +43,34 @@ type DirectoryListing struct {
 	Truncated bool        `json:"truncated"`
 }
 
+// NodeHardware contains non-unique hardware descriptions only. Serial numbers,
+// hardware UUIDs, MAC addresses and filesystem paths must not be included.
+type NodeHardware struct {
+	CollectedAt   string           `json:"collected_at"`
+	CPUModel      string           `json:"cpu_model,omitempty"`
+	LogicalCPUs   int              `json:"logical_cpus,omitempty"`
+	PhysicalCores int              `json:"physical_cores,omitempty"`
+	MemoryBytes   uint64           `json:"memory_bytes,omitempty"`
+	MemoryModules []HardwareMemory `json:"memory_modules,omitempty"`
+	Disks         []HardwareDisk   `json:"disks,omitempty"`
+	GPUs          []HardwareGPU    `json:"gpus,omitempty"`
+}
+type HardwareMemory struct {
+	Vendor    string `json:"vendor,omitempty"`
+	Model     string `json:"model,omitempty"`
+	SizeBytes uint64 `json:"size_bytes,omitempty"`
+}
+type HardwareDisk struct {
+	Name      string `json:"name"`
+	Model     string `json:"model,omitempty"`
+	Vendor    string `json:"vendor,omitempty"`
+	SizeBytes uint64 `json:"size_bytes,omitempty"`
+}
+type HardwareGPU struct {
+	Model       string `json:"model"`
+	MemoryBytes uint64 `json:"memory_bytes,omitempty"`
+}
+
 type Message struct {
 	RunUser       string            `json:"run_user,omitempty"`
 	Type          string            `json:"type"`
@@ -62,6 +90,7 @@ type Message struct {
 	Version       string            `json:"version,omitempty"`
 	BootID        string            `json:"boot_id,omitempty"`
 	Complete      bool              `json:"complete,omitempty"`
+	Hardware      *NodeHardware     `json:"hardware,omitempty"`
 	Capabilities  []string          `json:"capabilities,omitempty"`
 	Path          string            `json:"path,omitempty"`
 	IncludeHidden bool              `json:"include_hidden,omitempty"`

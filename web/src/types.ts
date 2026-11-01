@@ -1,5 +1,22 @@
+export type NodeHardware = {
+  collected_at: string;
+  cpu_model?: string;
+  logical_cpus?: number;
+  physical_cores?: number;
+  memory_bytes?: number;
+  memory_modules?: { vendor?: string; model?: string; size_bytes?: number }[];
+  disks?: {
+    name: string;
+    model?: string;
+    vendor?: string;
+    size_bytes?: number;
+  }[];
+  gpus?: { model: string; memory_bytes?: number }[];
+};
 export type ComputeNode = {
   run_user?: string;
+  version?: string;
+  hardware?: NodeHardware | null;
   id: string;
   name: string;
   online: boolean;

@@ -198,21 +198,27 @@ func (h *Hub) assets(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	nodes := []Node{}
-	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities,run_user FROM nodes WHERE revoked=0 ORDER BY name")
+	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities,run_user,hardware FROM nodes WHERE revoked=0 ORDER BY name")
 	if err != nil {
 		failure(w, 500, "读取节点失败")
 		return
 	}
 	for rows.Next() {
 		var n Node
-		var capabilities string
-		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities, &n.RunUser); err != nil {
+		var capabilities, hardware string
+		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities, &n.RunUser, &hardware); err != nil {
 			rows.Close()
 			failure(w, 500, "读取节点失败")
 			return
 		}
 		n.Capabilities = []string{}
 		_ = json.Unmarshal([]byte(capabilities), &n.Capabilities)
+		if hardware != "" {
+			var h protocol.NodeHardware
+			if json.Unmarshal([]byte(hardware), &h) == nil {
+				n.Hardware = cleanHardware(&h)
+			}
+		}
 		h.mu.Lock()
 		n.Online = h.agents[n.ID] != nil
 		h.mu.Unlock()
@@ -617,6 +623,12 @@ func (h *Hub) applyInventory(node string, msg protocol.Message) {
 	if err != nil {
 		log.Printf("inventory update: %v", err)
 		return
+	}
+	if hardware := encodeHardware(msg.Hardware); hardware != "" {
+		if _, err = tx.Exec("UPDATE nodes SET hardware=? WHERE id=?", hardware, node); err != nil {
+			log.Printf("inventory hardware update: %v", err)
+			return
+		}
 	}
 	seen := map[string]bool{}
 	complete := msg.Complete

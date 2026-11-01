@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"workdeck/internal/protocol"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -82,7 +84,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 		}
 	}
 	// Additive migrations preserve existing node identities, sessions, and logins.
-	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''", "run_user": "TEXT NOT NULL DEFAULT ''"} {
+	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''", "run_user": "TEXT NOT NULL DEFAULT ''", "hardware": "TEXT NOT NULL DEFAULT ''"} {
 		rows, e := db.Query("PRAGMA table_info(nodes)")
 		if e != nil {
 			db.Close()
@@ -143,17 +145,18 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 }
 
 type Node struct {
-	RunUser      string   `json:"run_user"`
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	LastSeen     string   `json:"last_seen"`
-	Hostname     string   `json:"hostname"`
-	Platform     string   `json:"platform"`
-	Home         string   `json:"home"`
-	Shell        string   `json:"shell"`
-	Version      string   `json:"version"`
-	Online       bool     `json:"online"`
-	Capabilities []string `json:"capabilities"`
+	Hardware     *protocol.NodeHardware `json:"hardware,omitempty"`
+	RunUser      string                 `json:"run_user"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	LastSeen     string                 `json:"last_seen"`
+	Hostname     string                 `json:"hostname"`
+	Platform     string                 `json:"platform"`
+	Home         string                 `json:"home"`
+	Shell        string                 `json:"shell"`
+	Version      string                 `json:"version"`
+	Online       bool                   `json:"online"`
+	Capabilities []string               `json:"capabilities"`
 }
 type Terminal struct {
 	ID        string    `json:"id"`

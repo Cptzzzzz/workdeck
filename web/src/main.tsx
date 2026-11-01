@@ -35,6 +35,7 @@ import type {
 } from "./types";
 import { api, setCSRF } from "./services/api";
 import { TerminalView } from "./features/terminal/terminal-view";
+import { HardwareDetails } from "./features/management/hardware-details";
 import { formatBytes } from "./network-metrics";
 import { codexStatus } from "./codex-status";
 import {
@@ -1125,6 +1126,7 @@ function App() {
               </div>
             </div>
           )}
+          {selected && <HardwareDetails node={selected} initiallyOpen />}
           <div className="list-toolbar">
             <div className="section-label">
               终端会话 <span>{visible.length}</span>

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { ComputeNode, TerminalRecord } from "../../types";
 import { api } from "../../services/api";
+import { HardwareDetails } from "./hardware-details";
 import {
   DEFAULT_FONT_SIZE,
   MAX_FONT_SIZE,
@@ -279,7 +280,9 @@ export function NodesPanel({
         <Server size={24} />
       </div>
       <h2>节点管理</h2>
-      <p className="modal-description">查看计算节点的连接状态和运行账户。</p>
+      <p className="modal-description">
+        查看计算节点的连接状态、运行账户和硬件信息。
+      </p>
       <div className="management-toolbar">
         <span>
           {nodes.filter((n) => n.online).length} / {nodes.length} 台在线
@@ -306,6 +309,7 @@ export function NodesPanel({
                 }{" "}
                 个会话
               </small>
+              <HardwareDetails node={n} />
             </div>
             <div className="management-item-actions">
               <button onClick={() => onRename(n)}>重命名</button>

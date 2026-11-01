@@ -31,6 +31,8 @@ type Agent struct {
 	fileCommitOnce sync.Once
 	fileCommitGate chan struct{}
 	fileRateBytes  int
+	hardwareMu     sync.RWMutex
+	hardware       *protocol.NodeHardware
 	fileRatesMu    sync.Mutex
 	fileRates      map[string]*rate.Limiter
 }
@@ -74,6 +76,7 @@ func (a *Agent) dial(path, ticket string) (*protocol.Socket, error) {
 	return socket, nil
 }
 func (a *Agent) Run(ctx context.Context) error {
+	go a.hardwareLoop(ctx)
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
@@ -116,7 +119,7 @@ func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1"}})
+	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "hardware-inventory-v1"}})
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")
