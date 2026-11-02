@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type testBrowser interface {
@@ -39,6 +40,19 @@ func (x *testHub) dialHTTPBrowser(t *testing.T, path string) *testHTTPBrowser {
 	}
 	b := &testHTTPBrowser{x: x, t: t, response: res, reader: bufio.NewScanner(res.Body), id: res.Header.Get("X-Workdeck-Stream")}
 	b.reader.Buffer(make([]byte, 4096), 2<<20)
+	primed := make(chan bool, 1)
+	go func() { primed <- b.reader.Scan() && b.reader.Text() == ": connected" }()
+	select {
+	case ok := <-primed:
+		if !ok {
+			res.Body.Close()
+			t.Fatal("stream lacks initial body chunk")
+		}
+	case <-time.After(2 * time.Second):
+		res.Body.Close()
+		t.Fatal("stream did not prime proxy before terminal selection")
+	}
+
 	t.Cleanup(func() { b.Close() })
 	return b
 }

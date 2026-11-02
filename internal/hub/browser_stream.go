@@ -125,6 +125,12 @@ func (h *Hub) newStreamBrowser(w http.ResponseWriter, r *http.Request, l login) 
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("X-Workdeck-Stream", id)
 	w.WriteHeader(200)
+	// A first body chunk makes reverse proxies forward the response headers
+	// before the browser sends the deferred terminal selection message.
+	if _, err := w.Write([]byte(": connected\n\n")); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	if err := http.NewResponseController(w).Flush(); err != nil {
 		cleanup()
 		return nil, nil, err
