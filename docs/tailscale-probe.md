@@ -19,7 +19,7 @@ Hub 给已登录会话发放随机挑战。运行在 Hub 宿主机的 `workdeck 
 
 下面的占位符必须替换为自己的实际值。首次运行前检查证书、端口、访问规则、部署路径和当前配置。以下步骤需要宿主机管理员权限。
 
-1. 在 Hub 的部署目录创建密钥文件（如用 `openssl rand -hex 32` 写入临时文件后原子安装），确保文件不被其他普通用户读取。Hub 容器的 UID 65532 和运行探测服务的账号必须有读取权限。
+1. 在 Hub 的部署目录创建密钥文件（如用 `openssl rand -hex 32` 写入临时文件后原子安装），将文件设为 UID 65532 所有、权限 `0400`；Hub 容器与运行探测服务的账号必须有读取权限。部署脚本还会验证文件为普通文件、长度 32–4096 字节且不可被其他账号读取。
 2. 使用 Tailscale 提供的证书为节点的 `机器名.tailnet名.ts.net` 配置 HTTPS，证书和私钥保存在宿主机安全目录并按 Tailscale 的方式续期。探测服务绑定宿主机 `tailscale ip -4` 对应的精确 IP，而不是 `0.0.0.0`。
 3. 以受 systemd 管理的独立服务运行：
 
@@ -34,7 +34,7 @@ workdeck tailnet-probe \
 
 该账号需要能调用本机 `tailscale whois --json --proto=tcp` 查询连接来源。服务不会将本机 Tailscale 管理套接字挂载到 Hub 容器。
 
-4. 在 Hub 部署目录的 `.env` 增加 `WORKDECK_TAILNET_PROBE_URL=https://TAILNET_MACHINE_NAME:18443/probe`，将 `deploy/compose.tailnet.yml` 放到该目录后，使用 `docker compose -f compose.yml -f compose.tailnet.yml config` 检查，确认配置后用相同的 `-f` 参数执行 `up -d`。覆盖文件会向 Hub 只读挂载密钥并添加探测参数。
+4. 在本地 `.env.deploy.local` 增加 `WORKDECK_TAILNET_PROBE_URL=https://TAILNET_MACHINE_NAME:18443/probe`，构建后运行标准部署脚本。部署脚本会检查远端密钥、启用 `compose.tailnet.yml` 覆盖、只读挂载密钥并添加 Hub 参数。也可以在 Hub 部署目录用 `docker compose -f compose.yml -f compose.tailnet.yml config` 预检。
 5. 检查主服务健康、节点在线、已有终端进程和浏览器的探测状态；非 Tailnet 设备应仍能正常使用原链路。用户浏览器需要通过 Tailnet DNS 解析节点域名，不应跳过 TLS 校验。
 
-**运维限制：** 当前 `scripts/deploy.sh` 尚未自动携带此可选 Compose 覆盖；执行标准部署会移除探测配置。后续发布需要继续使用覆盖文件，或先完善部署脚本集成。不要把探测状态当成节点直连已实现。
+**后续部署：** 保留本地部署配置中的 `WORKDECK_TAILNET_PROBE_URL`。如果远端已经启用探测而本地没有设置 URL，标准部署脚本会停止，避免无意中关闭；确需关闭时，显式设置 `WORKDECK_TAILNET_PROBE_DISABLE=1` 并移除 URL。不要把探测状态当成节点直连已实现。
