@@ -178,6 +178,9 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { failure(w, 404, "接口不存在") })
 	m.HandleFunc("/", h.assets)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/ws") && validStartupTrace(r.URL.Query().Get("trace")) {
+			log.Printf("terminal startup trace=%s stage=http_ingress", r.URL.Query().Get("trace"))
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -974,6 +977,16 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer browser.Close()
+	if r.URL.Query().Get("deferred") == "1" {
+		_ = conn.SetReadDeadline(time.Now().Add(8 * time.Second))
+		var start protocol.Frame
+		if conn.ReadJSON(&start) != nil || start.Type != "start" {
+			stage("unselected_browser_closed")
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(65 * time.Second))
+		stage("browser_selected")
+	}
 	a := &attachment{id: randomID(), terminalID: t.ID, nodeID: t.NodeID, loginHash: l.Hash, browser: browser, cancel: cancel, windows: strings.Contains(r.UserAgent(), "Windows")}
 	ticket := randomID()
 	p := &pending{nodeID: t.NodeID, terminalID: t.ID, ch: make(chan *protocol.Socket), expires: time.Now().Add(15 * time.Second)}

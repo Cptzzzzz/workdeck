@@ -69,12 +69,28 @@ func TestWarmTransportBindsWithoutNewAgentConnection(t *testing.T) {
 	for _, c := range x.client.Jar.Cookies(u) {
 		headers.Add("Cookie", c.Name+"="+c.Value)
 	}
+	loser, _, e := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(x.s.URL, "http")+"/api/terminals/"+terminal+"/ws?deferred=1&takeover=1", headers)
+	if e != nil {
+		t.Fatal(e)
+	}
+	x.h.mu.Lock()
+	owners := len(x.h.controllers)
+	views := len(x.h.attachments)
+	idle := len(x.h.agents[node].warm)
+	x.h.mu.Unlock()
+	if owners != 0 || views != 0 || idle != 2 {
+		t.Fatal("unselected browser claimed terminal", owners, views, idle)
+	}
+	loser.Close()
 	for i, agent := range pool {
-		browser, _, e := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(x.s.URL, "http")+"/api/terminals/"+terminal+"/ws", headers)
+		browser, _, e := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(x.s.URL, "http")+"/api/terminals/"+terminal+"/ws?deferred=1", headers)
 		if e != nil {
 			t.Fatal(e)
 		}
 		defer browser.Close()
+		if e = browser.WriteJSON(protocol.Frame{Type: "start"}); e != nil {
+			t.Fatal(e)
+		}
 		agent.SetReadDeadline(time.Now().Add(time.Second))
 		var bind protocol.Message
 		if e = agent.ReadJSON(&bind); e != nil {

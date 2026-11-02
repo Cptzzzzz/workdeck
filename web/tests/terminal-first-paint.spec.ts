@@ -82,3 +82,82 @@ test("relay output is delivered before optional WebRTC starts, including hidden 
     .toBe(1);
   await page.evaluate(() => (window as any).transport.close());
 });
+
+test("a stalled browser handshake races one replacement and only the winner starts a terminal", async ({
+  page,
+}) => {
+  const bundle = await build({
+    stdin: {
+      contents:
+        'import { TerminalTransport } from "./src/terminal-transport"; globalThis.TestTerminalTransport = TerminalTransport;',
+      resolveDir: path.resolve("."),
+      loader: "ts",
+    },
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    write: false,
+  });
+  await page.goto("about:blank");
+  await page.evaluate(() => {
+    const all: any[] = [];
+    (window as any).candidates = all;
+    class Socket {
+      static OPEN = 1;
+      static CLOSED = 3;
+      readyState = 0;
+      sent: string[] = [];
+      onopen?: () => void;
+      onclose?: () => void;
+      constructor(public url: string) {
+        all.push(this);
+      }
+      send(s: string) {
+        this.sent.push(s);
+      }
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+      open() {
+        this.readyState = 1;
+        this.onopen?.();
+      }
+    }
+    (window as any).WebSocket = Socket;
+  });
+  await page.addScriptTag({ content: bundle.outputFiles[0].text });
+  await page.evaluate(() => {
+    (window as any).transport = new (window as any).TestTerminalTransport(
+      "wss://example.invalid/api/terminals/test/ws",
+      () => {},
+      "node",
+    );
+  });
+  await expect
+    .poll(() => page.evaluate(() => (window as any).candidates.length))
+    .toBe(2);
+  await page.evaluate(() => (window as any).candidates[1].open());
+  expect(
+    await page.evaluate(() =>
+      (window as any).candidates.map((s: any) => ({
+        state: s.readyState,
+        sent: s.sent,
+      })),
+    ),
+  ).toEqual([
+    { state: 3, sent: [] },
+    { state: 1, sent: ['{"type":"start"}'] },
+  ]);
+  await page.evaluate(() => {
+    (window as any).candidates[0].open();
+    (window as any).transport.close();
+  });
+  expect(
+    await page.evaluate(() =>
+      (window as any).candidates.every((s: any) => s.readyState === 3),
+    ),
+  ).toBe(true);
+  await page.waitForTimeout(700);
+  expect(await page.evaluate(() => (window as any).candidates.length)).toBe(2);
+});
