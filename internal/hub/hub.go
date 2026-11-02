@@ -790,6 +790,16 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 		h.nodeMu.Unlock()
 		return
 	}
+	// Deliver the authenticated route hint before publishing this control
+	// connection, so an immediate attachment cannot overtake the hint.
+	tailnetHost := ""
+	if u, e := url.Parse(h.cfg.TailnetProbeURL); e == nil && strings.HasSuffix(strings.ToLower(u.Hostname()), ".ts.net") {
+		tailnetHost = u.Hostname()
+	}
+	if err := s.JSON(protocol.Message{Type: "hub.transport", TailnetHost: tailnetHost}); err != nil {
+		h.nodeMu.Unlock()
+		return
+	}
 	h.mu.Lock()
 	old := h.agents[node]
 	h.agents[node] = a

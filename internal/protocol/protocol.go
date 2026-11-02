@@ -102,6 +102,7 @@ type Message struct {
 	RootRevision  int64             `json:"root_revision,omitempty"`
 	OperationID   string            `json:"operation_id,omitempty"`
 	ErrorCode     string            `json:"error_code,omitempty"`
+	TailnetHost   string            `json:"tailnet_host,omitempty"`
 }
 
 type ICECandidate struct {

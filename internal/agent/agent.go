@@ -37,6 +37,9 @@ type Agent struct {
 	hardware       *protocol.NodeHardware
 	fileRatesMu    sync.Mutex
 	fileRates      map[string]*rate.Limiter
+	routeMu        sync.RWMutex
+	routePersistMu sync.Mutex
+	tailnetHost    string
 }
 
 func (a *Agent) commitGate() chan struct{} {
@@ -57,7 +60,9 @@ func New(dir, version string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{identity: identity, key: key, sessions: sessions, version: version, fileRateBytes: fileRate}, nil
+	a := &Agent{identity: identity, key: key, sessions: sessions, version: version, fileRateBytes: fileRate}
+	a.loadHubRouteHint()
+	return a, nil
 }
 func (a *Agent) dial(path, ticket string) (*protocol.Socket, error) {
 	url := "ws" + strings.TrimPrefix(a.identity.Hub, "http") + path
@@ -65,7 +70,7 @@ func (a *Agent) dial(path, ticket string) (*protocol.Socket, error) {
 	if ticket != "" {
 		headers.Set("X-Workdeck-Ticket", ticket)
 	}
-	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second, Proxy: nil}
+	dialer := websocket.Dialer{HandshakeTimeout: 15 * time.Second, Proxy: nil, NetDialContext: a.dialHubTCP, NetDialTLSContext: a.dialHubTLS}
 	conn, res, err := dialer.Dial(url, headers)
 	if err != nil {
 		if res != nil {
@@ -181,6 +186,8 @@ func (a *Agent) connected(parent context.Context) error {
 			return err
 		}
 		switch msg.Type {
+		case "hub.transport":
+			a.updateHubRouteHint(msg.TailnetHost)
 		case "codex.install", "codex.remove":
 			jobs.Add(1)
 			go func() {
