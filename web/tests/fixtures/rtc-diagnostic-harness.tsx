@@ -15,13 +15,16 @@ const sdp =
 class FakeWebSocket {
   static OPEN = 1;
   static CLOSED = 3;
-  readyState = 1;
+  readyState = 0;
   binaryType = "arraybuffer";
+  onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   constructor(_url: string) {
     setTimeout(() => {
+      this.readyState = 1;
+      this.onopen?.();
       this.onmessage?.({
         data: JSON.stringify({ type: "ready", readonly: false }),
       });

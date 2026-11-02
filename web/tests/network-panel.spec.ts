@@ -51,6 +51,15 @@ test("shows every transport, truthful unmeasured states, current route and polic
     "",
   );
   await expect(page.locator(".terminal-network > summary")).toBeFocused();
+  await page.getByRole("button", { name: "模拟连接中" }).click();
+  await page.locator(".terminal-network > summary").click();
+  await expect(panel.locator(".network-path-card.selected")).toHaveCount(0);
+  await expect(panel.locator(".network-current-copy")).toContainText(
+    "正在连接",
+  );
+  await expect(
+    panel.getByLabel("HTTP 流式中转指标", { exact: true }),
+  ).toContainText("未启用");
 });
 
 test("network popover stays inside desktop windows", async ({ page }) => {

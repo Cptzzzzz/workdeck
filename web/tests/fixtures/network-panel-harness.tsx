@@ -86,6 +86,18 @@ function Harness() {
       <h1 style={{ fontSize: 18 }}>网络详情预览</h1>
       <button onClick={() => set(snapshot(true))}>模拟直连</button>
       <button onClick={() => set(snapshot(false))}>模拟 HTTP</button>
+      <button
+        onClick={() =>
+          set({
+            ...initialTransportStatus(),
+            relayCandidates: {
+              websocket: { state: "connecting", attempts: 1 },
+            },
+          })
+        }
+      >
+        模拟连接中
+      </button>
       <div style={{ position: "fixed", bottom: 24, right: 24 }}>
         <NetworkPanel status={s} nodeName="开发节点" onRetryDirect={() => {}} />
       </div>

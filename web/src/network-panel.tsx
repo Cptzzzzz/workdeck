@@ -80,7 +80,10 @@ function relayCard(status: TransportStatus, protocol: RelayProtocol): LinkCard {
   const ownsRelay = (status.relayProtocol || "websocket") === protocol;
   const candidate = status.relayCandidates?.[protocol];
   const metrics = ownsRelay ? status.relay : undefined;
-  const selected = status.route === "relay" && ownsRelay;
+  const selected =
+    status.route === "relay" &&
+    ownsRelay &&
+    (!!status.relayProtocol || status.relay.state === "available");
   const labels = {
     connecting: "连接中",
     open: "备用就绪",
@@ -267,9 +270,18 @@ export function NetworkPanel({
       anchor?.removeEventListener("toggle", onToggle);
     };
   }, []);
+  const connecting =
+    status.route === "relay" &&
+    !status.relayProtocol &&
+    !!status.relayCandidates &&
+    status.relay.state !== "available";
   const relayName =
     status.relayProtocol === "http-stream" ? "HTTP 流式中转" : "WebSocket 中转";
-  const currentName = status.route === "direct" ? "WebRTC 直连" : relayName;
+  const currentName = connecting
+    ? "正在连接"
+    : status.route === "direct"
+      ? "WebRTC 直连"
+      : relayName;
   const tailMetrics =
     status.alternatives?.tailnet ||
     (status.alternative?.mode === "tailnet"
@@ -357,13 +369,15 @@ export function NetworkPanel({
             }
           />
           <span>
-            {status.route === "relay"
-              ? status.relayProtocol === "http-stream"
-                ? "HTTP"
-                : "WebSocket"
-              : "WebRTC"}
+            {connecting
+              ? "连接中"
+              : status.route === "relay"
+                ? status.relayProtocol === "http-stream"
+                  ? "HTTP"
+                  : "WebSocket"
+                : "WebRTC"}
           </span>
-          <strong>{latency(status[status.route])}</strong>
+          <strong>{connecting ? "—" : latency(status[status.route])}</strong>
         </span>
         <ChevronDown className="network-expand" size={14} />
       </summary>
@@ -387,11 +401,15 @@ export function NetworkPanel({
             <X size={16} />
           </button>
         </div>
-        <div className="network-current-route" data-route={status.route}>
+        <div
+          className="network-current-route"
+          data-route={status.route}
+          data-state={connecting ? "connecting" : "connected"}
+        >
           <div className="network-current-copy">
             <span className="network-eyebrow">
               <i />
-              当前使用的链路
+              {connecting ? "正在寻找可用通道" : "当前使用的链路"}
             </span>
             <b>{currentName}</b>
             <p>
@@ -407,7 +425,7 @@ export function NetworkPanel({
             </p>
           </div>
           <div className="network-current-latency">
-            <strong>{latency(status[status.route])}</strong>
+            <strong>{connecting ? "—" : latency(status[status.route])}</strong>
             <small>到节点的往返延迟</small>
           </div>
         </div>
