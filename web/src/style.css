@@ -2055,7 +2055,8 @@ main {
   font-size: 9px;
   overflow-wrap: anywhere;
 }
-.network-comparison {
+.network-comparison,
+.network-candidate-summary {
   color: #d5ba90;
   margin: 12px 0 5px;
 }

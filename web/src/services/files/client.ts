@@ -128,6 +128,7 @@ export class FileClient {
   private directLatency?: number;
   private tailscaleCandidate?: "possible" | "other" | "unknown";
   private direct?: FileDirect;
+  private directTimer = 0;
   private activeRoute: Route = "relay";
   private epoch = 1;
   get route(): Route {
@@ -216,6 +217,7 @@ export class FileClient {
   private fail(error: Error, intentional = false): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.directTimer) clearTimeout(this.directTimer);
     if (!intentional && this.activeRoute === "direct") this.direct?.penalize();
     this.direct?.close();
     if (this.metricsTimer) clearInterval(this.metricsTimer);
@@ -355,40 +357,46 @@ export class FileClient {
               url.length < 256,
           )
         ) {
-          this.direct = new FileDirect({
-            workspace: this.workspace,
-            id: () => this.id(),
-            epoch: () => this.epoch,
-            route: () => this.activeRoute,
-            busy: () => this.pending.size > 0,
-            relay: (data) => this.sendWire("relay", "control", data),
-            switchRoute: (target) => this.switchRoute(target),
-            receive: (r, c, d) => this.receive(r, c, d),
-            unavailable: (active) => {
-              this.directLatency = undefined;
-              this.tailscaleCandidate = undefined;
-              this.publishMetrics();
-              if (active)
-                this.fail(
-                  new FileServiceError(
-                    "CONNECTION_LOST",
-                    "文件直连中断，正在恢复中转",
-                  ),
-                );
-            },
-            candidateHint: (hint) => {
-              if (hint !== this.tailscaleCandidate) {
-                this.tailscaleCandidate = hint;
+          const iceServers = result.ice_servers;
+          // Let the caller request and render the tree over the ready relay
+          // before starting optional WebRTC negotiation.
+          this.directTimer = window.setTimeout(() => {
+            if (this.closed || !this.ready) return;
+            this.direct = new FileDirect({
+              workspace: this.workspace,
+              id: () => this.id(),
+              epoch: () => this.epoch,
+              route: () => this.activeRoute,
+              busy: () => this.pending.size > 0,
+              relay: (data) => this.sendWire("relay", "control", data),
+              switchRoute: (target) => this.switchRoute(target),
+              receive: (r, c, d) => this.receive(r, c, d),
+              unavailable: (active) => {
+                this.directLatency = undefined;
+                this.tailscaleCandidate = undefined;
                 this.publishMetrics();
-              }
-            },
-            metrics: (relay, direct) => {
-              this.relayLatency = relay ?? undefined;
-              this.directLatency = direct ?? undefined;
-              this.publishMetrics();
-            },
-          });
-          void this.direct.start(result.ice_servers);
+                if (active)
+                  this.fail(
+                    new FileServiceError(
+                      "CONNECTION_LOST",
+                      "文件直连中断，正在恢复中转",
+                    ),
+                  );
+              },
+              candidateHint: (hint) => {
+                if (hint !== this.tailscaleCandidate) {
+                  this.tailscaleCandidate = hint;
+                  this.publishMetrics();
+                }
+              },
+              metrics: (relay, direct) => {
+                this.relayLatency = relay ?? undefined;
+                this.directLatency = direct ?? undefined;
+                this.publishMetrics();
+              },
+            });
+            void this.direct.start(iceServers);
+          }, 500);
         }
         return;
       }

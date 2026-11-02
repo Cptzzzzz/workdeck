@@ -411,6 +411,8 @@ function App() {
   const changeMode = async (next: "terminal" | "workspace") => {
     if (document.fullscreenElement)
       await document.exitFullscreen().catch(() => {});
+    if (next === "workspace" && !active && tabs.length)
+      setActive(tabs[tabs.length - 1]);
     setMode(next);
   };
   const workspace = useWorkspace(
@@ -1163,7 +1165,7 @@ function App() {
                 const s = status(t, n);
                 const attachable =
                   n?.online &&
-                  ["running", "exited"].includes(t.state) &&
+                  ["running", "exited", "creating"].includes(t.state) &&
                   t.desired_state !== "closed";
                 return (
                   <article className="terminal-card" key={t.id}>
@@ -1200,7 +1202,7 @@ function App() {
                       </details>
                     </div>
                     <h3>
-                      <button onClick={() => attachable && open(t.id)}>
+                      <button disabled={!attachable} onClick={() => open(t.id)}>
                         {t.name}
                       </button>
                     </h3>

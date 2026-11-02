@@ -198,6 +198,7 @@ export function TerminalView({
           if (gen === generation) currentPressure.sample(route, rtt);
         },
         terminal.id,
+        () => visibleRef.current,
       );
       socket.current = ws;
       ws.onmessage = (e) => {
@@ -224,6 +225,7 @@ export function TerminalView({
         }
         const bytes = new Uint8Array(e.data);
         term.write(bytes, () => {
+          if (gen === generation) ws.outputRendered();
           if (ws.readyState === WebSocket.OPEN && gen === generation)
             ws.send(JSON.stringify({ type: "ack", bytes: bytes.byteLength }));
         });
@@ -288,6 +290,7 @@ export function TerminalView({
   }, [visible]);
   useEffect(() => {
     if (visible && layoutVisible) {
+      socket.current?.terminalVisible();
       const frame = requestAnimationFrame(() => fitRef.current());
       return () => cancelAnimationFrame(frame);
     }

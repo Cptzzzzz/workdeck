@@ -363,6 +363,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
         };
       });
       const viewer = await other.newPage();
+      await viewer.bringToFront();
       await login(viewer);
       const name = (await readState(page)).terminals.find(
         (t: { id: string }) => t.id === id,
@@ -388,6 +389,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
               ),
             );
       });
+      await page.bringToFront();
       await type(
         page,
         "printf 'readonly-marker=%s\\n' \"${WORKDECK_READONLY_ATTACK:-blocked}\"",
@@ -395,6 +397,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
       await expect(page.locator(".xterm-screen")).toContainText(
         "readonly-marker=blocked",
       );
+      await viewer.bringToFront();
       await viewer
         .getByRole("button", { name: "接管终端", exact: true })
         .click();
@@ -432,6 +435,7 @@ test("automatic direct path carries terminal bytes; failure falls back without r
     } finally {
       await other.close();
     }
+    await page.bringToFront();
     await page.getByRole("button", { name: "接管终端", exact: true }).click();
     await expect(page.locator(".terminal-state")).toContainText("控制中");
     await expect(page.locator(".terminal-network > summary")).toContainText(

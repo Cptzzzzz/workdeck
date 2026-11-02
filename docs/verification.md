@@ -12,6 +12,7 @@ python3 scripts/check-publication.py --history
 cd web
 npx playwright install chromium
 npx playwright test transport-policy.spec.ts network-metrics.spec.ts terminal-dom-rendering.spec.ts
+npx playwright test terminal-first-paint.spec.ts
 ```
 
 Go 测试覆盖登录、CSRF / Origin、节点接入及重试、防重放、改密撤销、状态恢复、目录读取、服务账户和附着连接清理。前端独立用例覆盖链路选择、网络统计和实际 xterm DOM 渲染，不需要 Hub 或计算节点。
@@ -47,6 +48,7 @@ WORKDECK_TEST_PASSWORD_FILE=../.secrets/administrator.txt \
 | 开关 | 作用 |
 | --- | --- |
 | `WORKDECK_DIRECT_ACCEPTANCE=1` | 执行真实 DataChannel 及直连回退验收，需环境允许建立本地或公网直连 |
+| `WORKDECK_FILE_TEST_ROOT` | 指定独立测试目录，运行工作区文件及多终端切换验收；测试会创建并删除自己的文件和终端 |
 | `WORKDECK_TEST_ALT_MODE=tailnet` | 与直连验收开关同时设置时，让独立候选测试使用节点的 Tailscale 接口；测试节点需要该接口 |
 | `WORKDECK_TEST_ALT_FROM_DIRECT=1` | 与直连验收开关同时设置时，验证从现有直连经有序切换迁移到更优候选 |
 | `WORKDECK_RECOVERY=1` | 执行服务重启恢复验收，需配置测试用 SSH 目标与服务管理权限 |

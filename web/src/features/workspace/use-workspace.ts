@@ -113,6 +113,7 @@ export function useWorkspace(
   );
   const directoryFilterRef = useRef(new Map<string, string>());
   const directoryRequests = useRef(new Map<string, number>());
+  const directoryApplied = useRef(new Map<string, number>());
   const [showHidden, setShowHidden] = useState(() => {
     try {
       return localStorage.getItem("workdeck.showHiddenFiles") === "true";
@@ -263,12 +264,23 @@ export function useWorkspace(
       } while (entries.length < 20000);
       if (
         gen === generation.current &&
-        directoryRequests.current.get(path) === request
-      )
-        setDirectories((previous) => ({
-          ...previous,
-          [path]: { entries, truncated, filter },
-        }));
+        request >= (directoryApplied.current.get(path) || 0) &&
+        (directoryFilterRef.current.get(path) || "") === filter &&
+        showHiddenRef.current === hidden
+      ) {
+        directoryApplied.current.set(path, request);
+        setDirectories((previous) => {
+          if (
+            gen !== generation.current ||
+            clientRef.current !== client ||
+            directoryApplied.current.get(path) !== request ||
+            (directoryFilterRef.current.get(path) || "") !== filter ||
+            showHiddenRef.current !== hidden
+          )
+            return previous;
+          return { ...previous, [path]: { entries, truncated, filter } };
+        });
+      }
     },
     [],
   );
@@ -320,6 +332,7 @@ export function useWorkspace(
   );
   useEffect(() => {
     const gen = ++generation.current;
+    const abort = new AbortController();
     let stopped = false,
       client: FileClient | undefined,
       retry = 0;
@@ -333,6 +346,7 @@ export function useWorkspace(
       setDirectories({});
       directoryFilterRef.current = new Map();
       directoryRequests.current = new Map();
+      directoryApplied.current = new Map();
       setDirectoryFilters(new Map());
       setExpanded(new Set(["."]));
       setSelected(null);
@@ -362,7 +376,10 @@ export function useWorkspace(
               ? `工作区目录正在恢复：${view.pending_target}，请稍后重试`
               : "工作区正在恢复，请稍后重试",
           );
-        const connected = await FileClient.connect(view.workspace);
+        const connected = await FileClient.connect(
+          view.workspace,
+          abort.signal,
+        );
         if (stopped || gen !== generation.current) {
           connected.close();
           return;
@@ -404,41 +421,48 @@ export function useWorkspace(
             scheduleRetry(3000);
           }
         });
+        // Render the remote tree as soon as the relay is usable. Local draft
+        // reconciliation is independent and must not block directory loading.
+        const currentWorkspace = view.workspace;
+        const rootLoading = loadDirectory(connected, ".", gen);
+        void (async () => {
+          try {
+            const pending = await listCreateIntents({
+              account,
+              nodeID: terminal.node_id,
+              workspaceID: currentWorkspace.id,
+              rootRevision: currentWorkspace.root_revision,
+            });
+            const deleted = await listDeletedDrafts({
+              account,
+              nodeID: terminal.node_id,
+              workspaceID: currentWorkspace.id,
+              rootRevision: currentWorkspace.root_revision,
+            });
+            const recoverable = await listRecoverableDrafts({
+              account,
+              nodeID: terminal.node_id,
+              workspaceID: currentWorkspace.id,
+              rootRevision: currentWorkspace.root_revision,
+            });
+            if (!stopped && gen === generation.current)
+              setDeletedDrafts(deleted);
+            if (!stopped && gen === generation.current)
+              setRecoverableDrafts(recoverable);
+            if (!stopped && gen === generation.current)
+              setIntents((old) => [
+                ...pending,
+                ...old.filter(
+                  (item) => !pending.some((other) => other.opID === item.opID),
+                ),
+              ]);
+          } catch (e) {
+            if (!stopped && gen === generation.current)
+              setError("无法读取待确认的文件操作：" + (e as Error).message);
+          }
+        })();
         try {
-          const pending = await listCreateIntents({
-            account,
-            nodeID: terminal.node_id,
-            workspaceID: view.workspace.id,
-            rootRevision: view.workspace.root_revision,
-          });
-          const deleted = await listDeletedDrafts({
-            account,
-            nodeID: terminal.node_id,
-            workspaceID: view.workspace.id,
-            rootRevision: view.workspace.root_revision,
-          });
-          const recoverable = await listRecoverableDrafts({
-            account,
-            nodeID: terminal.node_id,
-            workspaceID: view.workspace.id,
-            rootRevision: view.workspace.root_revision,
-          });
-          if (!stopped && gen === generation.current) setDeletedDrafts(deleted);
-          if (!stopped && gen === generation.current)
-            setRecoverableDrafts(recoverable);
-          if (!stopped && gen === generation.current)
-            setIntents((old) => [
-              ...pending,
-              ...old.filter(
-                (item) => !pending.some((other) => other.opID === item.opID),
-              ),
-            ]);
-        } catch (e) {
-          if (!stopped && gen === generation.current)
-            setError("无法读取待确认的文件操作：" + (e as Error).message);
-        }
-        try {
-          await loadDirectory(connected, ".", gen);
+          await rootLoading;
         } catch (e) {
           if (
             e instanceof FileServiceError &&
@@ -469,6 +493,7 @@ export function useWorkspace(
     void run();
     return () => {
       stopped = true;
+      abort.abort();
       if (retry) clearTimeout(retry);
       if (clientRef.current === client) clientRef.current = null;
       client?.close();
@@ -679,18 +704,25 @@ export function useWorkspace(
     [checkArchivedScope],
   );
 
-  const refreshActive = useRef(false);
-  const refreshPending = useRef(false);
+  const refreshActive = useRef<{
+    client: FileClient;
+    gen: number;
+    pending: boolean;
+  } | null>(null);
   const refreshLatest = useRef<() => Promise<void>>(async () => {});
   const refresh = useCallback(async () => {
     const client = clientRef.current,
       gen = generation.current;
     if (!client || renameLock.current) return;
-    if (refreshActive.current) {
-      refreshPending.current = true;
+    if (
+      refreshActive.current?.client === client &&
+      refreshActive.current.gen === gen
+    ) {
+      refreshActive.current.pending = true;
       return;
     }
-    refreshActive.current = true;
+    const running = { client, gen, pending: false };
+    refreshActive.current = running;
     try {
       for (const path of expanded) await loadDirectory(client, path, gen);
       const doc = selected ? docs.current.get(selected) : undefined;
@@ -807,10 +839,9 @@ export function useWorkspace(
     } catch (e) {
       if (gen === generation.current) setError((e as Error).message);
     } finally {
-      refreshActive.current = false;
-      if (refreshPending.current) {
-        refreshPending.current = false;
-        queueMicrotask(() => void refreshLatest.current());
+      if (refreshActive.current === running) {
+        refreshActive.current = null;
+        if (running.pending) queueMicrotask(() => void refreshLatest.current());
       }
     }
   }, [account, expanded, loadDirectory, persist, selected, update, workspace]);

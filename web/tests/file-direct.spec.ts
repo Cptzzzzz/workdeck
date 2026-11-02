@@ -355,11 +355,13 @@ test("workspace displays direct file route and keeps editing available", async (
     await page.reload();
     await page.getByRole("button", { name, exact: true }).click();
     await page.getByRole("button", { name: "工作区模式" }).click();
-    await expect(page.locator(".workbench-route")).toContainText(
-      "WebRTC 直连",
+    await expect(page.locator(".file-network > summary")).toContainText(
+      "直连",
       { timeout: 35000 },
     );
-    await expect(page.locator(".workbench-route")).toContainText("中转");
+    await page.locator(".file-network > summary").click();
+    await expect(page.locator(".file-network")).toContainText("中转延迟");
+    await page.locator(".file-network > summary").click();
     await page.getByRole("button", { name: "file.txt", exact: true }).click();
     const editor = page.locator(".monaco-editor textarea.inputarea");
     await expect(editor).toBeAttached();

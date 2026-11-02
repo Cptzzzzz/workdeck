@@ -21,7 +21,7 @@ type iceWireSummary = protocol.RTCWireSummary
 func (t *iceWireTrace) snapshot() iceWireSummary {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return iceWireSummary{t.sent, t.received, t.successSent, t.successReceived, t.errorSent, t.errorReceived, t.writeErrors}
+	return iceWireSummary{Sent: t.sent, Received: t.received, SuccessSent: t.successSent, SuccessReceived: t.successReceived, ErrorSent: t.errorSent, ErrorReceived: t.errorReceived, WriteErrors: t.writeErrors}
 }
 func (t *iceWireTrace) observe(b []byte, outgoing bool, sendErr error) {
 	if len(b) < 20 || binary.BigEndian.Uint32(b[4:8]) != 0x2112a442 {

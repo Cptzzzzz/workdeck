@@ -111,8 +111,12 @@ export class TerminalTransport {
   private lastSwitch = 0;
   private misses = 0;
   private key: string;
+  private rtcConfig?: { urls: string[]; trickle: boolean; trace: boolean };
+  private initialOutputRendered = false;
+  private rtcStartScheduled = false;
   private onVisible = () => {
     if (!document.hidden) {
+      this.schedulePeer();
       this.tickTraffic();
       void this.compare();
       void this.checkHealth();
@@ -125,6 +129,7 @@ export class TerminalTransport {
     node: string,
     private reportProbe?: (route: Route, rtt: number | null) => void,
     private terminalID = "",
+    private isTerminalVisible: () => boolean = () => true,
   ) {
     this.key = node;
     this.status.previousRtcDiagnostic = loadRtcReport(terminalID);
@@ -141,6 +146,37 @@ export class TerminalTransport {
     };
     this.ws.onerror = () => this.onerror?.();
     document.addEventListener("visibilitychange", this.onVisible);
+  }
+
+  // The relay is already serving the terminal. Defer optional peer setup
+  // until the first output has been rendered and this tab is actually visible.
+  outputRendered(): void {
+    if (this.initialOutputRendered) return;
+    this.initialOutputRendered = true;
+    this.schedulePeer();
+  }
+  terminalVisible(): void {
+    this.schedulePeer();
+  }
+  private schedulePeer(): void {
+    if (
+      this.closed ||
+      !this.rtcConfig ||
+      !this.initialOutputRendered ||
+      this.rtcStartScheduled ||
+      document.hidden ||
+      !this.isTerminalVisible()
+    )
+      return;
+    this.rtcStartScheduled = true;
+    this.later(() => {
+      this.rtcStartScheduled = false;
+      if (document.hidden || !this.isTerminalVisible() || !this.rtcConfig)
+        return;
+      const config = this.rtcConfig;
+      this.rtcConfig = undefined;
+      void this.startPeer(config.urls, config.trickle, config.trace);
+    }, 150);
   }
 
   private publish(change: Partial<TransportStatus> = {}) {
@@ -415,11 +451,12 @@ export class TerminalTransport {
     if (frame.type === "rtc-config" && route === "relay") {
       this.pathsAvailable = frame.rtc_paths === true;
       this.iceURLs = frame.ice_servers || [];
-      void this.startPeer(
-        frame.ice_servers || [],
-        frame.rtc_trickle === true,
-        frame.rtc_trace_available === true,
-      );
+      this.rtcConfig = {
+        urls: this.iceURLs,
+        trickle: frame.rtc_trickle === true,
+        trace: frame.rtc_trace_available === true,
+      };
+      this.schedulePeer();
       return;
     }
     if (
@@ -526,7 +563,11 @@ export class TerminalTransport {
       return;
     }
     if (route === "relay") {
-      if (frame.type === "ready") this.startMonitoring();
+      if (frame.type === "ready") {
+        this.startMonitoring();
+        // A silent shell must still eventually receive the optional probe.
+        this.later(() => this.outputRendered(), 1500);
+      }
       this.onmessage?.({ data });
     }
   }

@@ -130,8 +130,10 @@ func (s *Sessions) inspect(t protocol.Session) protocol.Session {
 	return t
 }
 func (s *Sessions) Inventory() ([]protocol.Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	return s.inventory(context.Background())
+}
+
+func (s *Sessions) inventory(ctx context.Context) ([]protocol.Session, error) {
 	list := []protocol.Session{}
 	files, err := os.ReadDir(filepath.Join(s.dir, "sessions"))
 	if err != nil {
@@ -140,6 +142,9 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 	var snapshotErr error
 	processes := codexProcesses()
 	for _, entry := range files {
+		if err := ctx.Err(); err != nil {
+			return list, err
+		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
@@ -148,7 +153,9 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 		if !validID(id) {
 			continue
 		}
+		s.mu.Lock()
 		t, e := s.read(id)
+		s.mu.Unlock()
 		if e != nil {
 			snapshotErr = errors.New("部分会话记录无法读取，已保留主服务中的原状态")
 			continue
@@ -169,15 +176,33 @@ func (s *Sessions) Inventory() ([]protocol.Session, error) {
 			t.Scope = serviceScope()
 		}
 		t = s.inspect(t)
+		if err := ctx.Err(); err != nil {
+			return list, err
+		}
 		if t.State == "running" && t.BootID == "" {
 			t.BootID = s.bootID
 		}
 		updated, _ := json.Marshal(t)
-		if string(previous) != string(updated) {
+		// Inspection invokes tmux and can take seconds per session. Never hold
+		// the session lock during it: attachments and file workers must remain
+		// responsive. Recheck under the lock so a concurrent close or other
+		// update cannot be overwritten by this older observation.
+		s.mu.Lock()
+		current, currentErr := s.read(id)
+		currentJSON, _ := json.Marshal(current)
+		if currentErr != nil || current.ID != id {
+			snapshotErr = errors.New("部分会话记录无法读取，已保留主服务中的原状态")
+			s.mu.Unlock()
+			continue
+		}
+		if string(currentJSON) != string(previous) {
+			t = current
+		} else if string(previous) != string(updated) {
 			if err := atomicJSON(s.path(t.ID), t); err != nil {
 				snapshotErr = err
 			}
 		}
+		s.mu.Unlock()
 		t.Codex = s.codexObservation(t.ID)
 		if t.Codex != nil && t.State == "running" && t.PanePID > 0 {
 			if _, ok := processes[t.PanePID]; ok {
@@ -287,12 +312,21 @@ func (s *Sessions) AttachCommand(id string, readonly bool) (*exec.Cmd, error) {
 	}
 	s.mu.Lock()
 	t, err := s.read(id)
-	if err == nil {
-		t = s.inspect(t)
-	}
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	before, _ := json.Marshal(t)
+	t = s.inspect(t)
+	s.mu.Lock()
+	current, err := s.read(id)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	currentJSON, _ := json.Marshal(current)
+	if string(currentJSON) != string(before) {
+		t = current
 	}
 	if t.State != "running" && t.State != "exited" {
 		return nil, fmt.Errorf("终端无法连接：%s", t.State)

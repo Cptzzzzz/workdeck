@@ -254,7 +254,7 @@ export function NetworkPanel({
           {latencyBenefit(status.relay, status.direct)}
         </p>
         {status.alternative && (
-          <p className="network-comparison">
+          <p className="network-candidate-summary">
             {status.alternative.mode === "tailnet"
               ? "Tailscale 接口候选"
               : "其他网络接口候选"}

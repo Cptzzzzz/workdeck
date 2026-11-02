@@ -161,9 +161,11 @@ test("rename preserves dirty editor content and terminal process", async ({
     await expect(resume).toBeEnabled({ timeout: 15000 });
     await resume.click();
     await expect(pending).toBeHidden();
-    await expect(page.locator(".workbench-editor-toolbar")).toContainText(
-      "renamed/one.txt",
-    );
+    await expect(
+      page
+        .locator(".workbench-tab.active")
+        .getByRole("button", { name: "关闭文件 renamed/one.txt" }),
+    ).toBeVisible();
     await expect(page.locator(".monaco-editor")).toContainText(
       "unsaved content",
     );

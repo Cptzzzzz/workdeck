@@ -26,6 +26,8 @@ type Agent struct {
 	sessions       *Sessions
 	version        string
 	stateMu        sync.Mutex
+	stateVersion   uint64
+	inventoryMu    sync.Mutex
 	controlMu      sync.Mutex
 	controllers    map[string]string
 	fileCommitOnce sync.Once
@@ -103,15 +105,20 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 }
-func (a *Agent) inventory(socket *protocol.Socket) error {
+func (a *Agent) inventory(ctx context.Context, socket *protocol.Socket) error {
+	// A full inventory can involve many slow tmux calls. Serialize inventories
+	// with each other, but do not block create/close while collecting one.
+	a.inventoryMu.Lock()
+	defer a.inventoryMu.Unlock()
 	a.stateMu.Lock()
-	defer a.stateMu.Unlock()
-	return a.sendInventory(socket)
-}
-func (a *Agent) sendInventory(socket *protocol.Socket) error {
+	version := a.stateVersion
+	a.stateMu.Unlock()
 	host, _ := os.Hostname()
 	home, _ := os.UserHomeDir()
-	sessions, snapshotErr := a.sessions.Inventory()
+	sessions, snapshotErr := a.sessions.inventory(ctx)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if snapshotErr != nil {
 		log.Printf("incomplete session inventory: %v", snapshotErr)
 	}
@@ -119,7 +126,15 @@ func (a *Agent) sendInventory(socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	return socket.JSON(protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "hardware-inventory-v1"}})
+	message := protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "hardware-inventory-v1"}}
+	a.stateMu.Lock()
+	defer a.stateMu.Unlock()
+	// A mutation result was sent after this snapshot began; never publish an
+	// older snapshot after it. The mutation schedules a fresh inventory.
+	if version != a.stateVersion {
+		return nil
+	}
+	return socket.JSON(message)
 }
 func (a *Agent) connected(parent context.Context) error {
 	socket, err := a.dial("/api/agent/control", "")
@@ -132,10 +147,13 @@ func (a *Agent) connected(parent context.Context) error {
 	go func() { <-ctx.Done(); socket.Close() }()
 	go socket.Heartbeat(ctx.Done())
 	log.Printf("connected to %s as %s", a.identity.Hub, a.identity.Name)
-	if err = a.inventory(socket); err != nil {
-		return err
-	}
 	go func() {
+		// The Hub can already send attachments as soon as this control socket
+		// connects. Do not leave those requests waiting for the first full scan.
+		if err := a.inventory(ctx, socket); err != nil {
+			socket.Close()
+			return
+		}
 		t := time.NewTicker(10 * time.Second)
 		defer t.Stop()
 		for {
@@ -143,7 +161,7 @@ func (a *Agent) connected(parent context.Context) error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := a.inventory(socket); err != nil {
+				if err := a.inventory(ctx, socket); err != nil {
 					socket.Close()
 					return
 				}
@@ -242,7 +260,6 @@ func (a *Agent) connected(parent context.Context) error {
 			go func() {
 				defer jobs.Done()
 				a.stateMu.Lock()
-				defer a.stateMu.Unlock()
 				result := protocol.Message{Type: "result", RequestID: msg.RequestID, TerminalID: msg.TerminalID}
 				var t protocol.Session
 				var e error
@@ -263,8 +280,10 @@ func (a *Agent) connected(parent context.Context) error {
 					}
 				}
 				result.Session = &t
+				a.stateVersion++
 				_ = socket.JSON(result)
-				_ = a.sendInventory(socket)
+				a.stateMu.Unlock()
+				_ = a.inventory(ctx, socket)
 			}()
 		}
 	}

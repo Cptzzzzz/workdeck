@@ -65,6 +65,13 @@ function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE, 2);
     let rejected = false;
+    // A stalled browser storage operation must not leave file opening pending
+    // forever. Callers surface this error and keep saving disabled, preserving
+    // any draft that may become available later.
+    const timer = window.setTimeout(() => {
+      rejected = true;
+      reject(new Error("浏览器草稿存储响应超时，请检查后再保存"));
+    }, 3000);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(STORE))
         request.result.createObjectStore(STORE);
@@ -77,14 +84,17 @@ function openDB(): Promise<IDBDatabase> {
       }
     };
     request.onsuccess = () => {
+      clearTimeout(timer);
       if (rejected) request.result.close();
       else resolve(request.result);
     };
     request.onerror = () => {
+      clearTimeout(timer);
       rejected = true;
       reject(request.error || new Error("无法打开浏览器草稿存储"));
     };
     request.onblocked = () => {
+      clearTimeout(timer);
       rejected = true;
       reject(new Error("浏览器草稿存储被其他标签页阻塞"));
     };

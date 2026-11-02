@@ -97,7 +97,7 @@ export function SessionsPanel({
                     )[t.state] || t.state;
           const canOpen =
             !!node?.online &&
-            ["running", "exited"].includes(t.state) &&
+            ["running", "exited", "creating"].includes(t.state) &&
             t.desired_state !== "closed";
           const fileOnly =
             t.desired_state === "closed" ||
