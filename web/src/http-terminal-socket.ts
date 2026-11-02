@@ -15,6 +15,7 @@ export class HttpTerminalSocket {
   private flushing = false;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private watchIdle() {
+    if (this.readyState !== 1) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       if (document.hidden) {
@@ -53,6 +54,7 @@ export class HttpTerminalSocket {
       let pending = "";
       while (this.readyState !== 3) {
         const next = await reader.read();
+        if (this.readyState === 3) return;
         if (next.done) throw new Error("Terminal stream ended");
         this.watchIdle();
         pending += decoder.decode(next.value, { stream: true });
