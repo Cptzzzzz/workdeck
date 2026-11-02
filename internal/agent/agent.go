@@ -177,6 +177,7 @@ func (a *Agent) connected(parent context.Context) error {
 	fileWorkers := newFileWorkerPool(a)
 	defer fileWorkers.Close()
 	var jobs sync.WaitGroup
+	warmStarted := false
 	workspaceSlots := make(chan struct{}, 8)
 	fileSlots := make(chan struct{}, 16)
 	defer func() { cancel(); jobs.Wait() }()
@@ -188,6 +189,13 @@ func (a *Agent) connected(parent context.Context) error {
 		switch msg.Type {
 		case "hub.transport":
 			a.updateHubRouteHint(msg.TailnetHost)
+			if msg.WarmConnections > 0 && !warmStarted {
+				warmStarted = true
+				for i := 0; i < 2; i++ {
+					jobs.Add(1)
+					go func() { defer jobs.Done(); a.warmLoop(ctx, &jobs) }()
+				}
+			}
 		case "codex.install", "codex.remove":
 			jobs.Add(1)
 			go func() {
@@ -241,6 +249,9 @@ func (a *Agent) connected(parent context.Context) error {
 				}
 				a.controllers[msg.TerminalID] = msg.Ticket
 				a.controlMu.Unlock()
+			}
+			if msg.Prepared {
+				continue
 			}
 			jobs.Add(1)
 			go func() {
@@ -301,6 +312,10 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 		return err
 	}
 	defer socket.Close()
+	return a.attachSocket(parent, msg, socket)
+}
+
+func (a *Agent) attachSocket(parent context.Context, msg protocol.Message, socket *protocol.Socket) error {
 	cmd, err := a.sessions.AttachCommand(msg.TerminalID, msg.ReadOnly)
 	if err != nil {
 		_ = socket.JSON(protocol.Frame{Type: "error", Message: err.Error()})

@@ -37,6 +37,8 @@ type attempt struct {
 type agentConn struct {
 	socket *protocol.Socket
 	nodeID string
+	warm   []*warmSocket
+	done   <-chan struct{}
 }
 type pending struct {
 	nodeID, terminalID string
@@ -161,6 +163,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/workspaces/{id}/ws", h.protected(h.browserFileSocket))
 	m.HandleFunc("POST /api/workspaces/{id}/downloads", h.protected(h.newDownloadTicket))
 	m.HandleFunc("GET /api/workspaces/{id}/downloads/{ticket}", h.protected(h.downloadFile))
+	m.HandleFunc("POST /api/terminal-startup", h.protected(h.recordTerminalStartup))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
@@ -170,6 +173,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("POST /api/agent/enroll", h.enroll)
 	m.HandleFunc("GET /api/agent/control", h.controlSocket)
 	m.HandleFunc("GET /api/agent/data", h.dataSocket)
+	m.HandleFunc("GET /api/agent/standby", h.standbySocket)
 	m.HandleFunc("GET /api/agent/files", h.agentFileSocket)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { failure(w, 404, "接口不存在") })
 	m.HandleFunc("/", h.assets)
@@ -780,7 +784,7 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{})
 	defer close(done)
 	go s.Heartbeat(done)
-	a := &agentConn{s, node}
+	a := &agentConn{socket: s, nodeID: node, done: done}
 	// Recheck revocation after the upgrade under the same lock used by node
 	// removal. A handshake authenticated just before revocation cannot
 	// reinstall the node's control connection afterwards.
@@ -796,7 +800,7 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 	if u, e := url.Parse(h.cfg.TailnetProbeURL); e == nil && strings.HasSuffix(strings.ToLower(u.Hostname()), ".ts.net") {
 		tailnetHost = u.Hostname()
 	}
-	if err := s.JSON(protocol.Message{Type: "hub.transport", TailnetHost: tailnetHost}); err != nil {
+	if err := s.JSON(protocol.Message{Type: "hub.transport", TailnetHost: tailnetHost, WarmConnections: 2}); err != nil {
 		h.nodeMu.Unlock()
 		return
 	}
@@ -936,6 +940,15 @@ func (h *Hub) allowWindowsRTCTrace(a *attachment) bool {
 	return true
 }
 func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
+	started := time.Now()
+	trace := r.URL.Query().Get("trace")
+	if !validStartupTrace(trace) {
+		trace = "legacy"
+	}
+	stage := func(name string) {
+		log.Printf("terminal startup trace=%s stage=%s elapsed_ms=%d", trace, name, time.Since(started).Milliseconds())
+	}
+	stage("hub_received")
 	t, err := h.store.terminal(r.PathValue("id"))
 	if err != nil {
 		failure(w, 404, "终端不存在")
@@ -988,18 +1001,45 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 	}()
 	// Closing a view never closes its tmux session.
 	go func() { <-ctx.Done(); browser.Close() }()
-	if err = agent.socket.JSON(protocol.Message{Type: "attach", TerminalID: t.ID, Ticket: ticket, ReadOnly: a.readonly, Cols: 100, Rows: 30}); err != nil {
-		return
-	}
+	attachMessage := protocol.Message{Type: "attach", TerminalID: t.ID, Ticket: ticket, ReadOnly: a.readonly, Cols: 100, Rows: 30}
 	var data *protocol.Socket
-	select {
-	case data = <-p.ch:
-	case <-ctx.Done():
-		return
-	case <-time.After(15 * time.Second):
-		_ = browser.JSON(protocol.Frame{Type: "error", Message: "连接节点超时，请重试"})
-		return
+	if lease := h.claimWarm(agent); lease != nil {
+		stage("warm_connection_claimed")
+		claim := attachMessage
+		claim.Prepared = true
+		if agent.socket.JSON(claim) == nil && lease.socket.JSON(attachMessage) == nil {
+			select {
+			case <-lease.ready:
+				data = lease.socket
+			case <-lease.dead:
+			case <-ctx.Done():
+			case <-time.After(time.Second):
+			}
+		}
+		if data != nil {
+			defer lease.releaseOnce()
+		} else {
+			lease.releaseOnce()
+			lease.socket.Close()
+		}
 	}
+	if data == nil {
+		stage("dispatch_agent")
+		if err = agent.socket.JSON(attachMessage); err != nil {
+			return
+		}
+		select {
+		case data = <-p.ch:
+			stage("agent_data_connected")
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Second):
+			stage("agent_timeout")
+			_ = browser.JSON(protocol.Frame{Type: "error", Message: "连接节点超时，请重试"})
+			return
+		}
+	}
+
 	defer data.Close()
 	go func() { <-ctx.Done(); data.Close() }()
 	done := make(chan struct{})
@@ -1010,6 +1050,7 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 		return
 	}
 	errorsCh := make(chan error, 2)
+	var firstOutput atomic.Bool
 	var nodeTraceAvailable atomic.Bool
 	go func() {
 		for {
@@ -1026,6 +1067,9 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 				if json.Unmarshal(b, &f) == nil && f.Type == "rtc-config" {
 					nodeTraceAvailable.Store(f.RTCTraceAvailable)
 				}
+			}
+			if kind == websocket.BinaryMessage && firstOutput.CompareAndSwap(false, true) {
+				stage("first_output_received")
 			}
 			if e = browser.Write(kind, b); e != nil {
 				errorsCh <- e

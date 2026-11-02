@@ -112,6 +112,31 @@ export class TerminalTransport {
   private misses = 0;
   private key: string;
   private rtcConfig?: { urls: string[]; trickle: boolean; trace: boolean };
+  private startupAt = performance.now();
+  private startupOpen = -1;
+  private startupReady = -1;
+  private startupTrace = Array.from(
+    crypto.getRandomValues(new Uint8Array(8)),
+    (b) => b.toString(16).padStart(2, "0"),
+  ).join("");
+  private startupRendered = false;
+  private recordStartup(stage: "waiting" | "rendered" | "closed") {
+    if (this.startupRendered) return;
+    const elapsed = Math.round(performance.now() - this.startupAt);
+    if (elapsed > 3600000) return;
+    if (stage === "rendered") this.startupRendered = true;
+    void api("/terminal-startup", {
+      method: "POST",
+      signal: AbortSignal.timeout(5000),
+      body: JSON.stringify({
+        trace: this.startupTrace,
+        stage,
+        elapsed_ms: elapsed,
+        open_ms: this.startupOpen,
+        ready_ms: this.startupReady,
+      }),
+    }).catch(() => {});
+  }
   private initialOutputRendered = false;
   private rtcStartScheduled = false;
   private onVisible = () => {
@@ -133,7 +158,13 @@ export class TerminalTransport {
   ) {
     this.key = node;
     this.status.previousRtcDiagnostic = loadRtcReport(terminalID);
-    this.ws = new WebSocket(url);
+    const startupURL = new URL(url);
+    startupURL.searchParams.set("trace", this.startupTrace);
+    this.ws = new WebSocket(startupURL);
+    this.ws.onopen = () => {
+      this.startupOpen = Math.round(performance.now() - this.startupAt);
+    };
+    this.later(() => this.recordStartup("waiting"), 5000);
     this.ws.binaryType = "arraybuffer";
     this.publish({
       route: "relay",
@@ -141,6 +172,7 @@ export class TerminalTransport {
     });
     this.ws.onmessage = (event) => this.receive("relay", event.data);
     this.ws.onclose = () => {
+      this.recordStartup("closed");
       this.dispose();
       this.onclose?.();
     };
@@ -151,6 +183,7 @@ export class TerminalTransport {
   // The relay is already serving the terminal. Defer optional peer setup
   // until the first output has been rendered and this tab is actually visible.
   outputRendered(): void {
+    this.recordStartup("rendered");
     if (this.initialOutputRendered) return;
     this.initialOutputRendered = true;
     this.schedulePeer();
@@ -564,9 +597,13 @@ export class TerminalTransport {
     }
     if (route === "relay") {
       if (frame.type === "ready") {
+        this.startupReady = Math.round(performance.now() - this.startupAt);
         this.startMonitoring();
         // A silent shell must still eventually receive the optional probe.
-        this.later(() => this.outputRendered(), 1500);
+        this.later(() => {
+          this.initialOutputRendered = true;
+          this.schedulePeer();
+        }, 1500);
       }
       this.onmessage?.({ data });
     }
