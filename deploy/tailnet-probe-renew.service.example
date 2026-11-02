@@ -1,0 +1,15 @@
+[Unit]
+Description=Renew Workdeck Tailnet probe certificate
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/workdeck-tailnet-probe-renew @TAILNET_DOMAIN@
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/workdeck-tailnet-probe /opt/stacks/workdeck/secrets/tailnet-probe
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
