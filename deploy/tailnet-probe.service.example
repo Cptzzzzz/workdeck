@@ -1,0 +1,27 @@
+# Replace every @...@ placeholder before installing. The account must only
+# read the three staged files and access the local Tailscale daemon.
+[Unit]
+Description=Workdeck Tailnet browser probe
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=simple
+User=workdeck-tailprobe
+Group=workdeck-tailprobe
+ExecStart=/usr/local/libexec/workdeck-tailnet-probe tailnet-probe --addr=@TAILSCALE_IP@:@PORT@ --origin=@PUBLIC_ORIGIN@ --secret-file=/var/lib/workdeck-tailnet-probe/secret --tls-cert-file=/var/lib/workdeck-tailnet-probe/cert.pem --tls-key-file=/var/lib/workdeck-tailnet-probe/key.pem
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
