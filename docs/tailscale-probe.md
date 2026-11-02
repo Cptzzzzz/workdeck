@@ -21,7 +21,7 @@ Hub 给已登录会话发放随机挑战。运行在 Hub 宿主机的 `workdeck 
 
 1. 在 Hub 的部署目录创建密钥文件（如用 `openssl rand -hex 32` 写入临时文件后原子安装），将文件设为 UID 65532 所有、权限 `0400`；Hub 容器与运行探测服务的账号必须有读取权限。部署脚本还会验证文件为普通文件、长度 32–4096 字节且不可被其他账号读取。
 2. 使用 Tailscale 提供的证书为节点的 `机器名.tailnet名.ts.net` 配置 HTTPS，证书和私钥保存在宿主机安全目录并按 Tailscale 的方式续期。探测服务绑定宿主机 `tailscale ip -4` 对应的精确 IP，而不是 `0.0.0.0`。
-3. 以受 systemd 管理的独立服务运行。可参考仓库中的 `deploy/tailnet-probe.service.example`，创建仅用于探测的专用系统账号，并把共享密钥和证书的只读副本放入该账号可读、其他用户不可读的目录。原始文件继续由 root 管理。证书或密钥更新后需原子更新副本并重启探测服务；不要让探测服务读取 Hub 的其他密钥。可参考 `scripts/renew-tailnet-probe.sh` 和 `deploy/tailnet-probe-renew.*.example` 配置每日续期检查；脚本在证书变化时原子切换，重启失败时恢复上一份证书。示例命令：
+3. 以受 systemd 管理的独立服务运行。可参考仓库中的 `deploy/tailnet-probe.service.example` 和 `scripts/start-tailnet-probe.sh`；启动脚本每次读取当前 Tailscale IPv4 地址，避免节点地址变化后继续监听旧地址。创建仅用于探测的专用系统账号，并把共享密钥和证书的只读副本放入该账号可读、其他用户不可读的目录。原始文件继续由 root 管理。证书或密钥更新后需原子更新副本并重启探测服务；不要让探测服务读取 Hub 的其他密钥。可参考 `scripts/renew-tailnet-probe.sh` 和 `deploy/tailnet-probe-renew.*.example` 配置每日续期检查；脚本在证书变化时原子切换，重启失败时恢复上一份证书。示例命令：
 
 ```sh
 workdeck tailnet-probe \
