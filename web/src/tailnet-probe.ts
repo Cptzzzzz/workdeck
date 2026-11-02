@@ -2,6 +2,15 @@ import { api } from "./services/api";
 
 type Status = "disabled" | "checking" | "available" | "unavailable";
 let status: Status = "disabled";
+let trace: { node_id: string; expires: number } | undefined;
+export function tailnetTraceEnabled(node: string): boolean {
+  return (
+    !!trace &&
+    trace.node_id === node &&
+    trace.expires * 1000 > Date.now() &&
+    status === "available"
+  );
+}
 const listeners = new Set<() => void>();
 export const readTailnetProbe = () => status;
 export function subscribeTailnetProbe(listener: () => void) {
@@ -103,6 +112,23 @@ export function startTailnetProbe(): () => void {
           if (!stopped && status === "available") publish("unavailable");
         }, 120000);
         publish("available");
+        void api<{ enabled: boolean; node_id?: string; expires?: number }>(
+          "/tailnet/diagnostic",
+          { signal },
+        )
+          .then((result) => {
+            if (
+              !stopped &&
+              result.enabled &&
+              /^[0-9a-f]{48}$/.test(result.node_id || "") &&
+              Number.isSafeInteger(result.expires)
+            )
+              trace = { node_id: result.node_id!, expires: result.expires! };
+            else trace = undefined;
+          })
+          .catch(() => {
+            trace = undefined;
+          });
       }
     } catch {
       if (!stopped) publish("unavailable");
@@ -114,6 +140,7 @@ export function startTailnetProbe(): () => void {
   return () => {
     stopped = true;
     current?.abort();
+    trace = undefined;
     if (timer) clearTimeout(timer);
     if (expiryTimer) clearTimeout(expiryTimer);
     document.removeEventListener("visibilitychange", visible);

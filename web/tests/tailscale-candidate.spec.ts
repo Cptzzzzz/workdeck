@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { tailscaleCandidateHint } from "../src/tailscale-candidate";
+import {
+  candidateNetworkScope,
+  tailscaleCandidateHint,
+} from "../src/tailscale-candidate";
 
 test("ICE candidate hints never claim a confirmed Tailscale connection", () => {
   expect(tailscaleCandidateHint("100.64.0.1", "100.127.255.254")).toBe(
@@ -13,4 +16,8 @@ test("ICE candidate hints never claim a confirmed Tailscale connection", () => {
   expect(tailscaleCandidateHint("private.local", "100.64.0.2")).toBe("unknown");
   expect(tailscaleCandidateHint(undefined, undefined)).toBe("unknown");
   expect(tailscaleCandidateHint("100.64.0.999", "100.64.0.2")).toBe("unknown");
+  expect(candidateNetworkScope("masked.local")).toBe(0);
+  expect(candidateNetworkScope("192.168.1.10")).toBe(1);
+  expect(candidateNetworkScope("192.0.2.1")).toBe(3);
+  expect(candidateNetworkScope("100.64.0.1")).toBe(2);
 });

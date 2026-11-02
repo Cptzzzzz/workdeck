@@ -6,7 +6,13 @@ import {
 } from "./transport-policy";
 import { readRoutePreference } from "./transport-preferences";
 import { loadRtcReport, RtcRecorder, type RtcReport } from "./rtc-diagnostics";
-import { tailscaleCandidateHint } from "./tailscale-candidate";
+import {
+  candidateNetworkScope,
+  candidateTypeCode,
+  tailscaleCandidateHint,
+} from "./tailscale-candidate";
+import { tailnetTraceEnabled } from "./tailnet-probe";
+import { api } from "./services/api";
 import {
   describeSamples,
   initialTransportStatus,
@@ -50,6 +56,11 @@ export class TerminalTransport {
   private traceRequested = false;
   private traceLast = 0;
   private traceLastOutcome = "";
+  private tailTraceLast = 0;
+  private tailTraceLocal: 0 | 1 | 2 | 3 = 0;
+  private tailTraceRemote: 0 | 1 | 2 | 3 = 0;
+  private tailTraceLocalType: 0 | 1 | 2 | 3 | 4 = 0;
+  private tailTraceRemoteType: 0 | 1 | 2 | 3 | 4 = 0;
   private rtcDeadline?: ReturnType<typeof setTimeout>;
   private remoteReady = false;
   private remoteCandidates: RTCIceCandidateInit[] = [];
@@ -133,6 +144,48 @@ export class TerminalTransport {
         ? this.status[this.status.route].latency
         : undefined;
     this.report(this.status);
+    this.emitTailnetDiagnostic();
+  }
+
+  private emitTailnetDiagnostic() {
+    if (
+      this.closed ||
+      document.hidden ||
+      !this.terminalID ||
+      !tailnetTraceEnabled(this.key)
+    )
+      return;
+    const now = performance.now();
+    if (now - this.tailTraceLast < 5000) return;
+    this.tailTraceLast = now;
+    const peerStates = [
+      "new",
+      "connecting",
+      "connected",
+      "disconnected",
+      "failed",
+      "closed",
+    ];
+    const rtt = (v?: number) =>
+      typeof v === "number" && Number.isFinite(v) && v >= 0
+        ? Math.min(60000, Math.round(v))
+        : -1;
+    void api("/tailnet/diagnostic", {
+      method: "POST",
+      body: JSON.stringify({
+        terminal: this.terminalID,
+        route: this.active === "direct" ? 1 : 0,
+        peer: this.peer
+          ? Math.max(0, peerStates.indexOf(this.peer.connectionState) + 1)
+          : 0,
+        local: this.tailTraceLocal,
+        remote: this.tailTraceRemote,
+        local_type: this.tailTraceLocalType,
+        remote_type: this.tailTraceRemoteType,
+        relay_rtt_ms: rtt(this.status.relay.latency),
+        direct_rtt_ms: rtt(this.status.direct.latency),
+      }),
+    }).catch(() => {});
   }
 
   private recordProbe(route: Route, rtt: number | null) {
@@ -282,6 +335,8 @@ export class TerminalTransport {
     this.rtc?.finish(reason);
     if (this.rtcSampling) clearInterval(this.rtcSampling);
     cooldown.set(this.key, Date.now() + 120000);
+    this.tailTraceLocal = this.tailTraceRemote = 0;
+    this.tailTraceLocalType = this.tailTraceRemoteType = 0;
     this.publish({
       detail: "直连不稳定，正在恢复服务器中转",
       tailscaleCandidate: undefined,
@@ -307,6 +362,8 @@ export class TerminalTransport {
     this.rtc?.finish(reason);
     if (this.rtcSampling) clearInterval(this.rtcSampling);
     this.peer = null;
+    this.tailTraceLocal = this.tailTraceRemote = 0;
+    this.tailTraceLocalType = this.tailTraceRemoteType = 0;
     this.channel = null;
     peer?.close();
     cooldown.set(this.key, Date.now() + 120000);
@@ -815,6 +872,10 @@ export class TerminalTransport {
       return false;
     const local = stats.get(selected.localCandidateId);
     const remote = stats.get(selected.remoteCandidateId);
+    this.tailTraceLocal = candidateNetworkScope(local?.address);
+    this.tailTraceRemote = candidateNetworkScope(remote?.address);
+    this.tailTraceLocalType = candidateTypeCode(local?.candidateType);
+    this.tailTraceRemoteType = candidateTypeCode(remote?.candidateType);
     const hint = tailscaleCandidateHint(local?.address, remote?.address);
     if (this.status.tailscaleCandidate !== hint)
       this.publish({ tailscaleCandidate: hint });

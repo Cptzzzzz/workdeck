@@ -80,6 +80,7 @@ type Hub struct {
 	tailProbeOrigin     string
 	tailChallenges      map[string]tailChallenge
 	tailBindings        map[string]tailBinding
+	tailTraceLast       time.Time
 }
 
 func (h *Hub) workspaceLock(terminal string) *sync.Mutex {
@@ -143,6 +144,8 @@ func (h *Hub) Handler() http.Handler {
 	}))
 	m.HandleFunc("POST /api/tailnet/probe", h.protected(h.startTailProbe))
 	m.HandleFunc("POST /api/tailnet/probe/complete", h.protected(h.completeTailProbe))
+	m.HandleFunc("GET /api/tailnet/diagnostic", h.protected(h.tailnetDiagnosticConfig))
+	m.HandleFunc("POST /api/tailnet/diagnostic", h.protected(h.recordTailnetDiagnostic))
 	m.HandleFunc("POST /api/account/password", h.protected(h.changePassword))
 	m.HandleFunc("GET /api/state", h.protected(h.state))
 	m.HandleFunc("GET /api/events", h.protected(h.stateEvents))

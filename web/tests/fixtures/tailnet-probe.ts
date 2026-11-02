@@ -3,7 +3,9 @@ import {
   readTailnetProbe,
   startTailnetProbe,
   subscribeTailnetProbe,
+  tailnetTraceEnabled,
 } from "../../src/tailnet-probe";
+(window as any).__tailnetTraceEnabled = tailnetTraceEnabled;
 setCSRF("fixture-csrf");
 const render = () => {
   document.querySelector("#status")!.textContent = readTailnetProbe();

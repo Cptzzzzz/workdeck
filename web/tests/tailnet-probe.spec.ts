@@ -45,8 +45,32 @@ test("Tailnet probe binds the proof through the authenticated Hub without sendin
     });
     await route.fulfill({ json: { available: true, valid_for_seconds: 120 } });
   });
+  await page.route("**/api/tailnet/diagnostic", async (route) => {
+    expect(route.request().headers()["x-workdeck-csrf"]).toBe("fixture-csrf");
+    await route.fulfill({
+      json: {
+        enabled: true,
+        node_id: "d".repeat(48),
+        expires: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+  });
+  const diagnostic = page.waitForResponse("**/api/tailnet/diagnostic");
   await page.goto("/tests/fixtures/tailnet-probe.html");
   await expect(page.locator("#status")).toHaveText("available");
+  expect((await diagnostic).status()).toBe(200);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).__tailnetTraceEnabled("d".repeat(48)),
+      ),
+    )
+    .toBe(true);
+  expect(
+    await page.evaluate(() =>
+      (window as any).__tailnetTraceEnabled("e".repeat(48)),
+    ),
+  ).toBe(false);
   expect(seen).toBe(true);
 });
 
