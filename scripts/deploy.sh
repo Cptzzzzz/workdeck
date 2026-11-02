@@ -2,10 +2,9 @@
 # Build locally first: scripts/build.sh
 set -eu
 ssh() {
-  for attempt in 1 2 3; do
-    if command ssh -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "$@"; then return 0; fi
-  done
-  return 1
+  # Remote scripts arrive on stdin. Retrying this stream after a failure may
+  # send EOF and falsely report success even though the script did not run.
+  command ssh -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 "$@"
 }
 cd "$(dirname "$0")/.."
 config="${WORKDECK_DEPLOY_CONFIG:-./.env.deploy.local}"
@@ -67,10 +66,16 @@ if ! ssh "$server" "test -f $deploy_dir/secrets/admin_password"; then
   rsync -az --timeout=60 .secrets/administrator.txt "$server:$deploy_dir/secrets/admin_password"
   ssh "$server" "chown 65532:65532 $deploy_dir/secrets/admin_password; chmod 400 $deploy_dir/secrets/admin_password"
 fi
-ssh "$server" sh -s -- "$version" "$deploy_dir" "$public_url" "$network" "$cidr" "$caddy_dir" "$caddy_container" "$domain" "$session_ttl" "$tailnet_probe_url" "$tailnet_probe_disable" <<'REMOTE'
+# SSH joins remote arguments through a shell, which drops empty arguments.
+# Encode optional values so positional parameters remain stable remotely.
+remote_cidr="${cidr:--}"
+remote_tailnet_probe_url="${tailnet_probe_url:--}"
+ssh "$server" sh -s -- "$version" "$deploy_dir" "$public_url" "$network" "$remote_cidr" "$caddy_dir" "$caddy_container" "$domain" "$session_ttl" "$remote_tailnet_probe_url" "$tailnet_probe_disable" <<'REMOTE'
 set -eu
 version="$1"; root="$2"; public_url="$3"; network="$4"; cidr="$5"; caddy_dir="$6"; caddy_container="$7"; domain="$8"; session_ttl="$9"
 tailnet_probe_url="${10}"; tailnet_probe_disable="${11}"
+[ "$cidr" != - ] || cidr=''
+[ "$tailnet_probe_url" != - ] || tailnet_probe_url=''
 cd "$root"
 if [ -f .env ] && grep -q '^WORKDECK_TAILNET_PROBE_URL=.' .env && [ -z "$tailnet_probe_url" ] && [ "$tailnet_probe_disable" != 1 ]; then
   echo 'Tailnet probe is enabled remotely; set WORKDECK_TAILNET_PROBE_URL or explicitly set WORKDECK_TAILNET_PROBE_DISABLE=1.' >&2
