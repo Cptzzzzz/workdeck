@@ -17,6 +17,40 @@ import (
 	"workdeck/internal/protocol"
 )
 
+func TestTerminalStartupConfigurationAndManualSizing(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux is required")
+	}
+	sessions, err := newSessions(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var token [24]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		t.Fatal(err)
+	}
+	id := hex.EncodeToString(token[:])
+	record := protocol.Session{ID: id, State: "running"}
+	if err := atomicJSON(sessions.path(id), record); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(sessions.tmux, "-L", socketName(id), "-f", sessions.dir+"/tmux.conf", "new-session", "-d", "-s", "main", "-x", "100", "-y", "30", "sleep 120")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create terminal with Workdeck configuration: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _, _ = sessions.tmuxRun(id, "kill-server") })
+	if _, err := sessions.AttachCommand(id, false); err != nil {
+		t.Fatalf("prepare attachment: %v", err)
+	}
+	out, err := sessions.tmuxRun(id, "show-options", "-w", "-v", "-t", "main:0", "window-size")
+	if err != nil || strings.TrimSpace(string(out)) != "manual" {
+		t.Fatalf("window size mode: %q, %v", out, err)
+	}
+	if out, err := sessions.tmuxRun(id, "resize-window", "-t", "main", "-x", "90", "-y", "25"); err != nil {
+		t.Fatalf("resize terminal: %v: %s", err, out)
+	}
+}
+
 func TestReconnectWithIdleResizedTerminal(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux is required")

@@ -58,7 +58,6 @@ set -g remain-on-exit on
 set -g escape-time 10
 set -g set-clipboard off
 set -g allow-rename off
-set -g window-size manual
 ` + scrollingConfig
 	if err = os.WriteFile(filepath.Join(dir, "tmux.conf"), []byte(config), 0600); err != nil {
 		return nil, err
@@ -317,7 +316,10 @@ func (s *Sessions) AttachCommand(id string, readonly bool) (*exec.Cmd, error) {
 }
 
 func (s *Sessions) configureScrolling(id string) error {
-	args := []string{"set-option", "-g", "mouse", "on"}
+	// tmux 3.5a can crash while creating the first window when manual sizing
+	// is set globally in its startup configuration. Apply it to the existing
+	// window before attaching any browser instead.
+	args := []string{"set-option", "-w", "-t", "main:0", "window-size", "manual", ";", "set-option", "-g", "mouse", "on"}
 	for _, table := range []string{"copy-mode", "copy-mode-vi"} {
 		for _, key := range []string{"Up", "Down"} {
 			args = append(args, ";", "bind-key", "-T", table, key, "send-keys -X cancel ; send-keys "+key)
