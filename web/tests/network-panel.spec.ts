@@ -19,6 +19,13 @@ test("shows every transport, truthful unmeasured states, current route and polic
     panel.getByLabel("Tailnet 候选指标", { exact: true }),
   ).toContainText("未配置");
   await expect(panel.locator(".network-path-card.selected")).toHaveCount(1);
+  await expect(panel.getByRole("button", { name: /测试.*延迟/ })).toHaveCount(
+    4,
+  );
+  await ws.getByRole("button", { name: "测试WebSocket 中转延迟" }).click();
+  await expect(ws.locator(".network-latency strong")).toHaveText("12 ms");
+  await expect(http).toHaveClass(/selected/);
+  await expect(panel).toContainText("自动探测已暂停");
   await http.locator(".network-card-extra > summary").click();
   await expect(http).toContainText("42 ms");
   await ws.locator(".network-card-extra > summary").click();

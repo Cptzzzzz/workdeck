@@ -3,6 +3,7 @@ import { useState } from "react";
 import { NetworkPanel } from "../../src/network-panel";
 import {
   initialTransportStatus,
+  type TestPath,
   type TransportStatus,
 } from "../../src/network-metrics";
 import "../../src/style.css";
@@ -74,6 +75,37 @@ function snapshot(direct = false): TransportStatus {
 }
 function Harness() {
   const [s, set] = useState(snapshot());
+  const testPath = (path: TestPath) => {
+    set((old) => ({
+      ...old,
+      testingPath: path,
+      discovery: "settled",
+      manualTests: {
+        ...old.manualTests,
+        [path]: { state: "measuring", samples: 0, failures: 0 },
+      },
+    }));
+    setTimeout(
+      () =>
+        set((old) => ({
+          ...old,
+          testingPath: undefined,
+          manualTests: {
+            ...old.manualTests,
+            [path]: {
+              state: "available",
+              latency: 12,
+              jitter: 1,
+              samples: 6,
+              failures: 0,
+              updatedAt: Date.now(),
+            },
+          },
+        })),
+      100,
+    );
+  };
+
   return (
     <div
       style={{
@@ -99,7 +131,12 @@ function Harness() {
         模拟连接中
       </button>
       <div style={{ position: "fixed", bottom: 24, right: 24 }}>
-        <NetworkPanel status={s} nodeName="开发节点" onRetryDirect={() => {}} />
+        <NetworkPanel
+          status={s}
+          nodeName="开发节点"
+          onRetryDirect={() => {}}
+          onTestPath={testPath}
+        />
       </div>
     </div>
   );

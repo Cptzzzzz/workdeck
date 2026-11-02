@@ -2,6 +2,7 @@ import type { Route } from "./transport-policy";
 import type { RtcReport } from "./rtc-diagnostics";
 
 export type PathState =
+  | "paused"
   | "pending"
   | "measuring"
   | "available"
@@ -31,7 +32,11 @@ export type RelayCandidate = {
   handshakeMs?: number;
   attempts: number;
 };
+export type TestPath = RelayProtocol | "webrtc" | "tailnet" | "native";
 export type TransportStatus = {
+  discovery?: "detecting" | "settled";
+  testingPath?: TestPath;
+  manualTests?: Partial<Record<TestPath, PathMetrics>>;
   relayCandidates?: Partial<Record<RelayProtocol, RelayCandidate>>;
   alternatives?: Partial<Record<"native" | "tailnet", PathMetrics>>;
   relayProtocol?: "websocket" | "http-stream";

@@ -1,3 +1,4 @@
+import { measureRelayLatency } from "./relay-latency-test";
 import { HttpTerminalSocket } from "./http-terminal-socket";
 type BrowserRelay = WebSocket | HttpTerminalSocket;
 import {
@@ -21,6 +22,8 @@ import {
   describeSamples,
   initialTransportStatus,
   type TransportStatus,
+  type TestPath,
+  type PathMetrics,
 } from "./network-metrics";
 export type { TransportStatus } from "./network-metrics";
 
@@ -55,6 +58,12 @@ export class TerminalTransport {
   onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  private settled = false;
+  private stableChecks = 0;
+  private stableRoute: Route = "relay";
+  private testing = false;
+  private testController = new AbortController();
+  private probeURL = "";
   private peer: RTCPeerConnection | null = null;
   private rtc?: RtcRecorder;
   private rtcSampling?: ReturnType<typeof setInterval>;
@@ -164,6 +173,7 @@ export class TerminalTransport {
     private isTerminalVisible: () => boolean = () => true,
   ) {
     this.key = node;
+    this.probeURL = url;
     this.status.previousRtcDiagnostic = loadRtcReport(terminalID);
     const startupURL = new URL(url);
     startupURL.searchParams.set("trace", this.startupTrace);
@@ -309,6 +319,7 @@ export class TerminalTransport {
   private schedulePeer(): void {
     if (
       this.closed ||
+      this.settled ||
       !this.rtcConfig ||
       !this.initialOutputRendered ||
       this.rtcStartScheduled ||
@@ -510,6 +521,7 @@ export class TerminalTransport {
   private dispose() {
     if (this.closed) return;
     this.closed = true;
+    this.testController.abort();
     for (const candidate of this.startupCandidates) candidate.close();
     this.startupCandidates.clear();
     if (this.rtcSampling) clearInterval(this.rtcSampling);
@@ -540,7 +552,10 @@ export class TerminalTransport {
     this.tailTraceLocal = this.tailTraceRemote = 0;
     this.tailTraceLocalType = this.tailTraceRemoteType = 0;
     this.publish({
-      detail: "直连不稳定，正在恢复服务器中转",
+      detail:
+        this.active === "direct"
+          ? "直连不稳定，正在恢复服务器中转"
+          : "当前链路无响应，正在重新连接",
       tailscaleCandidate: undefined,
       direct: {
         ...this.status.direct,
@@ -551,10 +566,12 @@ export class TerminalTransport {
     // Reattach and redraw the same tmux session. Never resend uncertain input.
     this.dispose();
     this.ws.close();
+    this.onclose?.();
   }
 
   private abandon(reason = "channel_closed") {
-    if (this.closed) return;
+    if (this.closed || (this.settled && this.active === "relay" && !this.peer))
+      return;
     if (this.active === "direct" || this.pending) {
       this.fallback(reason);
       return;
@@ -868,7 +885,7 @@ export class TerminalTransport {
     trickle: boolean,
     traceAvailable: boolean,
   ) {
-    if (this.attempted || this.closed) return;
+    if (this.attempted || this.closed || this.settled) return;
     if (typeof RTCPeerConnection === "undefined") {
       this.publish({
         direct: {
@@ -1108,6 +1125,7 @@ export class TerminalTransport {
 
   private async compare() {
     if (
+      this.settled ||
       this.checking ||
       this.promotingAlternative ||
       this.closed ||
@@ -1144,12 +1162,12 @@ export class TerminalTransport {
           this.probe("relay"),
           this.probe("direct"),
         ]);
-        if (this.closed) return;
+        if (this.closed || this.settled) return;
         relay.push(r);
         direct.push(d);
         await new Promise((resolve) => setTimeout(resolve, 80));
       }
-      if (document.hidden || this.pending) return;
+      if (document.hidden || this.pending || this.settled) return;
       const preference = readRoutePreference();
       const target = chooseRoute(relay, direct, this.active, preference);
       const summary = summarize(this.active === "direct" ? direct : relay);
@@ -1174,7 +1192,7 @@ export class TerminalTransport {
       if (this.active === "direct") this.fallback();
     } finally {
       this.checking = false;
-      if (!this.closed && this.peer)
+      if (!this.closed && !this.settled && this.peer)
         this.comparison = this.later(() => void this.compare(), 60000);
     }
   }
@@ -1201,6 +1219,7 @@ export class TerminalTransport {
 
   private retryAlternativeIfDue(): void {
     if (
+      this.settled ||
       !this.pathsAvailable ||
       !this.attempted ||
       this.peer ||
@@ -1213,13 +1232,18 @@ export class TerminalTransport {
     this.nextAlternative = Date.now() + 300000;
     this.samples.direct = [];
     void (async () => {
-      if (!(await this.tryAlternative("native")) && !this.closed)
+      if (
+        !(await this.tryAlternative("native")) &&
+        !this.closed &&
+        !this.settled
+      )
         await this.tryAlternative("tailnet");
     })();
   }
 
   private async tryAlternative(mode: "native" | "tailnet"): Promise<boolean> {
-    if (this.closed || this.alternative || document.hidden) return false;
+    if (this.closed || this.settled || this.alternative || document.hidden)
+      return false;
     const path = new AlternativePath(this.iceURLs, (frame) =>
       this.rawSend("relay", JSON.stringify(frame)),
     );
@@ -1233,7 +1257,7 @@ export class TerminalTransport {
     let promoted = false;
     try {
       if (!(await path.connect(mode)) || this.closed || document.hidden) {
-        if (!this.closed)
+        if (!this.closed && !this.settled)
           this.publish({
             alternative: {
               mode,
@@ -1243,10 +1267,12 @@ export class TerminalTransport {
         return false;
       }
       const alternate = await path.measure();
+      if (this.settled || this.closed) return false;
       this.publish({
         alternative: { mode, metrics: describeSamples(alternate, Date.now()) },
       });
-      if (this.closed || document.hidden || this.pending) return false;
+      if (this.closed || this.settled || document.hidden || this.pending)
+        return false;
       const alt = summarize(alternate);
       const relay = this.samples.relay;
       if (
@@ -1297,7 +1323,129 @@ export class TerminalTransport {
       this.promotingAlternative = false;
       if (this.alternative === path) this.alternative = undefined;
       if (!promoted) path.close();
-      if (promoted && !this.closed) void this.compare();
+      if (promoted && !this.closed && !this.settled) void this.compare();
+    }
+  }
+
+  private settle() {
+    this.settled = true;
+    if (this.comparison) {
+      clearTimeout(this.comparison);
+      this.timers.delete(this.comparison);
+      this.comparison = null;
+    }
+    this.alternative?.close();
+    this.alternative = undefined;
+    if (this.active === "relay") {
+      if (this.rtcDeadline) clearTimeout(this.rtcDeadline);
+      if (this.rtcSampling) clearInterval(this.rtcSampling);
+      const peer = this.peer;
+      if (peer) this.rtc?.finish("peer_closed");
+      this.peer = null;
+      this.channel = null;
+      peer?.close();
+    }
+    const alternatives = { ...this.status.alternatives };
+    for (const key of ["native", "tailnet"] as const)
+      if (alternatives[key]?.state === "measuring")
+        alternatives[key] = {
+          ...alternatives[key]!,
+          state: "paused",
+          reason: "当前链路已稳定，自动探测已暂停",
+        };
+    this.publish({
+      discovery: "settled",
+      alternatives,
+      direct:
+        this.active === "relay" &&
+        ["pending", "measuring"].includes(this.status.direct.state)
+          ? {
+              ...this.status.direct,
+              state: "paused",
+              reason: "自动探测已暂停，可手动测试延迟",
+            }
+          : this.status.direct,
+    });
+  }
+
+  async testPath(path: TestPath): Promise<void> {
+    if (
+      this.closed ||
+      this.testing ||
+      this.pending ||
+      this.promotingAlternative
+    )
+      return;
+    this.testing = true;
+    this.settle();
+    this.publish({
+      testingPath: path,
+      manualTests: {
+        ...this.status.manualTests,
+        [path]: { state: "measuring", samples: 0, failures: 0 },
+      },
+    });
+    let samples: Samples = [];
+    let reason = "未取得有效的节点往返延迟";
+    try {
+      if (
+        (path === "websocket" || path === "http-stream") &&
+        path !== this.status.relayProtocol
+      ) {
+        samples = await measureRelayLatency(
+          this.probeURL,
+          path,
+          this.testController.signal,
+        );
+      } else if (
+        path === "websocket" ||
+        path === "http-stream" ||
+        (path === "webrtc" && this.channel?.readyState === "open")
+      ) {
+        const route = path === "webrtc" ? "direct" : "relay";
+        for (let i = 0; i < 6 && !this.closed; i++)
+          samples.push(await this.probe(route));
+      } else {
+        if (!this.pathsAvailable || typeof RTCPeerConnection === "undefined") {
+          reason = "当前节点或浏览器不支持此候选测试";
+          return;
+        }
+        const candidate = new AlternativePath(this.iceURLs, (frame) =>
+          this.rawSend("relay", JSON.stringify(frame)),
+        );
+        this.alternative = candidate;
+        try {
+          if (
+            await candidate.connect(path === "tailnet" ? "tailnet" : "native")
+          )
+            samples = await candidate.measure();
+        } finally {
+          candidate.close();
+          if (this.alternative === candidate) this.alternative = undefined;
+        }
+      }
+    } catch {
+      reason = "测试未完成，当前终端连接保持不变";
+    } finally {
+      this.testing = false;
+      const metrics: PathMetrics = samples.some((n) => n !== null)
+        ? describeSamples(samples, Date.now())
+        : {
+            state: "unavailable",
+            samples: samples.length,
+            failures: samples.length,
+            updatedAt: Date.now(),
+            reason,
+          };
+      if (metrics.failures > 0 && metrics.state === "available") {
+        metrics.state = "timeout";
+        metrics.reason = `测试中 ${metrics.failures} / ${metrics.samples} 次探测超时`;
+      }
+      if (!this.closed)
+        this.publish({
+          testingPath: undefined,
+          manualTests: { ...this.status.manualTests, [path]: metrics },
+        });
     }
   }
 
@@ -1315,14 +1463,45 @@ export class TerminalTransport {
       return;
     this.healthChecking = true;
     try {
-      const [, direct] = await Promise.all([
-        this.probe("relay"),
+      const relay =
+        !this.settled || this.active === "relay"
+          ? this.probe("relay")
+          : Promise.resolve(null);
+      const [rtt, direct] = await Promise.all([
+        relay,
+        (!this.settled || this.active === "direct") &&
         this.channel?.readyState === "open"
           ? this.probe("direct")
           : Promise.resolve(null),
       ]);
+      const current = this.active === "relay" ? rtt : direct;
+      if (this.stableRoute !== this.active) {
+        this.stableRoute = this.active;
+        this.stableChecks = 0;
+      }
+      if (
+        current !== null &&
+        !this.pending &&
+        !this.checking &&
+        !this.promotingAlternative
+      )
+        this.stableChecks++;
+      else if (current === null) this.stableChecks = 0;
+      if (
+        !this.settled &&
+        this.stableChecks >= 5 &&
+        !this.pending &&
+        !this.checking &&
+        !this.promotingAlternative
+      )
+        this.settle();
       if (this.closed || document.hidden || this.pending) return;
-      if (this.active !== "direct") return;
+      if (this.active === "relay") {
+        if (rtt === null) {
+          if (++this.misses >= 2) this.fallback();
+        } else this.misses = 0;
+        return;
+      }
       if (direct === null) {
         if (++this.misses >= 2) this.fallback();
       } else {

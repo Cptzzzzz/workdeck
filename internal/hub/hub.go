@@ -46,6 +46,8 @@ type pending struct {
 	expires            time.Time
 }
 type attachment struct {
+	done                              <-chan struct{}
+	testProbes                        map[string]chan protocol.Frame
 	id, terminalID, nodeID, loginHash string
 	browser                           browserPeer
 	agent                             *protocol.Socket
@@ -1007,7 +1009,11 @@ func (h *Hub) serveTerminalBrowser(w http.ResponseWriter, r *http.Request, l log
 		}
 		stage("browser_selected")
 	}
-	a := &attachment{id: randomID(), terminalID: t.ID, nodeID: t.NodeID, loginHash: l.Hash, browser: browser, cancel: cancel, windows: strings.Contains(r.UserAgent(), "Windows")}
+	if r.URL.Query().Get("probe_only") == "1" {
+		h.serveTerminalProbe(ctx, browser, l, t.ID)
+		return
+	}
+	a := &attachment{done: ctx.Done(), id: randomID(), terminalID: t.ID, nodeID: t.NodeID, loginHash: l.Hash, browser: browser, cancel: cancel, windows: strings.Contains(r.UserAgent(), "Windows")}
 	ticket := randomID()
 	p := &pending{nodeID: t.NodeID, terminalID: t.ID, ch: make(chan *protocol.Socket), expires: time.Now().Add(15 * time.Second)}
 	h.mu.Lock()
@@ -1073,6 +1079,9 @@ func (h *Hub) serveTerminalBrowser(w http.ResponseWriter, r *http.Request, l log
 		}
 	}
 
+	h.mu.Lock()
+	a.agent = data
+	h.mu.Unlock()
 	defer data.Close()
 	go func() { <-ctx.Done(); data.Close() }()
 	done := make(chan struct{})
@@ -1097,6 +1106,18 @@ func (h *Hub) serveTerminalBrowser(w http.ResponseWriter, r *http.Request, l log
 			}
 			if kind == websocket.TextMessage {
 				var f protocol.Frame
+				if json.Unmarshal(b, &f) == nil && f.Type == "probe-reply" {
+					h.mu.Lock()
+					waiter := a.testProbes[f.ID]
+					h.mu.Unlock()
+					if waiter != nil {
+						select {
+						case waiter <- f:
+						default:
+						}
+						continue
+					}
+				}
 				if json.Unmarshal(b, &f) == nil && f.Type == "rtc-config" {
 					nodeTraceAvailable.Store(f.RTCTraceAvailable)
 				}

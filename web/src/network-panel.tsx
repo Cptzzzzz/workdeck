@@ -12,6 +12,8 @@ import {
   Network,
   ShieldCheck,
   X,
+  Gauge,
+  LoaderCircle,
 } from "lucide-react";
 import {
   formatBytes,
@@ -22,6 +24,7 @@ import {
   type TransportStatus,
   type Traffic,
   type RelayProtocol,
+  type TestPath,
 } from "./network-metrics";
 import { RtcDiagnosticPanel } from "./rtc-diagnostic-panel";
 import {
@@ -31,6 +34,7 @@ import {
 } from "./transport-preferences";
 
 const stateLabel: Record<PathState, string> = {
+  paused: "已暂停",
   pending: "等待测量",
   measuring: "检测中",
   available: "可用",
@@ -64,7 +68,7 @@ function age(timestamp?: number) {
 }
 
 type LinkCard = {
-  id: string;
+  id: TestPath;
   name: string;
   category: string;
   badge: string;
@@ -75,6 +79,8 @@ type LinkCard = {
   traffic?: Traffic;
   handshakeMs?: number;
   attempts?: number;
+  test?: PathMetrics;
+  manualDisplay?: boolean;
 };
 function relayCard(status: TransportStatus, protocol: RelayProtocol): LinkCard {
   const ownsRelay = (status.relayProtocol || "websocket") === protocol;
@@ -118,7 +124,17 @@ function relayCard(status: TransportStatus, protocol: RelayProtocol): LinkCard {
             : "按需尝试，不额外占用连接；未测量节点 RTT。",
   };
 }
-function NetworkLinkCard({ card }: { card: LinkCard }) {
+function NetworkLinkCard({
+  card,
+  testing,
+  busy,
+  onTest,
+}: {
+  card: LinkCard;
+  testing?: boolean;
+  busy?: boolean;
+  onTest?: (path: TestPath) => void;
+}) {
   const Icon = card.icon;
   return (
     <section
@@ -141,9 +157,13 @@ function NetworkLinkCard({ card }: { card: LinkCard }) {
       </div>
       <div className="network-latency">
         <strong>
-          {card.metrics?.state === "available" ? latency(card.metrics) : "—"}
+          {card.manualDisplay
+            ? formatLatency(card.metrics?.latency)
+            : card.metrics?.state === "available"
+              ? latency(card.metrics)
+              : "—"}
         </strong>
-        <small>节点往返 RTT</small>
+        <small>{card.manualDisplay ? "最近手动 RTT" : "节点往返 RTT"}</small>
       </div>
       <div className="network-card-rates">
         <span>
@@ -161,13 +181,46 @@ function NetworkLinkCard({ card }: { card: LinkCard }) {
           <small>上行</small>
         </span>
       </div>
-      <p className="network-updated">{card.note}</p>
+      <p className="network-updated" role={card.test ? "status" : undefined}>
+        {card.test
+          ? card.test.reason ||
+            (card.test.state === "measuring"
+              ? "正在采样，不切换当前链路。"
+              : `手动测试 ${latency(card.test)} · ${card.test.samples} 次 · ${age(card.test.updatedAt)}`)
+          : card.note}
+      </p>
+      <button
+        type="button"
+        className="network-test-button"
+        disabled={!onTest || busy}
+        onClick={() => onTest?.(card.id)}
+        aria-label={`测试${card.name}延迟`}
+        aria-busy={testing || undefined}
+      >
+        {testing ? (
+          <LoaderCircle className="network-test-spinner" size={13} />
+        ) : (
+          <Gauge size={13} />
+        )}
+        {testing ? "测试中…" : "测试延迟"}
+      </button>
       <details className="network-card-extra">
         <summary>
           详细指标
           <ChevronDown size={12} />
         </summary>
         <dl>
+          {card.test?.updatedAt && (
+            <div>
+              <dt>最近手动测试</dt>
+              <dd>
+                {card.test.state === "available"
+                  ? formatLatency(card.test.latency)
+                  : stateLabel[card.test.state]}{" "}
+                · {age(card.test.updatedAt)}
+              </dd>
+            </div>
+          )}
           <div>
             <dt>延迟抖动</dt>
             <dd>{formatLatency(card.metrics?.jitter)}</dd>
@@ -190,13 +243,13 @@ function NetworkLinkCard({ card }: { card: LinkCard }) {
           </div>
           {card.handshakeMs !== undefined && (
             <div>
-              <dt>本次建连耗时</dt>
+              <dt>初始建连耗时</dt>
               <dd>{formatLatency(card.handshakeMs)}</dd>
             </div>
           )}
           {card.attempts !== undefined && (
             <div>
-              <dt>本次建连尝试</dt>
+              <dt>初始建连尝试</dt>
               <dd>{card.attempts} 次</dd>
             </div>
           )}
@@ -210,10 +263,12 @@ export function NetworkPanel({
   status,
   nodeName,
   onRetryDirect,
+  onTestPath,
 }: {
   status: TransportStatus;
   nodeName?: string;
   onRetryDirect?: () => void;
+  onTestPath?: (path: TestPath) => void;
 }) {
   const tailnet = useSyncExternalStore(subscribeTailnetProbe, readTailnetProbe);
   const details = useRef<HTMLDetailsElement>(null);
@@ -352,6 +407,25 @@ export function NetworkPanel({
         nativeMetrics.reason ||
         `${age(nativeMetrics.updatedAt)}；候选接口测量，流量计入 WebRTC。`,
     });
+  for (const card of cards) {
+    const result = status.manualTests?.[card.id];
+    if (!result) continue;
+    card.test = result;
+    const live = card.selected;
+    if (!live) {
+      card.manualDisplay = true;
+      card.metrics = result;
+      card.badge =
+        result.state === "available"
+          ? candidateBadge(result)
+          : stateLabel[result.state];
+      card.note =
+        result.reason ||
+        (result.state === "measuring"
+          ? "临时测量中，当前终端链路保持不变。"
+          : `手动测试 · ${age(result.updatedAt)}；未切换当前链路。`);
+    }
+  }
   return (
     <details
       ref={details}
@@ -449,16 +523,28 @@ export function NetworkPanel({
             </select>
           </label>
           <p>
-            可用通道先显示内容，其他路径后台检测；不稳定时自动回退，策略在下一轮检测生效。
+            {status.discovery === "settled"
+              ? "已暂停其他路径的自动探测，仅检查当前链路；手动测试不切换链路，重新连接时再应用策略。"
+              : "可用通道先显示内容，初始阶段后台比较；稳定后仅检查当前链路，故障时重新探测。"}
           </p>
         </div>
         <div className="network-section-heading">
           <b>全部链路</b>
-          <span>未采用的通道不持续测速</span>
+          <span>
+            {status.discovery === "settled"
+              ? "自动探测已暂停 · 可手动测试"
+              : "稳定后暂停其他路径探测"}
+          </span>
         </div>
         <div className="network-path-cards">
           {cards.map((card) => (
-            <NetworkLinkCard key={card.id} card={card} />
+            <NetworkLinkCard
+              key={card.id}
+              card={card}
+              testing={status.testingPath === card.id}
+              busy={!!status.testingPath}
+              onTest={onTestPath}
+            />
           ))}
         </div>
         <p className="network-comparison">

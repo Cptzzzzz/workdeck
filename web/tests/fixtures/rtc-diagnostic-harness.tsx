@@ -39,6 +39,12 @@ class FakeWebSocket {
   send(data: string | Uint8Array) {
     if (typeof data !== "string") return;
     const frame = JSON.parse(data);
+    if (frame.type === "probe")
+      queueMicrotask(() =>
+        this.onmessage?.({
+          data: JSON.stringify({ type: "probe-reply", id: frame.id }),
+        }),
+      );
     if (frame.type === "rtc-offer")
       setTimeout(
         () =>

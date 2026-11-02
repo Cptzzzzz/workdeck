@@ -478,6 +478,9 @@ export function TerminalView({
           <NetworkPanel
             status={transport}
             nodeName={node?.name}
+            onTestPath={(path) => {
+              void socket.current?.testPath(path);
+            }}
             onRetryDirect={() => {
               clearDirectCooldown(terminal.node_id);
               connectRef.current();

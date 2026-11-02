@@ -127,6 +127,56 @@ func testWarmTransport(t *testing.T, streaming bool) {
 		if e != nil || kind != websocket.BinaryMessage || string(data) != "warm output" {
 			t.Fatal("relay failed", e)
 		}
+		if i == 0 {
+			var diagnostic testBrowser
+			if streaming {
+				diagnostic = x.dialHTTPBrowser(t, "/api/terminals/"+terminal+"/stream?deferred=1&probe_only=1&takeover=1")
+			} else {
+				c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(x.s.URL, "http")+"/api/terminals/"+terminal+"/ws?deferred=1&probe_only=1&takeover=1", headers)
+				if err != nil {
+					t.Fatal(err)
+				}
+				diagnostic = c
+			}
+			if err := diagnostic.WriteJSON(protocol.Frame{Type: "start"}); err != nil {
+				t.Fatal(err)
+			}
+			var probeReady protocol.Frame
+			if err := diagnostic.ReadJSON(&probeReady); err != nil || probeReady.Type != "ready" || !probeReady.ReadOnly {
+				t.Fatal("probe transport not ready", err)
+			}
+			for n := 0; n < 6; n++ {
+				if err := diagnostic.WriteJSON(protocol.Frame{Type: "probe", ID: "browser-probe"}); err != nil {
+					t.Fatal(err)
+				}
+				var forwarded protocol.Frame
+				if err := agent.ReadJSON(&forwarded); err != nil || forwarded.Type != "probe" || forwarded.ID == "browser-probe" {
+					t.Fatal("probe not isolated", err)
+				}
+				if err := agent.WriteJSON(protocol.Frame{Type: "probe-reply", ID: forwarded.ID}); err != nil {
+					t.Fatal(err)
+				}
+				var reply protocol.Frame
+				if err := diagnostic.ReadJSON(&reply); err != nil || reply.ID != "browser-probe" {
+					t.Fatal("probe reply missing", err)
+				}
+			}
+			diagnostic.Close()
+			x.h.mu.Lock()
+			views := len(x.h.attachments)
+			controllers := len(x.h.controllers)
+			x.h.mu.Unlock()
+			if views != 1 || controllers != 1 {
+				t.Fatal("diagnostic created viewer or took ownership", views, controllers)
+			}
+			if err := agent.WriteMessage(2, []byte("parent unaffected")); err != nil {
+				t.Fatal(err)
+			}
+			_, text, err := browser.ReadMessage()
+			if err != nil || string(text) != "parent unaffected" {
+				t.Fatal("probe reply leaked into parent", err)
+			}
+		}
 		if streaming && i == 0 {
 			stream := browser.(*testHTTPBrowser)
 			if err := stream.send(2, []byte("echo from HTTP")); err != nil {
