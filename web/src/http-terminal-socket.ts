@@ -13,6 +13,17 @@ export class HttpTerminalSocket {
   private id = "";
   private queue: { kind: number; data: string; size: number }[] = [];
   private flushing = false;
+  private idleTimer?: ReturnType<typeof setTimeout>;
+  private watchIdle() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (document.hidden) {
+        this.watchIdle();
+        return;
+      }
+      this.finish(1006);
+    }, 45000);
+  }
   constructor(url: URL) {
     const endpoint = new URL(url);
     endpoint.protocol = location.protocol;
@@ -34,18 +45,21 @@ export class HttpTerminalSocket {
         throw new Error("Invalid terminal stream");
       if (this.readyState === 3) return;
       this.readyState = 1;
+      this.watchIdle();
       this.onopen?.(new Event("open"));
+      if (this.readyState === 3) return;
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = "";
       while (this.readyState !== 3) {
         const next = await reader.read();
         if (next.done) throw new Error("Terminal stream ended");
+        this.watchIdle();
         pending += decoder.decode(next.value, { stream: true });
         if (pending.length > 2 * 1024 * 1024)
           throw new Error("Terminal stream too large");
         let end: number;
-        while ((end = pending.indexOf("\n\n")) >= 0) {
+        while (this.readyState !== 3 && (end = pending.indexOf("\n\n")) >= 0) {
           const line = pending.slice(0, end);
           pending = pending.slice(end + 2);
           if (!line.startsWith("data: ")) continue;
@@ -107,7 +121,10 @@ export class HttpTerminalSocket {
         await api(`/terminal-streams/${this.id}/input`, {
           method: "POST",
           body: JSON.stringify({ packets }),
-          signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(5000)]),
+          signal: AbortSignal.any([
+            this.controller.signal,
+            AbortSignal.timeout(5000),
+          ]),
         });
       }
     } catch {
@@ -119,6 +136,7 @@ export class HttpTerminalSocket {
   private finish(code: number) {
     if (this.readyState === 3) return;
     this.readyState = 3;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
     this.controller.abort();
     this.queue = [];
     this.onclose?.({ code });
