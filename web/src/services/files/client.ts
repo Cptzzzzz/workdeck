@@ -52,6 +52,7 @@ export type FileTraffic = {
 };
 export type FileTransportMetrics = {
   route: Route;
+  tailscaleCandidate?: "possible" | "other" | "unknown";
   relayLatency?: number;
   directLatency?: number;
   adaptiveDelayMs: number;
@@ -125,6 +126,7 @@ export class FileClient {
   private lastMeter = 0;
   private relayLatency?: number;
   private directLatency?: number;
+  private tailscaleCandidate?: "possible" | "other" | "unknown";
   private direct?: FileDirect;
   private activeRoute: Route = "relay";
   private epoch = 1;
@@ -197,6 +199,7 @@ export class FileClient {
   private publishMetrics(): void {
     const value: FileTransportMetrics = {
       route: this.activeRoute,
+      tailscaleCandidate: this.tailscaleCandidate,
       relayLatency: this.relayLatency,
       directLatency: this.directLatency,
       adaptiveDelayMs: terminalPressureDelay(this.workspace.terminal_id),
@@ -363,6 +366,7 @@ export class FileClient {
             receive: (r, c, d) => this.receive(r, c, d),
             unavailable: (active) => {
               this.directLatency = undefined;
+              this.tailscaleCandidate = undefined;
               this.publishMetrics();
               if (active)
                 this.fail(
@@ -371,6 +375,12 @@ export class FileClient {
                     "文件直连中断，正在恢复中转",
                   ),
                 );
+            },
+            candidateHint: (hint) => {
+              if (hint !== this.tailscaleCandidate) {
+                this.tailscaleCandidate = hint;
+                this.publishMetrics();
+              }
             },
             metrics: (relay, direct) => {
               this.relayLatency = relay ?? undefined;

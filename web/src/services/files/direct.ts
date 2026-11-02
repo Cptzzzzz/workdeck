@@ -1,5 +1,6 @@
 import { chooseRoute, type Route, type Samples } from "../../transport-policy";
 import { readRoutePreference } from "../../transport-preferences";
+import { tailscaleCandidateHint } from "../../tailscale-candidate";
 import { encodeControl, type Envelope } from "./protocol";
 import type { Workspace } from "./types";
 
@@ -18,6 +19,7 @@ type Callbacks = {
   ) => void;
   unavailable: (active: boolean) => void;
   metrics: (relay: number | null, direct: number | null) => void;
+  candidateHint: (hint: "possible" | "other" | "unknown") => void;
 };
 type Probe = {
   route: Route;
@@ -234,6 +236,12 @@ export class FileDirect {
       | undefined;
     if (!selected?.localCandidateId || !selected.remoteCandidateId)
       return false;
+    this.cb.candidateHint(
+      tailscaleCandidateHint(
+        stats.get(selected.localCandidateId)?.address,
+        stats.get(selected.remoteCandidateId)?.address,
+      ),
+    );
     return [selected.localCandidateId, selected.remoteCandidateId].every((id) =>
       ["host", "srflx", "prflx"].includes(stats.get(id)?.candidateType),
     );

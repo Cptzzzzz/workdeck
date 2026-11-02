@@ -223,6 +223,15 @@ export function NetworkPanel({
                     <dd>{formatBytes(traffic.sent)}</dd>
                   </div>
                 </dl>
+                {route === "direct" && status.tailscaleCandidate && (
+                  <p className="network-updated">
+                    {status.tailscaleCandidate === "possible"
+                      ? "候选地址可能使用 Tailscale；底层是否直连尚未确认。"
+                      : status.tailscaleCandidate === "other"
+                        ? "已选候选地址不符合 Tailscale 地址范围。"
+                        : "浏览器未提供足够信息，无法判断是否使用 Tailscale。"}
+                  </p>
+                )}
                 <p className="network-updated">
                   {path.reason || age(path.updatedAt)}
                 </p>

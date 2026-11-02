@@ -486,6 +486,17 @@ export function WorkspaceSidebar({
                       直连延迟：
                       {formatLatency(controller.fileMetrics.directLatency)}
                     </div>
+                    {controller.fileMetrics.tailscaleCandidate && (
+                      <div>
+                        {controller.fileMetrics.tailscaleCandidate ===
+                        "possible"
+                          ? "候选地址可能使用 Tailscale；底层路径未确认"
+                          : controller.fileMetrics.tailscaleCandidate ===
+                              "other"
+                            ? "已选候选地址不符合 Tailscale 地址范围"
+                            : "浏览器未提供足够信息判断 Tailscale 路径"}
+                      </div>
+                    )}
                     <div>
                       上行：
                       {formatBytes(

@@ -6,6 +6,7 @@ import {
 } from "./transport-policy";
 import { readRoutePreference } from "./transport-preferences";
 import { loadRtcReport, RtcRecorder, type RtcReport } from "./rtc-diagnostics";
+import { tailscaleCandidateHint } from "./tailscale-candidate";
 import {
   describeSamples,
   initialTransportStatus,
@@ -283,6 +284,7 @@ export class TerminalTransport {
     cooldown.set(this.key, Date.now() + 120000);
     this.publish({
       detail: "直连不稳定，正在恢复服务器中转",
+      tailscaleCandidate: undefined,
       direct: {
         ...this.status.direct,
         state: "unavailable",
@@ -311,6 +313,7 @@ export class TerminalTransport {
     this.publish({
       route: "relay",
       detail: "直连暂不可用，继续使用服务器中转",
+      tailscaleCandidate: undefined,
       direct: {
         ...this.status.direct,
         state: "unavailable",
@@ -810,10 +813,15 @@ export class TerminalTransport {
       | undefined;
     if (!selected?.localCandidateId || !selected.remoteCandidateId)
       return false;
+    const local = stats.get(selected.localCandidateId);
+    const remote = stats.get(selected.remoteCandidateId);
+    const hint = tailscaleCandidateHint(local?.address, remote?.address);
+    if (this.status.tailscaleCandidate !== hint)
+      this.publish({ tailscaleCandidate: hint });
     const types = ["host", "srflx", "prflx"];
     return (
-      types.includes(stats.get(selected.localCandidateId)?.candidateType) &&
-      types.includes(stats.get(selected.remoteCandidateId)?.candidateType)
+      types.includes(local?.candidateType) &&
+      types.includes(remote?.candidateType)
     );
   }
 
