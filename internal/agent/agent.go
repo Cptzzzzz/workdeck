@@ -333,6 +333,18 @@ func (a *Agent) attach(parent context.Context, msg protocol.Message) error {
 					if packet.route == "relay" && frame.Candidate != nil {
 						link.addRemoteCandidate(*frame.Candidate)
 					}
+				case "rtc-path-offer":
+					if packet.route == "relay" {
+						link.offerAlternative(frame)
+					}
+				case "rtc-path-promote":
+					if packet.route == "relay" {
+						link.promoteAlternative(frame.ID)
+					}
+				case "rtc-path-close":
+					if packet.route == "relay" {
+						link.closeAlternative(frame.ID)
+					}
 				case "rtc-trace":
 					if packet.route == "relay" && frame.BrowserTrace != nil {
 						link.recordBrowserTrace(*frame.BrowserTrace)

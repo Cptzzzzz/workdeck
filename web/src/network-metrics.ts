@@ -35,6 +35,7 @@ export type TransportStatus = {
   rtcDiagnostic?: RtcReport;
   previousRtcDiagnostic?: RtcReport;
   tailscaleCandidate?: "possible" | "other" | "unknown";
+  alternative?: { mode: "native" | "tailnet"; metrics: PathMetrics };
 };
 export function initialTransportStatus(): TransportStatus {
   const path = (): PathMetrics => ({

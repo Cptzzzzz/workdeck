@@ -13,6 +13,22 @@ export function summarize(samples: Samples) {
   };
 }
 
+// A replacement must offer a material median improvement without a much worse
+// latency tail. A few sub-millisecond samples are not a reason to hand over.
+export function preferAlternative(
+  current: Samples,
+  alternative: Samples,
+): boolean {
+  const a = summarize(alternative),
+    c = summarize(current);
+  if (!a || a.failures) return false;
+  if (!c || c.failures) return true;
+  return (
+    c.median - a.median >= Math.max(5, c.median * 0.15) &&
+    a.tail <= c.tail + Math.max(10, c.tail * 0.3)
+  );
+}
+
 // Interactive latency, jitter and failed probes take priority. Near-equivalent
 // paths prefer direct delivery to avoid spending the Hub's relay bandwidth.
 // A wider threshold when already direct avoids oscillating on small variations.

@@ -1,5 +1,23 @@
 import { test, expect } from "@playwright/test";
-import { chooseRoute, summarize } from "../src/transport-policy";
+import {
+  chooseRoute,
+  preferAlternative,
+  summarize,
+} from "../src/transport-policy";
+
+test("a replacement needs a meaningful stable advantage", () => {
+  expect(preferAlternative([2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 1, 1])).toBe(false);
+  expect(
+    preferAlternative(
+      [100, 100, 100, 100, 100, 100],
+      [80, 80, 80, 80, 80, 500],
+    ),
+  ).toBe(false);
+  expect(
+    preferAlternative([100, 100, 100, 100, 100, 100], [80, 80, 80, 80, 80, 80]),
+  ).toBe(true);
+  expect(preferAlternative([], [80, 80, 80, 80, 80, 80])).toBe(true);
+});
 
 test("choose by latency and consistency, prefer direct only when competitive", () => {
   expect(

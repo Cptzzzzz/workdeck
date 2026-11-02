@@ -1055,7 +1055,7 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 					if !a.readonly && controlling {
 						e = data.JSON(f)
 					}
-				case "probe", "rtc-offer", "rtc-candidate", "rtc-trace", "route-request", "route-commit":
+				case "probe", "rtc-offer", "rtc-candidate", "rtc-trace", "rtc-path-offer", "rtc-path-promote", "rtc-path-close", "route-request", "route-commit":
 					if f.Type == "rtc-offer" {
 						f.RTCTraceRequested = nodeTraceAvailable.Load() && h.allowWindowsRTCTrace(a)
 					}

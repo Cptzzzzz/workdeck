@@ -1,5 +1,6 @@
 import {
   chooseRoute,
+  preferAlternative,
   summarize,
   type Route,
   type Samples,
@@ -13,6 +14,7 @@ import {
 } from "./tailscale-candidate";
 import { tailnetTraceEnabled } from "./tailnet-probe";
 import { api } from "./services/api";
+import { AlternativePath } from "./alternative-path";
 import {
   describeSamples,
   initialTransportStatus,
@@ -28,6 +30,7 @@ type Frame = {
   ice_servers?: string[];
   rtc_trickle?: boolean;
   rtc_trace_available?: boolean;
+  rtc_paths?: boolean;
   node_diagnostic?: unknown;
   candidate?: RTCIceCandidateInit;
 };
@@ -67,6 +70,11 @@ export class TerminalTransport {
   private remoteCandidateCount = 0;
   private candidateChain = Promise.resolve();
   private channel: RTCDataChannel | null = null;
+  private alternative?: AlternativePath;
+  private promotingAlternative = false;
+  private nextAlternative = 0;
+  private pathsAvailable = false;
+  private iceURLs: string[] = [];
   private active: Route = "relay";
   private closed = false;
   private attempted = false;
@@ -327,6 +335,7 @@ export class TerminalTransport {
     this.probes.clear();
     this.channel?.close();
     this.peer?.close();
+    this.alternative?.close();
   }
 
   private fallback(reason = "route_interrupted") {
@@ -377,6 +386,7 @@ export class TerminalTransport {
         reason: "无法建立稳定的直接连接",
       },
     });
+    this.retryAlternativeIfDue();
   }
 
   private receive(route: Route, data: string | ArrayBuffer) {
@@ -403,6 +413,8 @@ export class TerminalTransport {
       return;
     }
     if (frame.type === "rtc-config" && route === "relay") {
+      this.pathsAvailable = frame.rtc_paths === true;
+      this.iceURLs = frame.ice_servers || [];
       void this.startPeer(
         frame.ice_servers || [],
         frame.rtc_trickle === true,
@@ -410,6 +422,12 @@ export class TerminalTransport {
       );
       return;
     }
+    if (
+      route === "relay" &&
+      frame.type.startsWith("rtc-path-") &&
+      this.alternative?.signal(frame)
+    )
+      return;
     if (frame.type === "rtc-answer" && route === "relay") {
       const peer = this.peer;
       if (peer && frame.sdp) {
@@ -889,6 +907,7 @@ export class TerminalTransport {
   private async compare() {
     if (
       this.checking ||
+      this.promotingAlternative ||
       this.closed ||
       document.hidden ||
       this.channel?.readyState !== "open"
@@ -936,23 +955,18 @@ export class TerminalTransport {
         ds = summarize(direct);
       const detail = `${preference === "prefer-direct" ? "优先直连" : "自动比较"}：中转 ${rs ? Math.round(rs.median) + " ms" : "不稳定"}，直连 ${ds ? Math.round(ds.median) + " ms" : "不稳定"}；综合延迟、抖动与探测成功率选择`;
       this.publish({ route: this.active, latency: summary?.median, detail });
+      if (
+        this.pathsAvailable &&
+        !this.alternative &&
+        Date.now() >= this.nextAlternative
+      ) {
+        this.nextAlternative = Date.now() + 300000;
+        void this.tryAlternative(
+          this.tailTraceRemote === 2 ? "native" : "tailnet",
+        );
+      }
       if (target !== this.active && Date.now() - this.lastSwitch > 30000) {
-        const id = crypto.randomUUID();
-        this.pending = {
-          id,
-          target,
-          fenced: false,
-          queue: [],
-          bytes: 0,
-          timer: setTimeout(() => this.fallback(), 4500),
-        };
-        if (
-          !this.rawSend(
-            this.active,
-            JSON.stringify({ type: "route-request", id, route: target }),
-          )
-        )
-          this.fallback();
+        this.switchRoute(target);
       }
     } catch {
       if (this.active === "direct") this.fallback();
@@ -963,13 +977,137 @@ export class TerminalTransport {
     }
   }
 
+  private switchRoute(target: Route): void {
+    if (this.pending || this.closed || this.active === target) return;
+    const id = crypto.randomUUID();
+    this.pending = {
+      id,
+      target,
+      fenced: false,
+      queue: [],
+      bytes: 0,
+      timer: setTimeout(() => this.fallback(), 4500),
+    };
+    if (
+      !this.rawSend(
+        this.active,
+        JSON.stringify({ type: "route-request", id, route: target }),
+      )
+    )
+      this.fallback();
+  }
+
+  private retryAlternativeIfDue(): void {
+    if (
+      !this.pathsAvailable ||
+      !this.attempted ||
+      this.peer ||
+      this.alternative ||
+      this.closed ||
+      document.hidden ||
+      Date.now() < this.nextAlternative
+    )
+      return;
+    this.nextAlternative = Date.now() + 300000;
+    this.samples.direct = [];
+    void (async () => {
+      if (!(await this.tryAlternative("native")) && !this.closed)
+        await this.tryAlternative("tailnet");
+    })();
+  }
+
+  private async tryAlternative(mode: "native" | "tailnet"): Promise<boolean> {
+    if (this.closed || this.alternative || document.hidden) return false;
+    const path = new AlternativePath(this.iceURLs, (frame) =>
+      this.rawSend("relay", JSON.stringify(frame)),
+    );
+    this.alternative = path;
+    this.publish({
+      alternative: {
+        mode,
+        metrics: { state: "measuring", samples: 0, failures: 0 },
+      },
+    });
+    let promoted = false;
+    try {
+      if (!(await path.connect(mode)) || this.closed || document.hidden) {
+        if (!this.closed)
+          this.publish({
+            alternative: {
+              mode,
+              metrics: { state: "unavailable", samples: 0, failures: 0 },
+            },
+          });
+        return false;
+      }
+      const alternate = await path.measure();
+      this.publish({
+        alternative: { mode, metrics: describeSamples(alternate, Date.now()) },
+      });
+      if (this.closed || document.hidden || this.pending) return false;
+      const alt = summarize(alternate);
+      const relay = this.samples.relay;
+      if (
+        !alt ||
+        alt.failures ||
+        chooseRoute(relay, alternate, "relay", readRoutePreference()) !==
+          "direct"
+      )
+        return false;
+      // Avoid switching for measurement noise; preserve a healthy direct path.
+      if (!preferAlternative(this.samples.direct, alternate)) return false;
+      if (this.checking) return false;
+      this.promotingAlternative = true;
+      if (this.active === "direct") {
+        this.switchRoute("relay");
+        const deadline = Date.now() + 5000;
+        while (!this.closed && this.pending && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      if (this.closed || this.pending || this.active !== "relay") return false;
+      if (!(await path.promote()) || this.closed) return false;
+      const oldPeer = this.peer;
+      this.peer = path.peer;
+      this.channel = path.channel;
+      this.channel.onmessage = (event) => this.receive("direct", event.data);
+      this.channel.onclose = () => {
+        if (this.peer === path.peer) this.abandon("channel_closed");
+      };
+      this.channel.onerror = () => {
+        if (this.peer === path.peer) this.abandon("channel_error");
+      };
+      path.peer.onconnectionstatechange = () => {
+        if (
+          this.peer === path.peer &&
+          ["failed", "closed"].includes(path.peer.connectionState)
+        )
+          this.abandon("ice_failed");
+      };
+      oldPeer?.close();
+      promoted = true;
+      this.samples.direct = [];
+      this.lastSwitch = 0;
+      this.publish({ detail: "已发现更合适的候选路径，正在重新比较链路" });
+      return true;
+    } catch {
+      return false; /* The current terminal path remains usable. */
+    } finally {
+      this.promotingAlternative = false;
+      if (this.alternative === path) this.alternative = undefined;
+      if (!promoted) path.close();
+      if (promoted && !this.closed) void this.compare();
+    }
+  }
+
   private async checkHealth() {
+    this.retryAlternativeIfDue();
     if (
       this.closed ||
       document.hidden ||
       this.pending ||
       this.checking ||
       this.healthChecking ||
+      this.promotingAlternative ||
       !this.monitoring
     )
       return;

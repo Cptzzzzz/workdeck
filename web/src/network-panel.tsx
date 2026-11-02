@@ -253,6 +253,21 @@ export function NetworkPanel({
         <p className="network-comparison">
           {latencyBenefit(status.relay, status.direct)}
         </p>
+        {status.alternative && (
+          <p className="network-comparison">
+            {status.alternative.mode === "tailnet"
+              ? "Tailscale 接口候选"
+              : "其他网络接口候选"}
+            ：
+            {status.alternative.metrics.state === "available"
+              ? formatLatency(status.alternative.metrics.latency)
+              : stateLabel[status.alternative.metrics.state]}
+            {status.alternative.metrics.updatedAt
+              ? `（${age(status.alternative.metrics.updatedAt)}的测量）`
+              : ""}
+            。候选经过 Tailscale 时仍可能使用其网络中继。
+          </p>
+        )}
         <p className="network-selection">{status.detail}</p>
         <RtcDiagnosticPanel
           current={status.rtcDiagnostic}

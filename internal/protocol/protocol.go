@@ -184,5 +184,6 @@ type Frame struct {
 	RTCDiagnostics    bool               `json:"rtc_diagnostics,omitempty"`
 	NodeDiagnostic    *RTCNodeDiagnostic `json:"node_diagnostic,omitempty"`
 	RTCTrickle        bool               `json:"rtc_trickle,omitempty"`
+	RTCPaths          bool               `json:"rtc_paths,omitempty"`
 	Candidate         *ICECandidate      `json:"candidate,omitempty"`
 }

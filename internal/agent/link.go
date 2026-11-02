@@ -38,6 +38,9 @@ type terminalLink struct {
 	pending              *routeChange
 	peer                 *webrtc.PeerConnection
 	direct               *webrtc.DataChannel
+	path                 *alternativePath
+	pathAttempts         int
+	pathWindow           time.Time
 	offered, closed      bool
 	remoteReady          bool
 	remoteCandidates     []webrtc.ICECandidateInit
@@ -85,7 +88,7 @@ func newTerminalLink(ctx context.Context, cancel context.CancelFunc, ws *protoco
 		}
 	}()
 	if os.Getenv("WORKDECK_DIRECT") != "0" {
-		_ = ws.JSON(protocol.Frame{Type: "rtc-config", ICEServers: stunURLs(), RTCTrickle: true, RTCTraceAvailable: rtcTraceEnabled(l.traceDir)})
+		_ = ws.JSON(protocol.Frame{Type: "rtc-config", ICEServers: stunURLs(), RTCTrickle: true, RTCPaths: true, RTCTraceAvailable: rtcTraceEnabled(l.traceDir)})
 	}
 	return l
 }
@@ -107,10 +110,15 @@ func (l *terminalLink) close() {
 	l.mu.Lock()
 	l.closed = true
 	peer := l.peer
+	path := l.path
+	l.path = nil
 	sink := l.trace
 	l.mu.Unlock()
 	if peer != nil {
 		_ = peer.Close()
+	}
+	if path != nil {
+		path.close()
 	}
 	sink.close()
 }
@@ -321,7 +329,7 @@ func (l *terminalLink) answer(sdp string, trickle bool, diagnostics bool) error 
 		})
 		channel.OnClose(func() {
 			l.mu.Lock()
-			needed := l.active == "direct" || l.pending != nil
+			needed := l.direct == channel && (l.active == "direct" || l.pending != nil)
 			l.mu.Unlock()
 			if needed {
 				l.cancel()

@@ -47,6 +47,8 @@ WORKDECK_TEST_PASSWORD_FILE=../.secrets/administrator.txt \
 | 开关 | 作用 |
 | --- | --- |
 | `WORKDECK_DIRECT_ACCEPTANCE=1` | 执行真实 DataChannel 及直连回退验收，需环境允许建立本地或公网直连 |
+| `WORKDECK_TEST_ALT_MODE=tailnet` | 与直连验收开关同时设置时，让独立候选测试使用节点的 Tailscale 接口；测试节点需要该接口 |
+| `WORKDECK_TEST_ALT_FROM_DIRECT=1` | 与直连验收开关同时设置时，验证从现有直连经有序切换迁移到更优候选 |
 | `WORKDECK_RECOVERY=1` | 执行服务重启恢复验收，需配置测试用 SSH 目标与服务管理权限 |
 | `WORKDECK_CODEX=1` | 执行节点已安装 Codex 的 TUI 显示验收，不提交模型任务 |
 | `WORKDECK_OFFLINE_ACCEPTANCE=1` | 允许 Python 离线终止验收停止本机用户 Agent，仅用于隔离环境 |
