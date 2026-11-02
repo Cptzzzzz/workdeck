@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"github.com/gorilla/websocket"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,6 +16,10 @@ import (
 )
 
 func TestWarmTransportBindsWithoutNewAgentConnection(t *testing.T) {
+	t.Run("websocket", func(t *testing.T) { testWarmTransport(t, false) })
+	t.Run("http-stream", func(t *testing.T) { testWarmTransport(t, true) })
+}
+func testWarmTransport(t *testing.T, streaming bool) {
 	x := setup(t)
 	x.signIn(t)
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
@@ -83,9 +88,15 @@ func TestWarmTransportBindsWithoutNewAgentConnection(t *testing.T) {
 	}
 	loser.Close()
 	for i, agent := range pool {
-		browser, _, e := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(x.s.URL, "http")+"/api/terminals/"+terminal+"/ws?deferred=1", headers)
-		if e != nil {
-			t.Fatal(e)
+		var browser testBrowser
+		if streaming {
+			browser = x.dialHTTPBrowser(t, "/api/terminals/"+terminal+"/stream?deferred=1")
+		} else {
+			ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(x.s.URL, "http")+"/api/terminals/"+terminal+"/ws?deferred=1", headers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			browser = ws
 		}
 		defer browser.Close()
 		if e = browser.WriteJSON(protocol.Frame{Type: "start"}); e != nil {
@@ -105,7 +116,9 @@ func TestWarmTransportBindsWithoutNewAgentConnection(t *testing.T) {
 		if e = agent.WriteMessage(websocket.BinaryMessage, []byte("warm output")); e != nil {
 			t.Fatal(e)
 		}
-		browser.SetReadDeadline(time.Now().Add(time.Second))
+		if c, ok := browser.(*websocket.Conn); ok {
+			c.SetReadDeadline(time.Now().Add(time.Second))
+		}
 		var ready protocol.Frame
 		if e = browser.ReadJSON(&ready); e != nil || ready.Type != "ready" || ready.ReadOnly != (i == 1) {
 			t.Fatal(e, ready)
@@ -114,12 +127,53 @@ func TestWarmTransportBindsWithoutNewAgentConnection(t *testing.T) {
 		if e != nil || kind != websocket.BinaryMessage || string(data) != "warm output" {
 			t.Fatal("relay failed", e)
 		}
+		if streaming && i == 0 {
+			stream := browser.(*testHTTPBrowser)
+			if err := stream.send(2, []byte("echo from HTTP")); err != nil {
+				t.Fatal(err)
+			}
+			kind, data, err := agent.ReadMessage()
+			if err != nil || kind != 2 || string(data) != "echo from HTTP" {
+				t.Fatal("HTTP input not relayed", err)
+			}
+			// Input endpoints are bound to the login which opened the stream.
+			jar, _ := cookiejar.New(nil)
+			other := &testHub{h: x.h, s: x.s, client: &http.Client{Jar: jar}, password: x.password}
+			other.signIn(t)
+			code, _ := other.request(t, "POST", "/api/terminal-streams/"+stream.id+"/input", map[string]any{"packets": []streamPacket{{2, []byte("foreign input")}}}, true)
+			if code != 404 {
+				t.Fatal("another valid login accessed stream", code)
+			}
+
+		}
+
 	}
-	control.Close()
+	if streaming {
+		if code, _ := x.request(t, "POST", "/api/logout", nil, true); code != 200 {
+			t.Fatal(code)
+		}
+	} else {
+		control.Close()
+	}
 	for _, c := range pool {
 		c.SetReadDeadline(time.Now().Add(time.Second))
 		if _, _, e := c.ReadMessage(); e == nil {
 			t.Fatal("pool survived control disconnect")
+		}
+	}
+	if streaming {
+		deadline := time.Now().Add(time.Second)
+		for {
+			x.h.mu.Lock()
+			n := len(x.h.browserStreams)
+			x.h.mu.Unlock()
+			if n == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("HTTP stream registry leaked after logout")
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 	record, e := x.h.store.terminal(terminal)

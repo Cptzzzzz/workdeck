@@ -47,7 +47,7 @@ type pending struct {
 }
 type attachment struct {
 	id, terminalID, nodeID, loginHash string
-	browser                           *protocol.Socket
+	browser                           browserPeer
 	agent                             *protocol.Socket
 	readonly                          bool
 	windows                           bool
@@ -58,6 +58,7 @@ type waiter struct {
 	ch     chan protocol.Message
 }
 type Hub struct {
+	browserStreams      map[string]*streamBrowser
 	cfg                 Config
 	store               *Store
 	mu                  sync.Mutex
@@ -165,6 +166,8 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/workspaces/{id}/downloads/{ticket}", h.protected(h.downloadFile))
 	m.HandleFunc("POST /api/terminal-startup", h.protected(h.recordTerminalStartup))
 	m.HandleFunc("GET /api/terminals/{id}/ws", h.protected(h.browserSocket))
+	m.HandleFunc("GET /api/terminals/{id}/stream", h.protected(h.terminalStream))
+	m.HandleFunc("POST /api/terminal-streams/{stream}/input", h.protected(h.terminalStreamInput))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
 	m.HandleFunc("POST /api/nodes/{id}/codex-hooks", h.protected(h.installNodeCodexHooks))
@@ -178,7 +181,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { failure(w, 404, "接口不存在") })
 	m.HandleFunc("/", h.assets)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/terminals/") && strings.HasSuffix(r.URL.Path, "/ws") && validStartupTrace(r.URL.Query().Get("trace")) {
+		if strings.HasPrefix(r.URL.Path, "/api/terminals/") && (strings.HasSuffix(r.URL.Path, "/ws") || strings.HasSuffix(r.URL.Path, "/stream")) && validStartupTrace(r.URL.Query().Get("trace")) {
 			log.Printf("terminal startup trace=%s stage=http_ingress", r.URL.Query().Get("trace"))
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -943,6 +946,9 @@ func (h *Hub) allowWindowsRTCTrace(a *attachment) bool {
 	return true
 }
 func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
+	h.serveTerminalBrowser(w, r, l, false)
+}
+func (h *Hub) serveTerminalBrowser(w http.ResponseWriter, r *http.Request, l login, streaming bool) {
 	started := time.Now()
 	trace := r.URL.Query().Get("trace")
 	if !validStartupTrace(trace) {
@@ -968,23 +974,37 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 		failure(w, 409, "节点离线")
 		return
 	}
-	conn, err := (&websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == h.cfg.PublicURL }}).Upgrade(w, r, nil)
-	if err != nil {
-		return
+	var browser browserPeer
+	if streaming {
+		peer, cleanup, e := h.newStreamBrowser(w, r, l)
+		if e != nil {
+			return
+		}
+		defer cleanup()
+		browser = peer
+	} else {
+		conn, e := (&websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == h.cfg.PublicURL }}).Upgrade(w, r, nil)
+		if e != nil {
+			return
+		}
+		socket := &protocol.Socket{Conn: conn}
+		socket.SetReadLiveness(65536)
+		browser = socket
 	}
-	browser := &protocol.Socket{Conn: conn}
-	browser.SetReadLiveness(65536)
+
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer browser.Close()
+	go func() { <-ctx.Done(); browser.Close() }()
 	if r.URL.Query().Get("deferred") == "1" {
-		_ = conn.SetReadDeadline(time.Now().Add(8 * time.Second))
+		timer := time.AfterFunc(8*time.Second, browser.Close)
 		var start protocol.Frame
-		if conn.ReadJSON(&start) != nil || start.Type != "start" {
+		kind, payload, e := browser.ReadMessage()
+		timer.Stop()
+		if e != nil || kind != websocket.TextMessage || json.Unmarshal(payload, &start) != nil || start.Type != "start" {
 			stage("unselected_browser_closed")
 			return
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(65 * time.Second))
 		stage("browser_selected")
 	}
 	a := &attachment{id: randomID(), terminalID: t.ID, nodeID: t.NodeID, loginHash: l.Hash, browser: browser, cancel: cancel, windows: strings.Contains(r.UserAgent(), "Windows")}
@@ -1092,7 +1112,7 @@ func (h *Hub) browserSocket(w http.ResponseWriter, r *http.Request, l login) {
 	}()
 	go func() {
 		for {
-			kind, b, e := browser.Conn.ReadMessage()
+			kind, b, e := browser.ReadMessage()
 			if e != nil {
 				errorsCh <- e
 				return

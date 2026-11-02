@@ -24,3 +24,7 @@ export async function api<T = any>(
   }
   return body;
 }
+
+export function getCSRF() {
+  return csrf;
+}

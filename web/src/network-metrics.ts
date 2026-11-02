@@ -26,6 +26,7 @@ export type Traffic = {
   sendRate: number;
 };
 export type TransportStatus = {
+  relayProtocol?: "websocket" | "http-stream";
   route: Route;
   latency?: number;
   detail: string;
@@ -105,6 +106,7 @@ export function latencyBenefit(
   relay: PathMetrics,
   direct: PathMetrics,
   now = Date.now(),
+  relayName = "WebSocket",
 ): string {
   if (
     relay.state !== "available" ||
@@ -123,5 +125,5 @@ export function latencyBenefit(
     relay.latency > 0
       ? `（${Math.round((Math.abs(difference) / relay.latency) * 100)}%）`
       : "";
-  return `WebRTC 比 WebSocket ${difference > 0 ? "低" : "高"} ${formatLatency(Math.abs(difference))}${percent}`;
+  return `WebRTC 比 ${relayName} ${difference > 0 ? "低" : "高"} ${formatLatency(Math.abs(difference))}${percent}`;
 }

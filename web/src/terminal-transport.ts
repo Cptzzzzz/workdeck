@@ -1,3 +1,5 @@
+import { HttpTerminalSocket } from "./http-terminal-socket";
+type BrowserRelay = WebSocket | HttpTerminalSocket;
 import {
   chooseRoute,
   preferAlternative,
@@ -49,7 +51,7 @@ export function clearDirectCooldown(node: string) {
 // The WebSocket remains the authorization lease even when terminal bytes go
 // directly to the Agent. Losing it closes the peer, preserving Hub revocation.
 export class TerminalTransport {
-  ws: WebSocket;
+  ws: BrowserRelay;
   onmessage: ((event: { data: string | ArrayBuffer }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
@@ -112,7 +114,7 @@ export class TerminalTransport {
   private misses = 0;
   private key: string;
   private rtcConfig?: { urls: string[]; trickle: boolean; trace: boolean };
-  private startupCandidates = new Set<WebSocket>();
+  private startupCandidates = new Set<BrowserRelay>();
   private startupClientClosed = false;
   private startupCloseCode = -1;
   private startupAt = performance.now();
@@ -167,14 +169,20 @@ export class TerminalTransport {
     startupURL.searchParams.set("trace", this.startupTrace);
     startupURL.searchParams.set("deferred", "1");
     let chosen = false;
+    let websocketAttempts = 0;
+    let httpAttempted = false;
     const finish = () => {
       if (this.closed) return;
       this.recordStartup("closed");
       this.dispose();
       this.onclose?.();
     };
-    const candidate = () => {
-      const ws = new WebSocket(startupURL);
+    const candidate = (http = false): BrowserRelay => {
+      if (http) httpAttempted = true;
+      else websocketAttempts++;
+      const ws = http
+        ? new HttpTerminalSocket(startupURL)
+        : new WebSocket(startupURL);
       this.startupCandidates.add(ws);
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
@@ -184,23 +192,28 @@ export class TerminalTransport {
         }
         chosen = true;
         this.ws = ws;
+        this.publish({ relayProtocol: http ? "http-stream" : "websocket" });
         this.startupOpen = Math.round(performance.now() - this.startupAt);
         // Only the selected socket may claim ownership or attach a terminal.
         ws.send(JSON.stringify({ type: "start" }));
         for (const other of this.startupCandidates)
           if (other !== ws) other.close();
       };
-      ws.onmessage = (event) => {
+      ws.onmessage = (event: { data: string | ArrayBuffer }) => {
         if (this.ws === ws) this.receive("relay", event.data);
       };
-      ws.onclose = (event) => {
+      ws.onclose = (event: { code: number }) => {
         if (chosen && this.ws === ws) this.startupCloseCode = event?.code ?? -1;
         if (this.closed) return;
         if (chosen) {
           if (this.ws === ws) finish();
           return;
         }
-        if (this.startupCandidates.size < 2) {
+        if (!httpAttempted) {
+          candidate(true);
+          return;
+        }
+        if (websocketAttempts < 2) {
           candidate();
           return;
         }
@@ -217,10 +230,13 @@ export class TerminalTransport {
       return ws;
     };
     this.ws = candidate();
+    this.later(() => {
+      if (!chosen && !httpAttempted) candidate(true);
+    }, 150);
     // A lost SYN/SYN-ACK must not hold up the view for the OS retry window.
     // At most two handshakes race; existing terminal data is never duplicated.
     this.later(() => {
-      if (!chosen && this.startupCandidates.size < 2) candidate();
+      if (!chosen && websocketAttempts < 2) candidate();
     }, 500);
     this.later(() => {
       if (!chosen) finish();

@@ -124,7 +124,13 @@ export function NetworkPanel({
               status[status.route].state === "available" ? "available" : ""
             }
           />
-          <span>{status.route === "relay" ? "WebSocket" : "WebRTC"}</span>
+          <span>
+            {status.route === "relay"
+              ? status.relayProtocol === "http-stream"
+                ? "HTTP"
+                : "WebSocket"
+              : "WebRTC"}
+          </span>
           <strong>{latency(status[status.route])}</strong>
         </span>
         <ChevronDown className="network-expand" size={14} />
@@ -163,7 +169,11 @@ export function NetworkPanel({
             <Radio size={14} />
             <b>
               当前使用{" "}
-              {status.route === "direct" ? "WebRTC 直连" : "WebSocket 中转"}
+              {status.route === "direct"
+                ? "WebRTC 直连"
+                : status.relayProtocol === "http-stream"
+                  ? "HTTP 流式中转"
+                  : "WebSocket 中转"}
             </b>
           </div>
           <p>
@@ -189,11 +199,21 @@ export function NetworkPanel({
                 data-state={path.state}
                 data-updated-at={path.updatedAt || ""}
                 aria-label={
-                  route === "relay" ? "WebSocket 中转指标" : "WebRTC 直连指标"
+                  route === "relay"
+                    ? status.relayProtocol === "http-stream"
+                      ? "HTTP 流式中转指标"
+                      : "WebSocket 中转指标"
+                    : "WebRTC 直连指标"
                 }
               >
                 <div className="network-card-title">
-                  <b>{route === "relay" ? "WebSocket 中转" : "WebRTC 直连"}</b>
+                  <b>
+                    {route === "relay"
+                      ? status.relayProtocol === "http-stream"
+                        ? "HTTP 流式中转"
+                        : "WebSocket 中转"
+                      : "WebRTC 直连"}
+                  </b>
                   <span>
                     {status.route === route
                       ? "当前链路"
@@ -251,7 +271,12 @@ export function NetworkPanel({
           })}
         </div>
         <p className="network-comparison">
-          {latencyBenefit(status.relay, status.direct)}
+          {latencyBenefit(
+            status.relay,
+            status.direct,
+            Date.now(),
+            status.relayProtocol === "http-stream" ? "HTTP 流" : "WebSocket",
+          )}
         </p>
         {status.alternative && (
           <p className="network-candidate-summary">

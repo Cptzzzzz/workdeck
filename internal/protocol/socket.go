@@ -44,3 +44,5 @@ func (s *Socket) SetReadLiveness(limit int64) {
 	_ = s.Conn.SetReadDeadline(time.Now().Add(65 * time.Second))
 	s.Conn.SetPongHandler(func(string) error { return s.Conn.SetReadDeadline(time.Now().Add(65 * time.Second)) })
 }
+
+func (s *Socket) ReadMessage() (int, []byte, error) { return s.Conn.ReadMessage() }
