@@ -1,6 +1,18 @@
 import { readTailnetProbe, subscribeTailnetProbe } from "./tailnet-probe";
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { ArrowRight, ChevronDown, Radio } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  Radio,
+  Activity,
+  Cable,
+  Globe2,
+  Network,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import {
   formatBytes,
   formatLatency,
@@ -8,8 +20,9 @@ import {
   type PathMetrics,
   type PathState,
   type TransportStatus,
+  type Traffic,
+  type RelayProtocol,
 } from "./network-metrics";
-import type { Route } from "./transport-policy";
 import { RtcDiagnosticPanel } from "./rtc-diagnostic-panel";
 import {
   readRoutePreference,
@@ -38,10 +51,156 @@ function latency(path: PathMetrics) {
     ? formatLatency(path.latency)
     : stateLabel[path.state];
 }
+function candidateBadge(metrics: PathMetrics) {
+  if (metrics.state !== "available") return stateLabel[metrics.state];
+  return !metrics.updatedAt || Date.now() - metrics.updatedAt > 20000
+    ? "历史测量"
+    : "已测可用";
+}
 function age(timestamp?: number) {
   if (!timestamp) return "尚未测量";
   const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
   return seconds < 2 ? "刚刚更新" : `${seconds} 秒前更新`;
+}
+
+type LinkCard = {
+  id: string;
+  name: string;
+  category: string;
+  badge: string;
+  note: string;
+  icon: typeof Radio;
+  selected?: boolean;
+  metrics?: PathMetrics;
+  traffic?: Traffic;
+  handshakeMs?: number;
+  attempts?: number;
+};
+function relayCard(status: TransportStatus, protocol: RelayProtocol): LinkCard {
+  const ownsRelay = (status.relayProtocol || "websocket") === protocol;
+  const candidate = status.relayCandidates?.[protocol];
+  const metrics = ownsRelay ? status.relay : undefined;
+  const selected = status.route === "relay" && ownsRelay;
+  const labels = {
+    connecting: "连接中",
+    open: "备用就绪",
+    cancelled: "未采用",
+    failed: "建连失败",
+  };
+  return {
+    id: protocol,
+    name: protocol === "websocket" ? "WebSocket 中转" : "HTTP 流式中转",
+    category: protocol === "websocket" ? "持久双向通道" : "HTTPS 流式回退",
+    icon: protocol === "websocket" ? Cable : Globe2,
+    selected,
+    metrics,
+    traffic: ownsRelay ? status.traffic.relay : undefined,
+    handshakeMs: candidate?.handshakeMs,
+    attempts: candidate?.attempts,
+    badge: selected
+      ? "当前使用"
+      : ownsRelay && metrics?.state === "available"
+        ? "备用就绪"
+        : candidate
+          ? labels[candidate.state]
+          : "未启用",
+    note: ownsRelay
+      ? metrics?.reason || age(metrics?.updatedAt)
+      : candidate?.state === "cancelled"
+        ? "另一条通道已就绪，本次尝试已取消。"
+        : candidate?.state === "failed"
+          ? "本次建连未成功，不影响其他可用通道。"
+          : candidate?.state === "connecting"
+            ? "正在尝试建立通道，终端优先使用先就绪的链路。"
+            : "按需尝试，不额外占用连接；未测量节点 RTT。",
+  };
+}
+function NetworkLinkCard({ card }: { card: LinkCard }) {
+  const Icon = card.icon;
+  return (
+    <section
+      className={`network-path-card ${card.selected ? "selected" : ""}`}
+      data-state={card.metrics?.state || "pending"}
+      data-updated-at={card.metrics?.updatedAt || ""}
+      aria-label={`${card.name}指标`}
+    >
+      <div className="network-card-title">
+        <span className="network-card-icon">
+          <Icon size={17} />
+        </span>
+        <div>
+          <b>{card.name}</b>
+          <small>{card.category}</small>
+        </div>
+        <span className={`network-card-badge ${card.selected ? "active" : ""}`}>
+          {card.selected && <Radio size={10} />} {card.badge}
+        </span>
+      </div>
+      <div className="network-latency">
+        <strong>
+          {card.metrics?.state === "available" ? latency(card.metrics) : "—"}
+        </strong>
+        <small>节点往返 RTT</small>
+      </div>
+      <div className="network-card-rates">
+        <span>
+          <ArrowDown size={13} />
+          <b>
+            {card.traffic ? `${formatBytes(card.traffic.receiveRate)}/s` : "—"}
+          </b>
+          <small>下行</small>
+        </span>
+        <span>
+          <ArrowUp size={13} />
+          <b>
+            {card.traffic ? `${formatBytes(card.traffic.sendRate)}/s` : "—"}
+          </b>
+          <small>上行</small>
+        </span>
+      </div>
+      <p className="network-updated">{card.note}</p>
+      <details className="network-card-extra">
+        <summary>
+          详细指标
+          <ChevronDown size={12} />
+        </summary>
+        <dl>
+          <div>
+            <dt>延迟抖动</dt>
+            <dd>{formatLatency(card.metrics?.jitter)}</dd>
+          </div>
+          <div>
+            <dt>近期探测超时</dt>
+            <dd>
+              {card.metrics?.samples
+                ? `${card.metrics.failures} / ${card.metrics.samples} 次`
+                : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt>累计下行 / 上行</dt>
+            <dd>
+              {card.traffic
+                ? `${formatBytes(card.traffic.received)} / ${formatBytes(card.traffic.sent)}`
+                : "—"}
+            </dd>
+          </div>
+          {card.handshakeMs !== undefined && (
+            <div>
+              <dt>本次建连耗时</dt>
+              <dd>{formatLatency(card.handshakeMs)}</dd>
+            </div>
+          )}
+          {card.attempts !== undefined && (
+            <div>
+              <dt>本次建连尝试</dt>
+              <dd>{card.attempts} 次</dd>
+            </div>
+          )}
+        </dl>
+      </details>
+    </section>
+  );
 }
 
 export function NetworkPanel({
@@ -75,11 +234,11 @@ export function NetworkPanel({
       if (above < 160 && window.innerHeight - bounds.bottom > above) {
         panel.style.top = "calc(100% + 8px)";
         panel.style.bottom = "auto";
-        panel.style.maxHeight = `${Math.max(0, Math.min(500, window.innerHeight - bounds.bottom - 20))}px`;
+        panel.style.maxHeight = `${Math.max(0, Math.min(720, window.innerHeight - bounds.bottom - 20))}px`;
       } else {
         panel.style.top = "auto";
         panel.style.bottom = "calc(100% + 8px)";
-        panel.style.maxHeight = `${Math.max(0, Math.min(500, above))}px`;
+        panel.style.maxHeight = `${Math.max(0, Math.min(720, above))}px`;
       }
     };
     const dismiss = (event: PointerEvent) => {
@@ -108,6 +267,79 @@ export function NetworkPanel({
       anchor?.removeEventListener("toggle", onToggle);
     };
   }, []);
+  const relayName =
+    status.relayProtocol === "http-stream" ? "HTTP 流式中转" : "WebSocket 中转";
+  const currentName = status.route === "direct" ? "WebRTC 直连" : relayName;
+  const tailMetrics =
+    status.alternatives?.tailnet ||
+    (status.alternative?.mode === "tailnet"
+      ? status.alternative.metrics
+      : undefined);
+  const nativeMetrics =
+    status.alternatives?.native ||
+    (status.alternative?.mode === "native"
+      ? status.alternative.metrics
+      : undefined);
+  const cards: LinkCard[] = [
+    relayCard(status, "websocket"),
+    relayCard(status, "http-stream"),
+    {
+      id: "webrtc",
+      name: "WebRTC 直连",
+      category: "浏览器与节点的数据通道",
+      icon: Network,
+      selected: status.route === "direct",
+      badge:
+        status.route === "direct"
+          ? "当前使用"
+          : stateLabel[status.direct.state],
+      metrics: status.direct,
+      traffic: status.traffic.direct,
+      note:
+        status.direct.reason ||
+        (status.tailscaleCandidate === "possible"
+          ? "所选候选可能经 Tailscale，底层直连状态尚未确认。"
+          : age(status.direct.updatedAt)),
+    },
+    {
+      id: "tailnet",
+      name: "Tailnet 候选",
+      category: "WebRTC 的可选网络路径",
+      icon: ShieldCheck,
+      badge: tailMetrics
+        ? candidateBadge(tailMetrics)
+        : tailnet === "available"
+          ? "主服务可达"
+          : tailnet === "checking"
+            ? "探测中"
+            : tailnet === "disabled"
+              ? "未配置"
+              : "未确认",
+      metrics: tailMetrics,
+      note: tailMetrics
+        ? tailMetrics.reason ||
+          `${age(tailMetrics.updatedAt)}；流量计入 WebRTC，Tailscale 也可能经中继。`
+        : tailnet === "available"
+          ? "本设备可经 Tailnet 访问主服务，计算节点路径尚未测量。"
+          : tailnet === "checking"
+            ? "正在验证本设备到主服务的 Tailnet 连接。"
+            : tailnet === "disabled"
+              ? "未启用 Tailnet 探测；不影响公网中转及原生 WebRTC。"
+              : "暂未确认本设备的 Tailnet 连接，不影响现有链路。",
+    },
+  ];
+  if (nativeMetrics)
+    cards.push({
+      id: "native",
+      name: "其他接口候选",
+      category: "WebRTC 的其他网络路径",
+      icon: Network,
+      badge: candidateBadge(nativeMetrics),
+      metrics: nativeMetrics,
+      note:
+        nativeMetrics.reason ||
+        `${age(nativeMetrics.updatedAt)}；候选接口测量，流量计入 WebRTC。`,
+    });
   return (
     <details
       ref={details}
@@ -136,139 +368,80 @@ export function NetworkPanel({
         <ChevronDown className="network-expand" size={14} />
       </summary>
       <div className="network-details" ref={popup}>
-        {tailnet !== "disabled" && (
-          <p className="network-updated" role="status">
-            {tailnet === "available"
-              ? "本设备可通过 Tailnet 访问主服务；节点路径需单独检测。"
-              : tailnet === "checking"
-                ? "正在检测本设备到主服务的 Tailnet 连接…"
-                : "未能确认本设备的 Tailnet 连接，现有链路仍可使用。"}
-          </p>
-        )}
-        <label className="network-route-preference">
-          链路策略
-          <select
-            value={preference}
-            onChange={(event) =>
-              saveRoutePreference(
-                event.target.value === "balanced"
-                  ? "balanced"
-                  : "prefer-direct",
-              )
-            }
-          >
-            <option value="prefer-direct">优先直连</option>
-            <option value="balanced">平衡延迟</option>
-          </select>
-        </label>
-        <p className="network-measurement-note">
-          策略同时用于终端和文件连接；直连不稳定或延迟过高时仍自动中转，下一轮检测时生效。
-        </p>
-        <div className="network-current-route" data-route={status.route}>
+        <div className="network-popover-header">
           <div>
-            <Radio size={14} />
-            <b>
-              当前使用{" "}
-              {status.route === "direct"
-                ? "WebRTC 直连"
-                : status.relayProtocol === "http-stream"
-                  ? "HTTP 流式中转"
-                  : "WebSocket 中转"}
-            </b>
+            <Activity size={17} />
+            <h3>网络详情</h3>
+            <span>自动检测 · 优先保持可用</span>
           </div>
+          <button
+            type="button"
+            aria-label="关闭网络详情"
+            onClick={() => {
+              if (details.current) {
+                details.current.open = false;
+                details.current.querySelector<HTMLElement>("summary")?.focus();
+              }
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="network-current-route" data-route={status.route}>
+          <div className="network-current-copy">
+            <span className="network-eyebrow">
+              <i />
+              当前使用的链路
+            </span>
+            <b>{currentName}</b>
+            <p>
+              <span>浏览器</span>
+              <ArrowRight size={12} />
+              {status.route === "relay" && (
+                <>
+                  <span>主服务</span>
+                  <ArrowRight size={12} />
+                </>
+              )}
+              <span>{nodeName || "计算节点"}</span>
+            </p>
+          </div>
+          <div className="network-current-latency">
+            <strong>{latency(status[status.route])}</strong>
+            <small>到节点的往返延迟</small>
+          </div>
+        </div>
+        <div className="network-policy-section">
+          <label className="network-route-preference">
+            <span>
+              链路策略<small>终端与文件共用此设置</small>
+            </span>
+            <select
+              value={preference}
+              onChange={(event) =>
+                saveRoutePreference(
+                  event.target.value === "balanced"
+                    ? "balanced"
+                    : "prefer-direct",
+                )
+              }
+            >
+              <option value="prefer-direct">优先直连</option>
+              <option value="balanced">平衡延迟</option>
+            </select>
+          </label>
           <p>
-            <span>浏览器</span>
-            <ArrowRight size={13} />
-            {status.route === "relay" && (
-              <>
-                <span>公网主服务</span>
-                <ArrowRight size={13} />
-              </>
-            )}
-            <span>{nodeName || "计算节点"}</span>
+            可用通道先显示内容，其他路径后台检测；不稳定时自动回退，策略在下一轮检测生效。
           </p>
         </div>
+        <div className="network-section-heading">
+          <b>全部链路</b>
+          <span>未采用的通道不持续测速</span>
+        </div>
         <div className="network-path-cards">
-          {(["relay", "direct"] as Route[]).map((route) => {
-            const path = status[route],
-              traffic = status.traffic[route];
-            return (
-              <section
-                key={route}
-                className={`network-path-card ${status.route === route ? "selected" : ""}`}
-                data-state={path.state}
-                data-updated-at={path.updatedAt || ""}
-                aria-label={
-                  route === "relay"
-                    ? status.relayProtocol === "http-stream"
-                      ? "HTTP 流式中转指标"
-                      : "WebSocket 中转指标"
-                    : "WebRTC 直连指标"
-                }
-              >
-                <div className="network-card-title">
-                  <b>
-                    {route === "relay"
-                      ? status.relayProtocol === "http-stream"
-                        ? "HTTP 流式中转"
-                        : "WebSocket 中转"
-                      : "WebRTC 直连"}
-                  </b>
-                  <span>
-                    {status.route === route
-                      ? "当前链路"
-                      : stateLabel[path.state]}
-                  </span>
-                </div>
-                <div className="network-latency">
-                  <strong>{latency(path)}</strong>
-                  <small>节点往返延迟 RTT</small>
-                </div>
-                <dl>
-                  <div>
-                    <dt>延迟抖动</dt>
-                    <dd>{formatLatency(path.jitter)}</dd>
-                  </div>
-                  <div>
-                    <dt>近期探测超时</dt>
-                    <dd>
-                      {path.samples
-                        ? `${path.failures} / ${path.samples} 次`
-                        : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>下行速率</dt>
-                    <dd>{formatBytes(traffic.receiveRate)}/s</dd>
-                  </div>
-                  <div>
-                    <dt>上行速率</dt>
-                    <dd>{formatBytes(traffic.sendRate)}/s</dd>
-                  </div>
-                  <div>
-                    <dt>累计下行</dt>
-                    <dd>{formatBytes(traffic.received)}</dd>
-                  </div>
-                  <div>
-                    <dt>累计上行</dt>
-                    <dd>{formatBytes(traffic.sent)}</dd>
-                  </div>
-                </dl>
-                {route === "direct" && status.tailscaleCandidate && (
-                  <p className="network-updated">
-                    {status.tailscaleCandidate === "possible"
-                      ? "候选地址可能使用 Tailscale；底层是否直连尚未确认。"
-                      : status.tailscaleCandidate === "other"
-                        ? "已选候选地址不符合 Tailscale 地址范围。"
-                        : "浏览器未提供足够信息，无法判断是否使用 Tailscale。"}
-                  </p>
-                )}
-                <p className="network-updated">
-                  {path.reason || age(path.updatedAt)}
-                </p>
-              </section>
-            );
-          })}
+          {cards.map((card) => (
+            <NetworkLinkCard key={card.id} card={card} />
+          ))}
         </div>
         <p className="network-comparison">
           {latencyBenefit(
@@ -278,21 +451,6 @@ export function NetworkPanel({
             status.relayProtocol === "http-stream" ? "HTTP 流" : "WebSocket",
           )}
         </p>
-        {status.alternative && (
-          <p className="network-candidate-summary">
-            {status.alternative.mode === "tailnet"
-              ? "Tailscale 接口候选"
-              : "其他网络接口候选"}
-            ：
-            {status.alternative.metrics.state === "available"
-              ? formatLatency(status.alternative.metrics.latency)
-              : stateLabel[status.alternative.metrics.state]}
-            {status.alternative.metrics.updatedAt
-              ? `（${age(status.alternative.metrics.updatedAt)}的测量）`
-              : ""}
-            。候选经过 Tailscale 时仍可能使用其网络中继。
-          </p>
-        )}
         <p className="network-selection">{status.detail}</p>
         <RtcDiagnosticPanel
           current={status.rtcDiagnostic}
@@ -303,15 +461,27 @@ export function NetworkPanel({
           ["unavailable", "timeout", "cooldown"].includes(
             status.direct.state,
           ) && (
-            <button type="button" className="secondary" onClick={onRetryDirect}>
+            <button
+              type="button"
+              className="secondary network-retry"
+              onClick={onRetryDirect}
+            >
               重新检测直连（重连此终端）
             </button>
           )}
-        <p className="network-measurement-note">
-          延迟为浏览器到计算节点的往返时间，取最近最多 12
-          次探测的中位数；抖动为相邻有效探测的延迟变化均值。每 5
-          秒轻量探测，速率约每秒更新。流量只统计本次终端连接的输入输出，不含信令、探测和协议开销，不代表线路带宽上限；探测超时不等于网络丢包率。直连时主服务仍负责登录和管理。
-        </p>
+        <details className="network-explanation">
+          <summary>
+            指标与链路说明
+            <ChevronDown size={12} />
+          </summary>
+          <p>
+            RTT 是浏览器到计算节点的往返延迟，取最近最多 12 次探测的中位数；每 5
+            秒轻量探测，速率约每秒更新。建连耗时与 RTT
+            是不同指标。流量只统计本次连接的终端输入输出，不含信令、探测及协议开销，不代表带宽上限；探测超时不等于丢包率。Tailnet
+            是 WebRTC 可选的网络路径，不是单独的传输协议，也不保证绕过 Tailscale
+            的中继服务。
+          </p>
+        </details>
       </div>
     </details>
   );

@@ -3174,3 +3174,65 @@ main {
 .file-tree-filter .file-network-details div { display: block; }
 .workbench-tabs .markdown-modes { flex-shrink: 0; }
 .workbench-tabs .workbench-tab-save { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 32px; color: #a6c4a7; }
+
+/* Network inspector: distinguish selected transport, measured paths and idle candidates. */
+.terminal-network .network-details { width: min(720px, calc(100vw - 32px)); padding: 16px; border-color: #39473e; border-radius: 14px; background: #141c18; box-shadow: 0 20px 64px #0009, 0 0 0 1px #ffffff03; color: #cbd6cf; }
+.network-popover-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-bottom:14px; }
+.network-popover-header > div { display:flex; align-items:center; gap:9px; }
+.network-popover-header svg { color:#9fbea7; flex-shrink:0; }
+.network-popover-header h3 { margin:0; font-size:14px; font-weight:600; color:#e1e9e3; }
+.network-popover-header > div > span { color:#81958a; font-size:10px; }
+.network-popover-header > button { display:grid; place-items:center; width:28px; height:28px; padding:0; border:1px solid transparent; border-radius:7px; background:transparent; cursor:pointer; }
+.network-popover-header > button:hover { background:#ffffff0a; border-color:#3d4b41; }
+.network-details .network-current-route { display:flex; justify-content:space-between; gap:18px; padding:17px 18px; border:1px solid #536c56; border-radius:11px; background:linear-gradient(115deg,#2b3b2d,#1a2820); margin-bottom:14px; }
+.network-current-route .network-current-copy { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
+.network-eyebrow { display:flex; align-items:center; gap:6px; font-size:10px; color:#a1b89f; }
+.network-eyebrow i { width:6px; height:6px; background:#b4d29f; border-radius:50%; box-shadow:0 0 7px #b4d23f33; }
+.network-current-route .network-current-copy > b { font-size:18px; font-weight:600; color:#e3ecdf; }
+.network-current-route .network-current-copy p { color:#a5b6a9; font-size:11px; }
+.network-current-route .network-current-latency { display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+.network-current-latency strong { font-size:25px; line-height:1.2; font-weight:500; color:#dbe9ce; font-variant-numeric:tabular-nums; }
+.network-current-latency small { font-size:10px; color:#95ab96; }
+.network-policy-section { padding:0 2px 14px; }
+.network-route-preference { justify-content:space-between; margin:0; }
+.network-route-preference > span { font-size:12px; color:#c0cec4; }
+.network-route-preference small { margin-left:9px; color:#7f9285; font-size:10px; }
+.network-route-preference select { padding:7px 30px 7px 11px; border-radius:7px; border-color:#3c4c40; background:#1c2920; font-size:11px; }
+.network-policy-section > p { margin:7px 0 0; font-size:10px; line-height:1.7; color:#8c9e90; }
+.network-section-heading { display:flex; justify-content:space-between; align-items:center; margin:1px 0 10px; }
+.network-section-heading b { font-size:11px; font-weight:500; color:#b8c9be; }
+.network-section-heading span { font-size:9px; color:#7e9485; }
+.network-details .network-path-cards { gap:10px; align-items:start; }
+.network-details .network-path-card { padding:13px 14px 0; border-radius:10px; border-color:#303e34; background:#18221c; overflow:hidden; }
+.network-details .network-path-card.selected { border-color:#719266; background:linear-gradient(150deg,#253427,#19251d); box-shadow:inset 0 1px #b2cf9220; }
+.network-details .network-card-title { display:flex; align-items:center; flex-wrap:nowrap; gap:9px; }
+.network-card-icon { display:grid; place-items:center; width:31px; height:31px; flex-shrink:0; border:1px solid #43584755; border-radius:8px; background:#a0bd8b0a; color:#9bb395; }
+.network-card-title > div { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.network-details .network-card-title b { font-size:12px; font-weight:500; color:#d4e1d4; }
+.network-card-title small { color:#859b89; font-size:9px; }
+.network-card-title .network-card-badge { display:inline-flex; align-items:center; flex-shrink:0; gap:3px; padding:4px 6px; border-radius:5px; background:#ffffff05; color:#94aa9b; font-size:9px; }
+.network-card-title .network-card-badge.active { background:#abc796; color:#1c301a; font-weight:600; }
+.network-details .network-latency { margin:14px 0 12px; gap:8px; }
+.network-details .network-latency strong { font-size:23px; color:#e0e9e0; }
+.network-details .network-latency small { display:inline; font-size:9px; color:#8ba08e; }
+.network-card-rates { display:grid; grid-template-columns:1fr 1fr; padding:9px 0; border-top:1px solid #afc9b012; border-bottom:1px solid #afc9b012; }
+.network-card-rates > span { display:flex; align-items:center; flex-wrap:wrap; gap:5px; min-width:0; color:#88a68f; }
+.network-card-rates > span + span { padding-left:10px; border-left:1px solid #afc9b012; }
+.network-card-rates b { font-size:10px; font-weight:500; color:#bccdbc; font-variant-numeric:tabular-nums; }
+.network-card-rates small { color:#7b927f; font-size:9px; }
+.network-path-card .network-updated { min-height:29px; margin:9px 0; font-size:10px; line-height:1.5; color:#8fa390; }
+.network-card-extra { margin:0 -14px; border-top:1px solid #afc9b012; background:#0000000b; }
+.network-card-extra > summary { display:flex; align-items:center; justify-content:space-between; list-style:none; padding:8px 14px; font-size:10px; color:#92aa96; cursor:pointer; }
+.network-card-extra > summary::-webkit-details-marker { display:none; }
+.network-card-extra[open] > summary svg { transform:rotate(180deg); }
+.network-card-extra dl { padding:0 14px 12px; }
+.network-explanation { margin-top:12px; padding-top:10px; border-top:1px solid #afc9b018; font-size:10px; color:#8da090; }
+.network-explanation > summary { display:flex; align-items:center; justify-content:space-between; cursor:pointer; list-style:none; }
+.network-explanation > p { line-height:1.8; margin-bottom:0; color:#829887; }
+.network-retry { margin-top:5px; font-size:11px; border-radius:7px; }
+.network-details .network-comparison { font-size:11px; color:#c5b795; margin-top:14px; }
+.network-details .network-selection { margin-top:6px; font-size:10px; line-height:1.6; }
+@media(max-width:560px) { .network-details .network-path-cards { grid-template-columns:1fr; } .network-popover-header > div > span,.network-route-preference small { display:none; } .network-details .network-current-route { padding:13px; } .network-current-latency strong { font-size:20px; } }
+.network-details .network-route-preference { flex-direction:row; align-items:center; }
+.network-details .network-route-preference select { width:auto; min-width:146px; }
+.network-popover-header { position:sticky; top:0; z-index:2; background:#141c18; }

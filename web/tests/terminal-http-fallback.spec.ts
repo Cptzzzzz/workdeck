@@ -114,6 +114,17 @@ test("HTTP stream renders and accepts input when every WebSocket handshake stall
     expect(
       await page.evaluate(() => (window as any).statuses.at(-1).relayProtocol),
     ).toBe("http-stream");
+    expect(
+      await page.evaluate(
+        () => (window as any).statuses.at(-1).relayCandidates.websocket.state,
+      ),
+    ).toBe("cancelled");
+    expect(
+      await page.evaluate(
+        () =>
+          (window as any).statuses.at(-1).relayCandidates["http-stream"].state,
+      ),
+    ).toBe("open");
     expect(starts).toBe(1);
     expect(opened).toBe(1);
     await page.evaluate(() => (window as any).transport.close());

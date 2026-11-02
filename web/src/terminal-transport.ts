@@ -171,8 +171,16 @@ export class TerminalTransport {
     let chosen = false;
     let websocketAttempts = 0;
     let httpAttempted = false;
+    const candidateKinds = new Map<BrowserRelay, "websocket" | "http-stream">();
     const finish = () => {
       if (this.closed) return;
+      const candidates = { ...this.status.relayCandidates };
+      for (const key of ["websocket", "http-stream"] as const) {
+        const c = candidates[key];
+        if (c?.state === "connecting")
+          candidates[key] = { ...c, state: "failed" };
+      }
+      this.publish({ relayCandidates: candidates });
       this.recordStartup("closed");
       this.dispose();
       this.onclose?.();
@@ -183,7 +191,19 @@ export class TerminalTransport {
       const ws = http
         ? new HttpTerminalSocket(startupURL)
         : new WebSocket(startupURL);
+      const protocol = http ? "http-stream" : "websocket";
+      const started = performance.now();
+      candidateKinds.set(ws, protocol);
       this.startupCandidates.add(ws);
+      this.publish({
+        relayCandidates: {
+          ...this.status.relayCandidates,
+          [protocol]: {
+            state: "connecting",
+            attempts: http ? 1 : websocketAttempts,
+          },
+        },
+      });
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         if (chosen || this.closed) {
@@ -192,7 +212,18 @@ export class TerminalTransport {
         }
         chosen = true;
         this.ws = ws;
-        this.publish({ relayProtocol: http ? "http-stream" : "websocket" });
+        const candidates = { ...this.status.relayCandidates };
+        for (const key of ["websocket", "http-stream"] as const) {
+          const c = candidates[key];
+          if (c?.state === "connecting")
+            candidates[key] = { ...c, state: "cancelled" };
+        }
+        candidates[protocol] = {
+          state: "open",
+          handshakeMs: Math.round(performance.now() - started),
+          attempts: http ? 1 : websocketAttempts,
+        };
+        this.publish({ relayProtocol: protocol, relayCandidates: candidates });
         this.startupOpen = Math.round(performance.now() - this.startupAt);
         // Only the selected socket may claim ownership or attach a terminal.
         ws.send(JSON.stringify({ type: "start" }));
@@ -209,6 +240,21 @@ export class TerminalTransport {
           if (this.ws === ws) finish();
           return;
         }
+        const alive = [...candidateKinds].some(
+          ([other, kind]) =>
+            other !== ws &&
+            kind === protocol &&
+            other.readyState !== WebSocket.CLOSED,
+        );
+        this.publish({
+          relayCandidates: {
+            ...this.status.relayCandidates,
+            [protocol]: {
+              state: alive ? "connecting" : "failed",
+              attempts: http ? 1 : websocketAttempts,
+            },
+          },
+        });
         if (!httpAttempted) {
           candidate(true);
           return;
@@ -283,6 +329,11 @@ export class TerminalTransport {
 
   private publish(change: Partial<TransportStatus> = {}) {
     if (this.closed) return;
+    if (change.alternative)
+      change.alternatives = {
+        ...this.status.alternatives,
+        [change.alternative.mode]: change.alternative.metrics,
+      };
     this.status = { ...this.status, ...change };
     this.status.latency =
       this.status[this.status.route].state === "available" &&

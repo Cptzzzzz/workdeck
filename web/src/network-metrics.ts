@@ -25,7 +25,15 @@ export type Traffic = {
   receiveRate: number;
   sendRate: number;
 };
+export type RelayProtocol = "websocket" | "http-stream";
+export type RelayCandidate = {
+  state: "connecting" | "open" | "cancelled" | "failed";
+  handshakeMs?: number;
+  attempts: number;
+};
 export type TransportStatus = {
+  relayCandidates?: Partial<Record<RelayProtocol, RelayCandidate>>;
+  alternatives?: Partial<Record<"native" | "tailnet", PathMetrics>>;
   relayProtocol?: "websocket" | "http-stream";
   route: Route;
   latency?: number;
