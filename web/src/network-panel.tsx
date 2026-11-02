@@ -1,3 +1,4 @@
+import { readTailnetProbe, subscribeTailnetProbe } from "./tailnet-probe";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import { ArrowRight, ChevronDown, Radio } from "lucide-react";
 import {
@@ -52,6 +53,7 @@ export function NetworkPanel({
   nodeName?: string;
   onRetryDirect?: () => void;
 }) {
+  const tailnet = useSyncExternalStore(subscribeTailnetProbe, readTailnetProbe);
   const details = useRef<HTMLDetailsElement>(null);
   const popup = useRef<HTMLDivElement>(null);
   const preference = useSyncExternalStore(
@@ -128,6 +130,15 @@ export function NetworkPanel({
         <ChevronDown className="network-expand" size={14} />
       </summary>
       <div className="network-details" ref={popup}>
+        {tailnet !== "disabled" && (
+          <p className="network-updated" role="status">
+            {tailnet === "available"
+              ? "本设备可通过 Tailnet 访问主服务；节点路径需单独检测。"
+              : tailnet === "checking"
+                ? "正在检测本设备到主服务的 Tailnet 连接…"
+                : "未能确认本设备的 Tailnet 连接，现有链路仍可使用。"}
+          </p>
+        )}
         <label className="network-route-preference">
           链路策略
           <select

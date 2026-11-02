@@ -1,3 +1,4 @@
+import { startTailnetProbe } from "./tailnet-probe";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -465,6 +466,10 @@ function App() {
       setRefreshError((e as Error).message);
     }
   }, []);
+  useEffect(() => {
+    if (!user) return;
+    return startTailnetProbe();
+  }, [user]);
   useEffect(() => {
     api<User>("/me")
       .then((u) => {

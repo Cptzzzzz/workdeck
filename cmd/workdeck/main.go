@@ -15,6 +15,7 @@ import (
 	"workdeck/internal/agent"
 	"workdeck/internal/fileworker"
 	"workdeck/internal/hub"
+	"workdeck/internal/tailprobe"
 )
 
 var version = "dev"
@@ -72,6 +73,18 @@ func run() error {
 		}
 		go func() { <-ctx.Done(); _ = os.Stdin.Close() }()
 		return fileworker.Run(ctx, *dir, os.Stdin, os.Stdout)
+	case "tailnet-probe":
+		f := flag.NewFlagSet("tailnet-probe", flag.ContinueOnError)
+		cfg := tailprobe.Config{}
+		f.StringVar(&cfg.Addr, "addr", "", "Tailscale IP and port to listen on")
+		f.StringVar(&cfg.Origin, "origin", "", "public Workdeck HTTPS origin")
+		f.StringVar(&cfg.SecretFile, "secret-file", "", "shared probe secret file")
+		f.StringVar(&cfg.CertFile, "tls-cert-file", "", "TLS certificate file")
+		f.StringVar(&cfg.KeyFile, "tls-key-file", "", "TLS key file")
+		if err := f.Parse(os.Args[2:]); err != nil {
+			return err
+		}
+		return tailprobe.Run(ctx, cfg)
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -85,6 +98,8 @@ func run() error {
 		f.StringVar(&cfg.AdminUser, "admin-user", "admin", "initial administrator username")
 		f.StringVar(&cfg.PasswordFile, "admin-password-file", "", "initial administrator password file")
 		f.StringVar(&cfg.TrustedProxyCIDR, "trusted-proxy-cidr", "", "trusted reverse proxy network, for login rate limiting")
+		f.StringVar(&cfg.TailnetProbeURL, "tailnet-probe-url", "", "optional HTTPS Tailnet probe URL")
+		f.StringVar(&cfg.TailnetProbeSecretFile, "tailnet-probe-secret-file", "", "shared secret file for Tailnet probe")
 		f.DurationVar(&cfg.SessionTTL, "session-ttl", 30*24*time.Hour, "persistent browser login lifetime, renewed while active")
 		_ = f.Parse(os.Args[2:])
 		h, err := hub.New(cfg)

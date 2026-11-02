@@ -1,15 +1,15 @@
 # Tailscale 联动设计与进度
 
-目标是保留公网访问和现有 WebSocket / WebRTC 自动回退，在用户设备和节点可经同一 Tailnet 通信时优先评估绕开 Hub 的数据路径。该功能尚未完整实现；本阶段仅增加 WebRTC 已选候选地址的本地提示，不证明 Tailscale 身份或物理直连，也不改变路由选择。
+目标是保留公网访问和现有 WebSocket / WebRTC 自动回退，在用户设备和节点可经同一 Tailnet 通信时优先评估绕开 Hub 的数据路径。该功能尚未完整实现；目前支持默认关闭的 Hub Tailnet 探测基础设施和 WebRTC 已选候选地址的本地提示，不证明目标节点可访问或底层物理直连，也不改变路由选择。部署条件与操作见 [探测说明](tailscale-probe.md)。
 
 ## 已验证与限制
 
 - 在一个 Linux Agent 上，用项目相同的 Pion UDP 配置，离线采集候选时确认包含本机 Tailscale 接口的两个地址。浏览器是否采集和选择该接口仍需在目标设备验证。
 - 浏览器的候选地址可能由 mDNS 隐藏或根本不提供；`100.64.0.0/10` 也可用于其他网络。界面只能称为“可能使用”，缺失时显示未知，不存储或上传候选地址。
 - Tailscale 网络可能通过直接 UDP、DERP 或 Peer Relay 承载；使用 Tailscale 地址并不证明底层直连或绕开 Hub 主机。
-- 现有终端与文件已有 WebRTC 自动探测，可能选中 Tailscale 网卡；尚没有直接识别当前浏览器设备或 Tailscale WSS。
+- 现有终端与文件已有 WebRTC 自动探测，可能选中 Tailscale 网卡；目前可以在明确配置探测服务后关联发起探测的 Tailnet 节点；尚没有 Tailscale WSS。
 
-## 待实现：浏览器设备探测
+## 浏览器设备探测
 
 Hub 提供可选的 Tailnet 专用 HTTPS/WSS 探测入口，通过可信接入层获取真实 Tailscale 来源并调用受限的本地 Tailscale 身份查询。浏览器现有登录会话获取短时、一次性随机挑战，经 Tailnet 入口完成探测并绑定到原登录会话；公网请求、自报地址及外部提交的身份头均不能作为证明。挑战需绑定来源、会话和有效期，防重放并在退出、撤权和失联时失效。Hub 的 Docker 隔离、可信代理和 Caddy 的部署需独立设计，不应将 Tailscale 管理 socket 或认证密钥暴露给浏览器或整个容器。
 

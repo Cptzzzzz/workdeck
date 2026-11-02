@@ -1,0 +1,15 @@
+# Optional override: enable only together with the host Tailnet probe service.
+services:
+  hub:
+    command:
+      - --addr=:8090
+      - --public-url=${WORKDECK_PUBLIC_URL:?Set WORKDECK_PUBLIC_URL}
+      - --data-dir=/data
+      - --assets-dir=/web
+      - --admin-password-file=/run/secrets/admin_password
+      - --trusted-proxy-cidr=${WORKDECK_TRUSTED_PROXY_CIDR:-}
+      - --session-ttl=${WORKDECK_SESSION_TTL:-720h}
+      - --tailnet-probe-url=${WORKDECK_TAILNET_PROBE_URL:?Set WORKDECK_TAILNET_PROBE_URL}
+      - --tailnet-probe-secret-file=/run/secrets/tailnet_probe_secret
+    volumes:
+      - ./secrets/tailnet_probe_secret:/run/secrets/tailnet_probe_secret:ro

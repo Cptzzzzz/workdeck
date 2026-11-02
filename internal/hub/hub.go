@@ -11,8 +11,11 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +27,7 @@ import (
 
 type Config struct {
 	Addr, PublicURL, DataDir, AssetsDir, AdminUser, PasswordFile, TrustedProxyCIDR string
+	TailnetProbeURL, TailnetProbeSecretFile                                        string
 	SessionTTL                                                                     time.Duration
 }
 type attempt struct {
@@ -72,6 +76,10 @@ type Hub struct {
 	filePending         map[string]*fileAgentTicket
 	fileConnections     map[string]*fileConnection
 	stateSubscribers    map[chan struct{}]struct{}
+	tailProbeSecret     []byte
+	tailProbeOrigin     string
+	tailChallenges      map[string]tailChallenge
+	tailBindings        map[string]tailBinding
 }
 
 func (h *Hub) workspaceLock(terminal string) *sync.Mutex {
@@ -91,12 +99,33 @@ func New(cfg Config) (*Hub, error) {
 	if !strings.HasPrefix(cfg.PublicURL, "https://") && !strings.HasPrefix(cfg.PublicURL, "http://127.0.0.1:") && !strings.HasPrefix(cfg.PublicURL, "http://localhost:") {
 		return nil, errors.New("public URL must use HTTPS (HTTP allowed only for localhost development)")
 	}
+	var probeSecret []byte
+	var probeOrigin string
+	if cfg.TailnetProbeURL != "" || cfg.TailnetProbeSecretFile != "" {
+		if cfg.TailnetProbeURL == "" || cfg.TailnetProbeSecretFile == "" {
+			return nil, errors.New("Tailnet probe URL and secret file must be configured together")
+		}
+		u, err := url.Parse(cfg.TailnetProbeURL)
+		if err != nil || u.Scheme != "https" || len(u.Hostname()) > 253 || !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(u.Hostname()) || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/probe" {
+			return nil, errors.New("Tailnet probe must be an HTTPS URL ending in /probe")
+		}
+		if p := u.Port(); p != "" {
+			if n, e := strconv.ParseUint(p, 10, 16); e != nil || n == 0 {
+				return nil, errors.New("invalid Tailnet probe port")
+			}
+		}
+		probeOrigin = u.Scheme + "://" + u.Host
+		probeSecret, err = os.ReadFile(cfg.TailnetProbeSecretFile)
+		if err != nil || len(probeSecret) < 32 || len(probeSecret) > 4096 {
+			return nil, errors.New("Tailnet probe secret file must contain 32–4096 bytes")
+		}
+	}
 	s, err := OpenStore(cfg.DataDir, cfg.AdminUser, cfg.PasswordFile)
 	if err != nil {
 		return nil, err
 	}
 	dummy, _ := hashPassword(randomID())
-	return &Hub{cfg: cfg, store: s, agents: map[string]*agentConn{}, requests: map[string]waiter{}, pending: map[string]*pending{}, attachments: map[string]*attachment{}, controllers: map[string]string{}, attempts: map[string]attempt{}, nonces: map[string]time.Time{}, dummyHash: dummy}, nil
+	return &Hub{cfg: cfg, store: s, agents: map[string]*agentConn{}, requests: map[string]waiter{}, pending: map[string]*pending{}, attachments: map[string]*attachment{}, controllers: map[string]string{}, attempts: map[string]attempt{}, nonces: map[string]time.Time{}, dummyHash: dummy, tailProbeSecret: probeSecret, tailProbeOrigin: probeOrigin, tailChallenges: map[string]tailChallenge{}, tailBindings: map[string]tailBinding{}}, nil
 }
 func (h *Hub) Handler() http.Handler {
 	m := http.NewServeMux()
@@ -112,6 +141,8 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/me", h.protected(func(w http.ResponseWriter, r *http.Request, l login) {
 		respond(w, 200, map[string]string{"username": l.Username, "csrf": l.CSRF})
 	}))
+	m.HandleFunc("POST /api/tailnet/probe", h.protected(h.startTailProbe))
+	m.HandleFunc("POST /api/tailnet/probe/complete", h.protected(h.completeTailProbe))
 	m.HandleFunc("POST /api/account/password", h.protected(h.changePassword))
 	m.HandleFunc("GET /api/state", h.protected(h.state))
 	m.HandleFunc("GET /api/events", h.protected(h.stateEvents))
@@ -143,7 +174,11 @@ func (h *Hub) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		connect := "'self'"
+		if h.tailProbeOrigin != "" {
+			connect += " " + h.tailProbeOrigin
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src "+connect+"; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("Cache-Control", "no-store")
 		defer func() {
 			if v := recover(); v != nil {
@@ -804,6 +839,7 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) closeLogin(hash string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.removeTailBindingsLocked(func(loginHash string) bool { return loginHash != hash })
 	h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.loginHash == hash })
 	h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return t.loginHash == hash })
 	for _, a := range h.attachments {
@@ -815,6 +851,7 @@ func (h *Hub) closeLogin(hash string) {
 func (h *Hub) closeOtherLogins(hash string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.removeTailBindingsLocked(func(loginHash string) bool { return loginHash == hash })
 	h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.loginHash != hash })
 	h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return t.loginHash != hash })
 	for _, a := range h.attachments {
