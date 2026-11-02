@@ -43,6 +43,10 @@ func TestTailnetDiagnosticIsScopedBoundedAndRedacted(t *testing.T) {
 		t.Fatalf("other login got config: %d %v", code, out)
 	}
 	req := map[string]any{"terminal": terminal, "route": 1, "peer": 3, "local": 0, "remote": 2, "relay_rtt_ms": 19, "direct_rtt_ms": 8}
+	invalid := map[string]any{"terminal": terminal, "route": 2, "peer": 3, "local": 0, "remote": 2, "relay_rtt_ms": 19, "direct_rtt_ms": 8}
+	if code, _ := x.request(t, "POST", "/api/tailnet/diagnostic", invalid, true); code != 400 {
+		t.Fatalf("invalid diagnostic category accepted: %d", code)
+	}
 	if code, _ := other.request(t, "POST", "/api/tailnet/diagnostic", req, true); code != 403 {
 		t.Fatalf("other login wrote diagnostic: %d", code)
 	}
@@ -73,6 +77,26 @@ func TestTailnetDiagnosticIsScopedBoundedAndRedacted(t *testing.T) {
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil || len(result) != 9 || result["route"] != float64(1) || result["remote"] != float64(2) {
 		t.Fatalf("unexpected numeric record: %v %v", result, err)
+	}
+	logPath := filepath.Join(x.h.cfg.DataDir, "tailnet-diagnostic.jsonl")
+	if err := os.Remove(logPath); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "unrelated")
+	if err := os.WriteFile(target, []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, logPath); err != nil {
+		t.Fatal(err)
+	}
+	x.h.mu.Lock()
+	x.h.tailTraceLast = time.Time{}
+	x.h.mu.Unlock()
+	if code, _ := x.request(t, "POST", "/api/tailnet/diagnostic", req, true); code != 500 {
+		t.Fatalf("symlink diagnostic accepted: %d", code)
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != "unchanged" {
+		t.Fatal("unrelated file was modified")
 	}
 	if err := os.Chmod(markerPath, 0644); err != nil {
 		t.Fatal(err)
