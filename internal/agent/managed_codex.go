@@ -207,7 +207,9 @@ func ManagedCodex(dir, id string) (result error) {
 	go func() { defer close(observed); observeManagedCodex(ctx, dir, id, path, launch) }()
 	// Let the TUI create new threads: an empty thread cannot yet be resumed
 	// because Codex has not materialized its rollout before the first input.
-	args := []string{"--remote", "unix://" + path, "--ask-for-approval", launch.Options.Approval, "--sandbox", launch.Options.Sandbox}
+	// Remote mode does not use the TUI process cwd as an explicit workspace.
+	// --cd also scopes /resume and overrides a resumed thread's saved cwd.
+	args := []string{"--remote", "unix://" + path, "--cd", launch.Cwd, "--ask-for-approval", launch.Options.Approval, "--sandbox", launch.Options.Sandbox}
 	if launch.Options.Model != "" {
 		args = append(args, "--model", launch.Options.Model)
 	}
