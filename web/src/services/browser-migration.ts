@@ -9,6 +9,7 @@ type BridgeMessage = {
   settings?: Record<string, string>;
   databases?: DatabaseRecords[];
   message?: string;
+  hasData?: boolean;
 };
 const known = new Set([
   "workdeck-workspace-drafts",
@@ -134,7 +135,7 @@ export async function migrateBrowserState(): Promise<string | null> {
       const timer = setTimeout(() => {
         cleanup();
         reject(new Error("原站点迁移连接超时"));
-      }, 8000);
+      }, 4000);
       const handler = (event: MessageEvent<BridgeMessage>) => {
         if (
           event.origin !== config.legacyOrigin ||
@@ -154,8 +155,13 @@ export async function migrateBrowserState(): Promise<string | null> {
       frame!.src = config.legacyOrigin + "/migration/frame#" + nonce;
       document.body.appendChild(frame!);
     });
-    if (data.status === "not-logged-in")
+    if (data.status === "not-logged-in") {
+      if (!data.hasData) {
+        localStorage.setItem(marker, "done");
+        return null;
+      }
       return "原站点未登录，原有浏览器草稿仍保留在旧站点；登录旧站点后刷新可尝试迁移。";
+    }
     if (
       data.status !== "ready" ||
       !data.ticket ||

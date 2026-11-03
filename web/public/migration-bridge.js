@@ -19,12 +19,9 @@
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
-    if (issue.status === 401) {
-      send({ status: "not-logged-in" });
-      return;
-    }
-    if (!issue.ok) throw new Error("无法验证原站点登录");
-    const auth = await issue.json();
+    if (!issue.ok && issue.status !== 401)
+      throw new Error("无法验证原站点登录");
+    const auth = issue.ok ? await issue.json() : null;
     const settings = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -82,6 +79,15 @@
       } finally {
         db.close();
       }
+    }
+    if (!auth) {
+      const hasData =
+        Object.keys(settings).length > 0 ||
+        databases.some((db) =>
+          Object.values(db.stores).some((rows) => rows.keys.length > 0),
+        );
+      send({ status: "not-logged-in", hasData });
+      return;
     }
     send({
       status: "ready",
