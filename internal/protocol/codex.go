@@ -70,3 +70,17 @@ type CodexGoal struct {
 	TimeUsedSeconds int64  `json:"time_used_seconds"`
 	CreatedAt       int64  `json:"created_at"`
 }
+
+type CodexHistoryEntry struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Cwd       string `json:"cwd"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+type CodexHistory struct {
+	Cwd     string              `json:"cwd"`
+	RunUser string              `json:"run_user,omitempty"`
+	Entries []CodexHistoryEntry `json:"entries"`
+	Cursor  string              `json:"cursor,omitempty"`
+}

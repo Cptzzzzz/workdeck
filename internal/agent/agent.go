@@ -21,6 +21,8 @@ import (
 )
 
 type Agent struct {
+	historyMu      sync.Mutex
+	historyCancels map[string]context.CancelFunc
 	identity       Identity
 	key            ed25519.PrivateKey
 	sessions       *Sessions
@@ -131,7 +133,7 @@ func (a *Agent) inventory(ctx context.Context, socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	message := protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "managed-codex-v1", "hardware-inventory-v1"}}
+	message := protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "managed-codex-v1", "codex-history-v1", "hardware-inventory-v1"}}
 	a.stateMu.Lock()
 	defer a.stateMu.Unlock()
 	// A mutation result was sent after this snapshot began; never publish an
@@ -259,6 +261,35 @@ func (a *Agent) connected(parent context.Context) error {
 				if e := a.attach(ctx, msg); e != nil && ctx.Err() == nil {
 					log.Printf("terminal attachment %s: %v", msg.TerminalID, e)
 				}
+			}()
+		case "codex.history.cancel":
+			a.historyMu.Lock()
+			stop := a.historyCancels[msg.RequestID]
+			a.historyMu.Unlock()
+			if stop != nil {
+				stop()
+			}
+		case "codex.history":
+			queryCtx, stop := context.WithTimeout(ctx, 9*time.Second)
+			a.historyMu.Lock()
+			if a.historyCancels == nil {
+				a.historyCancels = map[string]context.CancelFunc{}
+			}
+			a.historyCancels[msg.RequestID] = stop
+			a.historyMu.Unlock()
+			jobs.Add(1)
+			go func() {
+				defer jobs.Done()
+				defer func() { stop(); a.historyMu.Lock(); delete(a.historyCancels, msg.RequestID); a.historyMu.Unlock() }()
+				listing, e := ListCodexHistory(queryCtx, msg.Path, msg.CodexCursor)
+				if queryCtx.Err() == context.Canceled {
+					return
+				}
+				result := protocol.Message{Type: "result", RequestID: msg.RequestID, CodexHistory: listing}
+				if e != nil {
+					result.Error = e.Error()
+				}
+				_ = socket.JSON(result)
 			}()
 		case "directories":
 			jobs.Add(1)

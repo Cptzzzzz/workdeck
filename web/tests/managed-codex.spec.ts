@@ -78,7 +78,9 @@ test("separate Codex entry inherits node proxy and sends simple launch options",
   await expect(dialog.getByLabel("代理地址")).toHaveValue(saved);
   const edited = "http://session-only.example:7890";
   await dialog.getByLabel("代理地址").fill(edited);
-  await dialog.getByRole("switch", { name: "执行命令前确认" }).uncheck();
+  await expect(
+    dialog.getByRole("switch", { name: "执行命令前确认" }),
+  ).not.toBeChecked();
   await selectThemedOption(dialog.getByLabel("推理强度"), "xhigh");
   await dialog.getByRole("button", { name: "启动 Codex", exact: true }).click();
   await expect.poll(() => posted?.launch?.approval).toBe("never");

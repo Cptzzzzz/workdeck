@@ -99,6 +99,8 @@ type Message struct {
 	Path            string            `json:"path,omitempty"`
 	IncludeHidden   bool              `json:"include_hidden,omitempty"`
 	Directory       *DirectoryListing `json:"directory,omitempty"`
+	CodexHistory    *CodexHistory     `json:"codex_history,omitempty"`
+	CodexCursor     string            `json:"codex_cursor,omitempty"`
 	Workspace       *files.Workspace  `json:"workspace,omitempty"`
 	RootChange      *files.RootChange `json:"root_change,omitempty"`
 	Codex           *CodexObservation `json:"codex,omitempty"`

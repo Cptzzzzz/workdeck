@@ -62,7 +62,7 @@ export function Select({
     if (!option || option.disabled) return;
     setOpen(false);
     button.current?.focus({ preventScroll: true });
-    onChange(option.value);
+    if (option.value !== value) onChange(option.value);
   };
   useLayoutEffect(() => {
     if (!open || disabled) {
@@ -239,6 +239,7 @@ export function Select({
                 id={`${id}-option-${index}`}
                 key={option.value}
                 role="option"
+                title={option.label}
                 aria-selected={option.value === value}
                 aria-disabled={option.disabled || undefined}
                 className={`theme-select-option ${index === active ? "highlighted" : ""}`}

@@ -204,7 +204,7 @@ export function CreateTerminal({
   const [proxy, setProxy] = useState("");
   const [proxyBusy, setProxyBusy] = useState(kind === "codex");
   const [proxyError, setProxyError] = useState("");
-  const [confirm, setConfirm] = useState(true);
+  const [confirm, setConfirm] = useState(false);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [resume, setResume] = useState("");
@@ -237,6 +237,7 @@ export function CreateTerminal({
       });
     return () => controller.abort();
   }, [node, kind]);
+  useEffect(() => setResume(""), [node, cwd]);
   const currentNode = nodes.find((n) => n.id === node);
   return (
     <form
@@ -407,18 +408,12 @@ export function CreateTerminal({
               onChange={(e) => setConfirm(e.target.checked)}
             />
           </label>
-          <details className="codex-resume-options">
-            <summary>恢复已有会话</summary>
-            <label>
-              会话 UUID
-              <input
-                value={resume}
-                onChange={(e) => setResume(e.target.value)}
-                maxLength={64}
-                placeholder="可选：填写要继续的 Codex 会话"
-              />
-            </label>
-          </details>
+          <CodexHistoryPicker
+            node={currentNode}
+            cwd={cwd}
+            value={resume}
+            onChange={setResume}
+          />
         </>
       )}
       {error && (
@@ -449,6 +444,189 @@ export function CreateTerminal({
         <ArrowRight size={17} />
       </button>
     </form>
+  );
+}
+
+type HistoryEntry = {
+  id: string;
+  title: string;
+  cwd: string;
+  updated_at: number;
+};
+type HistoryPage = {
+  entries: HistoryEntry[];
+  cursor?: string;
+  run_user?: string;
+};
+function CodexHistoryPicker({
+  node,
+  cwd,
+  value,
+  onChange,
+}: {
+  node?: Node;
+  cwd: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [opened, setOpened] = useState(false),
+    [entries, setEntries] = useState<HistoryEntry[]>([]),
+    [cursor, setCursor] = useState("");
+  const [loading, setLoading] = useState(false),
+    [error, setError] = useState(""),
+    [user, setUser] = useState("");
+  const [revision, setRevision] = useState(0);
+  const request = useRef<AbortController | null>(null);
+  const supported = !!node?.capabilities?.includes("codex-history-v1");
+  const path = `/nodes/${node?.id}/codex-history?cwd=${encodeURIComponent(cwd)}`;
+  const load = (next: string, append: boolean) => {
+    request.current?.abort();
+    const c = new AbortController();
+    request.current = c;
+    setLoading(true);
+    setError("");
+    api<HistoryPage>(
+      path + (next ? `&cursor=${encodeURIComponent(next)}` : ""),
+      { signal: c.signal },
+    )
+      .then((page) => {
+        if (c.signal.aborted) return;
+        setEntries((old) =>
+          Array.from(
+            new Map(
+              [...(append ? old : []), ...page.entries].map((entry) => [
+                entry.id,
+                entry,
+              ]),
+            ).values(),
+          ),
+        );
+        setCursor(page.cursor || "");
+        setUser(page.run_user || "");
+      })
+      .catch((e) => {
+        if (!c.signal.aborted) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (request.current === c && !c.signal.aborted) setLoading(false);
+      });
+  };
+  useEffect(() => {
+    setEntries([]);
+    setCursor("");
+    setUser("");
+    setError("");
+    setLoading(false);
+  }, [node?.id, cwd]);
+  useEffect(() => {
+    if (!opened || !supported || !cwd.startsWith("/")) return;
+    setLoading(true);
+    const timer = setTimeout(() => load("", false), 300);
+    return () => {
+      clearTimeout(timer);
+      request.current?.abort();
+      setLoading(false);
+    };
+  }, [opened, supported, node?.id, cwd, revision]);
+  const selected = entries.find((entry) => entry.id === value);
+  return (
+    <details
+      className="codex-resume-options"
+      onToggle={(event) => setOpened(event.currentTarget.open)}
+    >
+      <summary>
+        恢复已有对话
+        {value && <span className="resume-selected-hint"> · 已选择</span>}
+      </summary>
+      {supported ? (
+        <>
+          <div className="codex-history-picker">
+            <label>
+              历史对话
+              <Select
+                aria-label="历史对话"
+                value={value}
+                disabled={loading && !entries.length}
+                placeholder={
+                  loading ? "正在读取本目录对话…" : "选择要恢复的对话"
+                }
+                options={[
+                  {
+                    value: "",
+                    label: loading
+                      ? "正在读取本目录对话…"
+                      : "新建对话（不恢复）",
+                  },
+                  ...entries.map((entry) => ({
+                    value: entry.id,
+                    label: entry.title,
+                  })),
+                  ...(value && !selected
+                    ? [{ value, label: `手动指定 · ${value.slice(0, 8)}` }]
+                    : []),
+                ]}
+                onChange={onChange}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setRevision((v) => v + 1)}
+              disabled={loading}
+              title="刷新本目录的 Codex 对话"
+            >
+              刷新
+            </button>
+          </div>
+          {error && (
+            <div className="form-error" role="alert">
+              {error}
+            </div>
+          )}
+          {!loading && !error && !entries.length && (
+            <p className="form-hint">
+              {cursor
+                ? "还没有找到本目录的对话，可继续读取更早记录。"
+                : "当前目录暂无可恢复的对话。请检查目录及节点运行账户，或手动填写 UUID。"}
+            </p>
+          )}
+          {selected && (
+            <p className="form-hint">
+              {selected.updated_at > 0
+                ? new Date(selected.updated_at * 1000).toLocaleString() + " · "
+                : ""}
+              {selected.id}
+            </p>
+          )}
+          {user && (
+            <p className="form-hint">读取 {user} 账户下此目录的 Codex 历史。</p>
+          )}
+          {cursor && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={loading}
+              onClick={() => load(cursor, true)}
+            >
+              {loading ? "正在读取…" : "读取更早对话"}
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="form-hint">
+          升级此节点后可按标题选择对话；当前仍可手动填写 UUID。
+        </p>
+      )}
+      <label>
+        会话 UUID
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          maxLength={64}
+          placeholder="可选：也可以手动填写 Codex 会话 UUID"
+        />
+      </label>
+    </details>
   );
 }
 

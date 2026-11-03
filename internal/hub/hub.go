@@ -171,6 +171,7 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/terminals/{id}/stream", h.protected(h.terminalStream))
 	m.HandleFunc("POST /api/terminal-streams/{stream}/input", h.protected(h.terminalStreamInput))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
+	m.HandleFunc("GET /api/nodes/{id}/codex-history", h.protected(h.nodeCodexHistory))
 	m.HandleFunc("GET /api/nodes/{id}/codex-settings", h.protected(h.nodeCodexSettings))
 	m.HandleFunc("PUT /api/nodes/{id}/codex-settings", h.protected(h.nodeCodexSettings))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
@@ -691,6 +692,9 @@ func (h *Hub) command(ctx context.Context, node string, msg protocol.Message) (p
 	case <-time.After(12 * time.Second):
 		return protocol.Message{}, errors.New("node response timeout")
 	case <-ctx.Done():
+		if msg.Type == "codex.history" {
+			go func() { _ = a.socket.JSON(protocol.Message{Type: "codex.history.cancel", RequestID: msg.RequestID}) }()
+		}
 		return protocol.Message{}, ctx.Err()
 	}
 }
