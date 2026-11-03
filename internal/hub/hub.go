@@ -298,7 +298,7 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 		terms = append(terms, t)
 	}
 	rows.Close()
-	rows, err = h.store.db.Query("SELECT terminal_id,note,tags,important,manual_status,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected FROM terminal_tasks")
+	rows, err = h.store.db.Query("SELECT terminal_id,note,tags,important,manual_status,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected,codex_details FROM terminal_tasks")
 	if err != nil {
 		failure(w, 500, "读取任务失败")
 		return
@@ -307,11 +307,13 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	for rows.Next() {
 		var id string
 		var task TaskInfo
-		if err = rows.Scan(&id, &task.Note, &task.Tags, &task.Important, &task.ManualStatus, &task.CodexTurn, &task.CodexCompletedAt, &task.CodexCommand, &task.CodexStatus, &task.CodexEvent, &task.CodexObservedAt, &task.CodexDetected); err != nil {
+		var codexDetails string
+		if err = rows.Scan(&id, &task.Note, &task.Tags, &task.Important, &task.ManualStatus, &task.CodexTurn, &task.CodexCompletedAt, &task.CodexCommand, &task.CodexStatus, &task.CodexEvent, &task.CodexObservedAt, &task.CodexDetected, &codexDetails); err != nil {
 			rows.Close()
 			failure(w, 500, "读取任务失败")
 			return
 		}
+		_ = json.Unmarshal([]byte(codexDetails), &task.Codex)
 		tasks[id] = &task
 	}
 	err = rows.Err()
@@ -403,7 +405,7 @@ func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservat
 		return errors.New("invalid Codex observation")
 	}
 	switch c.Status {
-	case "", "ready", "running", "attention", "turn_ended", "interrupted", "session_ended", "unknown":
+	case "", "ready", "running", "attention", "turn_ended", "interrupted", "session_ended", "unknown", "goal_active", "goal_complete", "goal_paused", "goal_blocked", "goal_budget_limited", "goal_usage_limited":
 	default:
 		return errors.New("invalid Codex status")
 	}
@@ -415,8 +417,23 @@ func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservat
 			return errors.New("invalid event time")
 		}
 	}
-	_, err := db.Exec(`INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected)
-	 SELECT id,?,?,?,?,?,?,? FROM terminals WHERE id=? AND node_id=?
+	if len(c.ThreadID) > 128 {
+		return errors.New("invalid Codex thread")
+	}
+	if c.Goal != nil {
+		switch c.Goal.Status {
+		case "active", "complete", "paused", "blocked", "budgetLimited", "usageLimited":
+		default:
+			return errors.New("invalid goal status")
+		}
+	}
+	details, _ := json.Marshal(struct {
+		Managed  bool                `json:"managed"`
+		ThreadID string              `json:"thread_id,omitempty"`
+		Goal     *protocol.CodexGoal `json:"goal,omitempty"`
+	}{c.Managed, c.ThreadID, c.Goal})
+	_, err := db.Exec(`INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected,codex_details)
+	 SELECT id,?,?,?,?,?,?,?,? FROM terminals WHERE id=? AND node_id=?
 	 ON CONFLICT(terminal_id) DO UPDATE SET
 	 codex_turn=CASE WHEN excluded.codex_turn<>'' AND ((excluded.codex_observed_at='' AND terminal_tasks.codex_observed_at='') OR (excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at)) THEN excluded.codex_turn ELSE terminal_tasks.codex_turn END,
 	 codex_completed_at=CASE WHEN excluded.codex_turn<>'' AND ((excluded.codex_observed_at='' AND terminal_tasks.codex_observed_at='') OR (excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at)) THEN excluded.codex_completed_at ELSE terminal_tasks.codex_completed_at END,
@@ -424,7 +441,8 @@ func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservat
 	 codex_status=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_status ELSE terminal_tasks.codex_status END,
 	 codex_event=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_event ELSE terminal_tasks.codex_event END,
 	 codex_observed_at=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_observed_at ELSE terminal_tasks.codex_observed_at END,
-	 codex_detected=COALESCE(excluded.codex_detected,terminal_tasks.codex_detected)`, c.TurnID, c.CompletedAt, c.LaunchCommand, c.Status, c.EventID, c.ObservedAt, c.Detected, id, node)
+	 codex_detected=COALESCE(excluded.codex_detected,terminal_tasks.codex_detected),
+    codex_details=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_details ELSE terminal_tasks.codex_details END`, c.TurnID, c.CompletedAt, c.LaunchCommand, c.Status, c.EventID, c.ObservedAt, c.Detected, string(details), id, node)
 	return err
 }
 
@@ -483,12 +501,36 @@ func (h *Hub) nodeOnline(id string) bool {
 }
 func (h *Hub) createTerminal(w http.ResponseWriter, r *http.Request, l login) {
 	var in struct {
-		NodeID string `json:"node_id"`
-		Name   string `json:"name"`
-		Cwd    string `json:"cwd"`
+		NodeID string                       `json:"node_id"`
+		Name   string                       `json:"name"`
+		Cwd    string                       `json:"cwd"`
+		Launch *protocol.CodexLaunchOptions `json:"launch,omitempty"`
 	}
 	if !decode(w, r, &in) {
 		return
+	}
+	if err := in.Launch.Validate(); err != nil {
+		failure(w, 400, err.Error())
+		return
+	}
+	if in.Launch != nil {
+		var raw string
+		if h.store.db.QueryRow("SELECT capabilities FROM nodes WHERE id=? AND revoked=0", in.NodeID).Scan(&raw) != nil {
+			failure(w, 404, "节点不存在")
+			return
+		}
+		var caps []string
+		_ = json.Unmarshal([]byte(raw), &caps)
+		supported := false
+		for _, c := range caps {
+			if c == "managed-codex-v1" {
+				supported = true
+			}
+		}
+		if !supported {
+			failure(w, 409, "请先升级此节点软件以使用受管 Codex 会话")
+			return
+		}
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" || len(in.Name) > 100 || len(in.Cwd) > 4096 {
@@ -518,9 +560,11 @@ func (h *Hub) createTerminal(w http.ResponseWriter, r *http.Request, l login) {
 		failure(w, 500, "保存终端失败")
 		return
 	}
-	result, e := h.command(r.Context(), in.NodeID, protocol.Message{Type: "create", TerminalID: id, Session: &protocol.Session{ID: id, Name: in.Name, Cwd: in.Cwd, CreatedAt: ts}})
+	result, e := h.command(r.Context(), in.NodeID, protocol.Message{Type: "create", TerminalID: id, Session: &protocol.Session{ID: id, Name: in.Name, Cwd: in.Cwd, CreatedAt: ts, Launch: in.Launch}})
 	if e == nil {
 		h.applyResult(id, result)
+	} else {
+		_, _ = h.store.db.Exec("UPDATE terminals SET observed_state='error',error=?,updated_at=? WHERE id=?", "创建终端失败："+e.Error(), now(), id)
 	}
 	t, _ := h.store.terminal(id)
 	respond(w, 201, t)

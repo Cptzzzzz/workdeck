@@ -4,31 +4,35 @@ import "workdeck/internal/files"
 
 // Session is metadata only. The live process and terminal screen remain on the node.
 type Session struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Cwd       string            `json:"cwd"`
-	State     string            `json:"state"`
-	Error     string            `json:"error,omitempty"`
-	ExitCode  *int              `json:"exit_code,omitempty"`
-	CreatedAt string            `json:"created_at"`
-	BootID    string            `json:"boot_id,omitempty"`
-	RunUser   string            `json:"run_user,omitempty"`
-	Scope     string            `json:"scope,omitempty"`
-	Codex     *CodexObservation `json:"codex,omitempty"`
-	PanePID   int               `json:"-"`
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	Cwd       string              `json:"cwd"`
+	State     string              `json:"state"`
+	Error     string              `json:"error,omitempty"`
+	ExitCode  *int                `json:"exit_code,omitempty"`
+	CreatedAt string              `json:"created_at"`
+	BootID    string              `json:"boot_id,omitempty"`
+	RunUser   string              `json:"run_user,omitempty"`
+	Scope     string              `json:"scope,omitempty"`
+	Codex     *CodexObservation   `json:"codex,omitempty"`
+	Launch    *CodexLaunchOptions `json:"launch,omitempty"`
+	PanePID   int                 `json:"-"`
 }
 
 // CodexObservation contains no prompts or model output. A completion records
 // one turn, not whether the user's overall objective was achieved.
 type CodexObservation struct {
-	TurnID        string `json:"turn_id,omitempty"`
-	CompletedAt   string `json:"completed_at,omitempty"`
-	LaunchCommand string `json:"launch_command,omitempty"`
-	Status        string `json:"status,omitempty"`
-	EventID       string `json:"event_id,omitempty"`
-	ObservedAt    string `json:"observed_at,omitempty"`
-	Detected      *bool  `json:"detected,omitempty"`
-	ProcessKey    string `json:"process_key,omitempty"`
+	TurnID        string     `json:"turn_id,omitempty"`
+	CompletedAt   string     `json:"completed_at,omitempty"`
+	LaunchCommand string     `json:"launch_command,omitempty"`
+	Status        string     `json:"status,omitempty"`
+	EventID       string     `json:"event_id,omitempty"`
+	ObservedAt    string     `json:"observed_at,omitempty"`
+	Detected      *bool      `json:"detected,omitempty"`
+	Managed       bool       `json:"managed,omitempty"`
+	ThreadID      string     `json:"thread_id,omitempty"`
+	Goal          *CodexGoal `json:"goal,omitempty"`
+	ProcessKey    string     `json:"process_key,omitempty"`
 }
 
 type Directory struct {

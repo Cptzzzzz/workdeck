@@ -3244,3 +3244,23 @@ main {
 .network-test-spinner { animation:network-spin 1s linear infinite; }
 @keyframes network-spin { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:reduce) { .network-test-spinner { animation:none; } }
+
+.codex-launch-options {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid #ffffff16;
+  border-radius: 9px;
+  background: #ffffff03;
+}
+.codex-launch-options details {
+  margin: 14px 0;
+}
+.codex-launch-options summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+.codex-launch-options .modal-description {
+  font-size: 12px;
+  line-height: 1.7;
+}

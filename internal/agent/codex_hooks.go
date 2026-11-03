@@ -244,6 +244,9 @@ func configureCodexHooks(dataDir string, enabled bool) error {
 // HandleCodexHook is intentionally fail-open: it never blocks a Codex turn and
 // never writes prompts, output, tool arguments, or transcript paths to disk.
 func HandleCodexHook(dir string, input io.Reader) error {
+	if os.Getenv("WORKDECK_MANAGED_CODEX") == "1" {
+		return nil
+	}
 	if !filepath.IsAbs(dir) {
 		return nil
 	}

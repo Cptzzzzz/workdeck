@@ -99,6 +99,7 @@ func (s *Sessions) codexObservation(id string) *protocol.CodexObservation {
 			observation.Status, observation.EventID, observation.ObservedAt = saved.Status, saved.EventID, saved.ObservedAt
 			observation.Detected = saved.Detected
 			observation.ProcessKey = saved.ProcessKey
+			observation.Managed, observation.ThreadID, observation.Goal = saved.Managed, saved.ThreadID, saved.Goal
 		}
 	}
 	return observation

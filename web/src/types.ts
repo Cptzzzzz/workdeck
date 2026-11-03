@@ -51,6 +51,17 @@ export type TerminalRecord = {
     codex_event: string;
     codex_observed_at: string;
     codex_detected: boolean | null;
+    codex?: {
+      managed?: boolean;
+      thread_id?: string;
+      goal?: {
+        status: string;
+        tokens_used: number;
+        token_budget?: number;
+        time_used_seconds: number;
+        created_at: number;
+      };
+    };
   };
 };
 export type Snapshot = { nodes: ComputeNode[]; terminals: TerminalRecord[] };

@@ -562,12 +562,21 @@ function App() {
           !event ||
           !previousEvents.has(terminal.id) ||
           previousEvents.get(terminal.id) === event ||
-          !["attention", "turn_ended", "interrupted"].includes(state || "")
+          ![
+            "attention",
+            "turn_ended",
+            "interrupted",
+            "goal_complete",
+            "goal_blocked",
+            "goal_paused",
+            "goal_budget_limited",
+            "goal_usage_limited",
+          ].includes(state || "")
         )
           continue;
         if (active !== terminal.id || !document.hasFocus())
           setUnreadCodex((old) => ({ ...old, [terminal.id]: event }));
-        if (state === "turn_ended") {
+        if (state === "turn_ended" || state === "goal_complete") {
           window.setTimeout(() => {
             if (!currentUser.current) return;
             const latest = codexSnapshot.current.terminals.find(
@@ -575,7 +584,7 @@ function App() {
             );
             if (
               latest?.task?.codex_event !== event ||
-              latest.task.codex_status !== "turn_ended"
+              latest.task.codex_status !== state
             )
               return;
             if (
@@ -585,11 +594,22 @@ function App() {
             )
               return;
             const key = `workdeck-notified-event-${terminal.id}`;
-            if (localStorage.getItem(key) === event) return;
-            localStorage.setItem(key, event);
-            const notice = new Notification("Codex 可能已完成，请查看", {
-              body: `${terminal.name}：请查看结果和后续操作。`,
-            });
+            const identity =
+              state === "goal_complete"
+                ? `goal:${terminal.task?.codex?.thread_id}:${terminal.task?.codex?.goal?.created_at}:complete`
+                : `turn:${terminal.task?.codex_turn || event}`;
+            if (localStorage.getItem(key) === identity) return;
+            localStorage.setItem(key, identity);
+            const notice = new Notification(
+              state === "goal_complete"
+                ? "Codex Goal 已完成"
+                : terminal.task?.codex?.managed
+                  ? "Codex 本轮已结束"
+                  : "Codex 可能已完成，请查看",
+              {
+                body: `${terminal.name}：请查看结果和后续操作。`,
+              },
+            );
             notice.onclick = () => {
               window.focus();
               setTabs((tabs) =>
@@ -601,17 +621,31 @@ function App() {
           }, 2500);
         }
         if (
-          state === "attention" &&
+          [
+            "attention",
+            "goal_blocked",
+            "goal_paused",
+            "goal_budget_limited",
+            "goal_usage_limited",
+          ].includes(state || "") &&
           localStorage.getItem("workdeck-task-notifications") === "on" &&
           "Notification" in window &&
           Notification.permission === "granted"
         ) {
           const key = `workdeck-notified-event-${terminal.id}`;
-          if (localStorage.getItem(key) !== event) {
-            localStorage.setItem(key, event);
-            const notice = new Notification("Codex 可能需要处理", {
-              body: `${terminal.name}：请打开终端查看。`,
-            });
+          const identity = state?.startsWith("goal_")
+            ? `goal:${terminal.task?.codex?.thread_id}:${terminal.task?.codex?.goal?.created_at}:${state}`
+            : event;
+          if (localStorage.getItem(key) !== identity) {
+            localStorage.setItem(key, identity);
+            const notice = new Notification(
+              state?.startsWith("goal_")
+                ? "Codex Goal 需要处理"
+                : "Codex 可能需要处理",
+              {
+                body: `${terminal.name}：请打开终端查看。`,
+              },
+            );
             notice.onclick = () => {
               window.focus();
               setTabs((tabs) =>

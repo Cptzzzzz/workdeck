@@ -50,7 +50,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	for name, definition := range map[string]string{"codex_status": "TEXT NOT NULL DEFAULT ''", "codex_event": "TEXT NOT NULL DEFAULT ''", "codex_observed_at": "TEXT NOT NULL DEFAULT ''", "codex_detected": "INTEGER"} {
+	for name, definition := range map[string]string{"codex_details": "TEXT NOT NULL DEFAULT '{}'", "codex_status": "TEXT NOT NULL DEFAULT ''", "codex_event": "TEXT NOT NULL DEFAULT ''", "codex_observed_at": "TEXT NOT NULL DEFAULT ''", "codex_detected": "INTEGER"} {
 		rows, e := db.Query("PRAGMA table_info(terminal_tasks)")
 		if e != nil {
 			db.Close()
@@ -174,17 +174,18 @@ type Terminal struct {
 }
 
 type TaskInfo struct {
-	Note             string `json:"note"`
-	Tags             string `json:"tags"`
-	Important        bool   `json:"important"`
-	ManualStatus     string `json:"manual_status"`
-	CodexTurn        string `json:"codex_turn"`
-	CodexCompletedAt string `json:"codex_completed_at"`
-	CodexCommand     string `json:"codex_command"`
-	CodexStatus      string `json:"codex_status"`
-	CodexEvent       string `json:"codex_event"`
-	CodexObservedAt  string `json:"codex_observed_at"`
-	CodexDetected    *bool  `json:"codex_detected"`
+	Note             string                     `json:"note"`
+	Tags             string                     `json:"tags"`
+	Important        bool                       `json:"important"`
+	ManualStatus     string                     `json:"manual_status"`
+	CodexTurn        string                     `json:"codex_turn"`
+	CodexCompletedAt string                     `json:"codex_completed_at"`
+	CodexCommand     string                     `json:"codex_command"`
+	CodexStatus      string                     `json:"codex_status"`
+	CodexEvent       string                     `json:"codex_event"`
+	CodexObservedAt  string                     `json:"codex_observed_at"`
+	Codex            *protocol.CodexObservation `json:"codex,omitempty"`
+	CodexDetected    *bool                      `json:"codex_detected"`
 }
 
 const terminalFields = "id,node_id,name,cwd,desired_state,observed_state,created_at,updated_at,error,exit_code"

@@ -187,6 +187,14 @@ export function CreateTerminal({
   selected: string;
   onCreated: (id: string) => void;
 }) {
+  const [kind, setKind] = useState("shell");
+  const [proxyMode, setProxyMode] = useState("inherit");
+  const [proxy, setProxy] = useState("");
+  const [approval, setApproval] = useState("on-request");
+  const [sandbox, setSandbox] = useState("workspace-write");
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
+  const [resume, setResume] = useState("");
   const online = nodes.filter((n) => n.online);
   const [node, setNode] = useState(
       online.find((n) => n.id === selected)?.id || online[0]?.id || "",
@@ -209,7 +217,24 @@ export function CreateTerminal({
         try {
           const t = await api<Term>("/terminals", {
             method: "POST",
-            body: JSON.stringify({ node_id: node, name, cwd }),
+            body: JSON.stringify({
+              node_id: node,
+              name,
+              cwd,
+              ...(kind === "codex"
+                ? {
+                    launch: {
+                      proxy_mode: proxyMode,
+                      ...(proxyMode === "custom" ? { proxy } : {}),
+                      approval,
+                      sandbox,
+                      model: model.trim(),
+                      effort,
+                      resume: resume.trim(),
+                    },
+                  }
+                : {}),
+            }),
           });
           if (t.state === "error") {
             setError(t.error || "终端启动失败");
@@ -262,11 +287,162 @@ export function CreateTerminal({
         value={cwd}
         onChange={setCwd}
       />
+      <label>
+        启动方式
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="shell">普通终端</option>
+          <option
+            value="codex"
+            disabled={
+              !nodes
+                .find((n) => n.id === node)
+                ?.capabilities?.includes("managed-codex-v1")
+            }
+          >
+            Codex 受管会话
+          </option>
+        </select>
+      </label>
+      {kind === "codex" && (
+        <div className="codex-launch-options">
+          <p className="modal-description">
+            Codex 随终端持续运行，自动识别轮次及 Goal
+            状态。节点需要安装支持远程本地后端的 Codex 并完成登录。
+          </p>
+          <label>
+            执行预设
+            <select
+              value={
+                approval === "on-request" &&
+                sandbox === "workspace-write" &&
+                effort === ""
+                  ? "on-request/workspace-write/"
+                  : approval === "never" &&
+                      sandbox === "danger-full-access" &&
+                      effort === "xhigh"
+                    ? "never/danger-full-access/xhigh"
+                    : "custom"
+              }
+              onChange={(e) => {
+                const [a, s, r] = e.target.value.split("/");
+                setApproval(a);
+                setSandbox(s);
+                setEffort(r);
+              }}
+            >
+              <option value="on-request/workspace-write/">
+                标准 · 工作区写入，按需确认
+              </option>
+              <option value="never/danger-full-access/xhigh">
+                Coder · 无需确认，完整权限，xhigh
+              </option>
+              <option value="custom" disabled>
+                自定义配置
+              </option>
+            </select>
+          </label>
+          <label>
+            代理
+            <select
+              aria-label="代理"
+              value={proxyMode}
+              onChange={(e) => setProxyMode(e.target.value)}
+            >
+              <option value="inherit">继承节点服务的代理环境</option>
+              <option value="none">不使用代理</option>
+              <option value="custom">指定代理地址</option>
+            </select>
+          </label>
+          {proxyMode === "custom" && (
+            <label>
+              代理地址
+              <input
+                type="password"
+                autoComplete="off"
+                value={proxy}
+                onChange={(e) => setProxy(e.target.value)}
+                placeholder="http://127.0.0.1:7890"
+                required
+                maxLength={2048}
+              />
+            </label>
+          )}
+          <details>
+            <summary>高级启动选项</summary>
+            <label>
+              命令确认
+              <select
+                value={approval}
+                onChange={(e) => setApproval(e.target.value)}
+              >
+                <option value="on-request">按需确认</option>
+                <option value="never">无需确认</option>
+              </select>
+            </label>
+            <label>
+              文件与命令权限
+              <select
+                value={sandbox}
+                onChange={(e) => setSandbox(e.target.value)}
+              >
+                <option value="read-only">只读</option>
+                <option value="workspace-write">工作区写入</option>
+                <option value="danger-full-access">完整权限</option>
+              </select>
+            </label>
+            <label>
+              模型
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                maxLength={128}
+                placeholder="沿用节点 Codex 配置"
+              />
+            </label>
+            <label>
+              推理强度
+              <select
+                value={effort}
+                onChange={(e) => setEffort(e.target.value)}
+              >
+                {["", "minimal", "low", "medium", "high", "xhigh"].map((v) => (
+                  <option key={v} value={v}>
+                    {v || "沿用节点 Codex 配置"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              恢复已有 Codex 会话
+              <input
+                value={resume}
+                onChange={(e) => setResume(e.target.value)}
+                maxLength={64}
+                placeholder="可选：Codex 会话 UUID"
+              />
+            </label>
+          </details>
+          <p className="modal-description">
+            代理仅保存在计算节点的私有配置中。继承代理不会读取 shell 的 coder
+            函数；Coder 预设只设置执行权限和推理强度。
+          </p>
+        </div>
+      )}
       {error && <div className="form-error">{error}</div>}
       {!online.length && (
         <div className="form-error">当前没有在线节点，请先接入机器。</div>
       )}
-      <button className="primary full" disabled={busy || !node}>
+      <button
+        className="primary full"
+        disabled={
+          busy ||
+          !node ||
+          (kind === "codex" &&
+            !nodes
+              .find((n) => n.id === node)
+              ?.capabilities?.includes("managed-codex-v1"))
+        }
+      >
         {busy ? "正在创建…" : "创建并连接"}
         <ArrowRight size={17} />
       </button>

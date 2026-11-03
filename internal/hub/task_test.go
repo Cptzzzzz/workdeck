@@ -135,3 +135,36 @@ func TestCodexObservationsIgnoreStaleAndForeignNodeEvents(t *testing.T) {
 		t.Fatal("stale or foreign event overwrote current state", status, event)
 	}
 }
+
+func TestManagedGoalPersistsAndRejectsOlderSnapshots(t *testing.T) {
+	x := setup(t)
+	x.signIn(t)
+	node, id := randomID(), randomID()
+	_, err := x.h.store.db.Exec("INSERT INTO nodes(id,name,public_key) VALUES(?,?,?)", node, "node", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = x.h.store.db.Exec("INSERT INTO terminals("+terminalFields+") VALUES(?,?,?,?,?,?,?,?,?,NULL)", id, node, "managed", "/tmp", "running", "running", now(), now(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := &protocol.CodexObservation{Managed: true, ThreadID: "root", Status: "goal_complete", EventID: "new", ObservedAt: "2026-11-03T10:00:00Z", Goal: &protocol.CodexGoal{Status: "complete", TokensUsed: 321, CreatedAt: 123}}
+	if e := saveCodexObservation(x.h.store.db, node, id, observation); e != nil {
+		t.Fatal(e)
+	}
+	observation.Status = "goal_active"
+	observation.Goal.Status = "active"
+	observation.ObservedAt = "2026-11-03T09:00:00Z"
+	if e := saveCodexObservation(x.h.store.db, node, id, observation); e != nil {
+		t.Fatal(e)
+	}
+	code, state := x.request(t, "GET", "/api/state", nil, false)
+	if code != 200 {
+		t.Fatal(code)
+	}
+	task := state["terminals"].([]any)[0].(map[string]any)["task"].(map[string]any)
+	detail := task["codex"].(map[string]any)
+	if task["codex_status"] != "goal_complete" || detail["managed"] != true || detail["goal"].(map[string]any)["status"] != "complete" {
+		t.Fatal("stale observation replaced goal result")
+	}
+}

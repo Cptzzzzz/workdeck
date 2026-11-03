@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { ComputeNode, TerminalRecord } from "../../types";
 import { api } from "../../services/api";
+import { codexStatus } from "../../codex-status";
 import { HardwareDetails } from "./hardware-details";
 import {
   DEFAULT_FONT_SIZE,
@@ -135,6 +136,27 @@ export function SessionsPanel({
                 )}
                 {t.task?.tags && <small>标签：{t.task.tags}</small>}
                 {t.task?.note && <small>备注：{t.task.note}</small>}
+                {t.task?.codex?.managed && (
+                  <>
+                    <small>
+                      {codexStatus(t, node)?.text || "受管 Codex 状态未知"}
+                    </small>
+                    {t.task.codex.thread_id && (
+                      <small>
+                        Codex 会话：<code>{t.task.codex.thread_id}</code>
+                      </small>
+                    )}
+                    {t.task.codex.goal && (
+                      <small>
+                        Goal 用量：
+                        {t.task.codex.goal.tokens_used.toLocaleString()} /{" "}
+                        {t.task.codex.goal.token_budget?.toLocaleString() ||
+                          "不限"}{" "}
+                        tokens · {t.task.codex.goal.time_used_seconds} 秒
+                      </small>
+                    )}
+                  </>
+                )}
                 {t.task?.codex_completed_at && (
                   <small>
                     Codex 最近一轮结束：
@@ -252,8 +274,8 @@ function TaskEditor({ terminal }: { terminal: TerminalRecord }) {
       </label>
       <button onClick={() => void save()}>保存任务信息</button>
       <p>
-        在节点管理中启用 Codex 跟踪并在 Codex 的 /hooks 中信任后，直接运行 codex
-        即可。已运行的进程可能需要重启或恢复会话。
+        新建终端可选择“Codex 受管会话”，直接跟踪轮次与 Goal。普通终端中的 Codex
+        可通过节点管理启用 Hooks 跟踪。
       </p>
       {message && <small role="status">{message}</small>}
     </details>

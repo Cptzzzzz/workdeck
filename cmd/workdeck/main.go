@@ -32,6 +32,14 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	switch os.Args[1] {
+	case "managed-codex":
+		f := flag.NewFlagSet("managed-codex", flag.ContinueOnError)
+		dir := f.String("data-dir", "", "node data directory")
+		id := f.String("terminal-id", "", "terminal identifier")
+		if err := f.Parse(os.Args[2:]); err != nil {
+			return err
+		}
+		return agent.ManagedCodex(*dir, *id)
 	case "codex-hook":
 		f := flag.NewFlagSet("codex-hook", flag.ContinueOnError)
 		dir := f.String("data-dir", "", "node data directory")

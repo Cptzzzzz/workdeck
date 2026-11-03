@@ -204,7 +204,7 @@ func (s *Sessions) inventory(ctx context.Context) ([]protocol.Session, error) {
 		}
 		s.mu.Unlock()
 		t.Codex = s.codexObservation(t.ID)
-		if t.Codex != nil && t.State == "running" && t.PanePID > 0 {
+		if t.Codex != nil && !t.Codex.Managed && t.State == "running" && t.PanePID > 0 {
 			if _, ok := processes[t.PanePID]; ok {
 				detected := processes.hasCodex(t.PanePID)
 				t.Codex.Detected = &detected
@@ -239,6 +239,22 @@ func (s *Sessions) Create(spec protocol.Session) (protocol.Session, error) {
 	if err != nil {
 		return spec, err
 	}
+	if spec.Launch != nil {
+		if err = spec.Launch.Validate(); err != nil {
+			return protocol.Session{}, err
+		}
+		if _, err = codexBinary(); err != nil {
+			return protocol.Session{}, err
+		}
+		if err = os.MkdirAll(filepath.Join(s.dir, "codex-launches"), 0700); err != nil {
+			return protocol.Session{}, err
+		}
+		if err = atomicJSON(managedPath(s.dir, spec.ID), managedLaunch{Options: *spec.Launch, Cwd: spec.Cwd, Shell: s.shell}); err != nil {
+			return protocol.Session{}, err
+		}
+	}
+	managed := spec.Launch != nil
+	spec.Launch = nil // Never persist/return credentials in session metadata.
 	spec.RunUser = account.Username
 	spec.Scope = serviceScope()
 	spec.State = "creating"
@@ -249,6 +265,16 @@ func (s *Sessions) Create(spec protocol.Session) (protocol.Session, error) {
 	// Every terminal owns a separate systemd unit, tmux server, and cgroup.
 	// Its lifecycle is independent of the network Agent service.
 	args := []string{"--unit=" + unitName(spec.ID), "--property=Type=forking", "--property=Restart=no", "--property=KillMode=control-group", "--property=TimeoutStopSec=8", "--setenv=COLORTERM=truecolor", "--setenv=LANG=C.UTF-8", "--setenv=HOME=" + account.HomeDir, "--setenv=USER=" + account.Username, "--setenv=LOGNAME=" + account.Username, s.tmux, "-L", socketName(spec.ID), "-f", filepath.Join(s.dir, "tmux.conf"), "new-session", "-d", "-s", "main", "-x", "100", "-y", "30", "-c", spec.Cwd, s.shell, "-l"}
+	if managed {
+		self, e := os.Executable()
+		if e != nil {
+			return spec, e
+		}
+		// tmux accepts a single shell-command. Every value is quoted; the
+		// private file holds the proxy, so argv and pane listings do not.
+		args = args[:len(args)-2]
+		args = append(args, shellQuote(self)+" managed-codex --data-dir "+shellQuote(s.dir)+" --terminal-id "+shellQuote(spec.ID))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	command, err := managerCommand(ctx, spec, "systemd-run", args...)
@@ -299,6 +325,7 @@ func (s *Sessions) Close(id string) (protocol.Session, error) {
 			return t, fmt.Errorf("无法终止会话：%s", strings.TrimSpace(string(out)))
 		}
 	}
+	_ = os.Remove(managedPath(s.dir, id)) // Erase saved proxy credentials after explicit closure.
 	t.State = "closed"
 	t.Error = ""
 	if err = atomicJSON(s.path(id), t); err != nil {

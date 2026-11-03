@@ -131,7 +131,7 @@ func (a *Agent) inventory(ctx context.Context, socket *protocol.Socket) error {
 	if err != nil {
 		return err
 	}
-	message := protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "hardware-inventory-v1"}}
+	message := protocol.Message{Type: "inventory", RunUser: account.Username, Hostname: host, Platform: runtime.GOOS + "/" + runtime.GOARCH, Home: home, Shell: a.sessions.shell, Version: a.version, Hardware: a.hardwareSnapshot(), Sessions: sessions, Complete: snapshotErr == nil, BootID: a.sessions.bootID, Capabilities: []string{"directories", "full-inventory", "workspace-control-v1", "workspace-files-v1", "workspace-create-v1", "workspace-rename-v1", "workspace-delete-v1", "workspace-file-direct-v1", "workspace-watch-v1", "workspace-archive-v1", "workspace-pending-v1", "codex-hooks-v1", "managed-codex-v1", "hardware-inventory-v1"}}
 	a.stateMu.Lock()
 	defer a.stateMu.Unlock()
 	// A mutation result was sent after this snapshot began; never publish an
@@ -297,6 +297,7 @@ func (a *Agent) connected(parent context.Context) error {
 						t.Error = e.Error()
 					}
 				}
+				t.Launch = nil
 				result.Session = &t
 				a.stateVersion++
 				_ = socket.JSON(result)
