@@ -200,6 +200,23 @@ func ManagedCodex(dir, id string) (result error) {
 	if e != nil {
 		return errors.New("Codex 本地接口启动超时")
 	}
+	if launch.Options.Resume != "" {
+		// The remote TUI rejects permission flags on `resume`. Apply the
+		// explicitly requested options through the backend before attaching it.
+		params := map[string]any{"threadId": launch.Options.Resume, "cwd": launch.Cwd, "approvalPolicy": launch.Options.Approval, "sandbox": launch.Options.Sandbox, "excludeTurns": true}
+		if launch.Options.Model != "" {
+			params["model"] = launch.Options.Model
+		}
+		if launch.Options.Effort != "" {
+			params["config"] = map[string]string{"model_reasoning_effort": launch.Options.Effort}
+		}
+		var resumed json.RawMessage
+		e = seed.call("thread/resume", params, &resumed)
+		if e != nil {
+			seed.ws.Close()
+			return e
+		}
+	}
 	seed.ws.Close()
 	launch.Thread = launch.Options.Resume
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,15 +226,17 @@ func ManagedCodex(dir, id string) (result error) {
 	// because Codex has not materialized its rollout before the first input.
 	// Remote mode does not use the TUI process cwd as an explicit workspace.
 	// --cd also scopes /resume and overrides a resumed thread's saved cwd.
-	args := []string{"--remote", "unix://" + path, "--cd", launch.Cwd, "--ask-for-approval", launch.Options.Approval, "--sandbox", launch.Options.Sandbox}
-	if launch.Options.Model != "" {
-		args = append(args, "--model", launch.Options.Model)
-	}
-	if launch.Options.Effort != "" {
-		args = append(args, "-c", "model_reasoning_effort="+launch.Options.Effort)
-	}
+	args := []string{"--remote", "unix://" + path, "--cd", launch.Cwd}
 	if launch.Options.Resume != "" {
 		args = append(args, "resume", launch.Options.Resume)
+	} else {
+		args = append(args, "--ask-for-approval", launch.Options.Approval, "--sandbox", launch.Options.Sandbox)
+		if launch.Options.Model != "" {
+			args = append(args, "--model", launch.Options.Model)
+		}
+		if launch.Options.Effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+launch.Options.Effort)
+		}
 	}
 	tui := exec.Command(bin, args...)
 	tui.Dir = launch.Cwd
