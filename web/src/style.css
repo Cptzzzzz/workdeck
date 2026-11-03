@@ -607,6 +607,12 @@ main {
   align-items: center;
   justify-content: center;
 }
+.terminal-kind {
+  font-size: 10px;
+  color: #92a396;
+  white-space: nowrap;
+}
+.terminal-kind.codex { color: #c9b396; }
 .badge {
   font-size: 9px;
   display: flex;
@@ -3314,3 +3320,15 @@ main {
 .codex-history-picker label { min-width:0; flex:1; margin-top:0; }
 .codex-history-picker > button { height:42px; flex-shrink:0; }
 .resume-selected-hint { color:#b8cf9c; }
+
+.feishu-settings { margin-top: 24px; padding-top: 20px; border-top: 1px solid #303d32; }
+.feishu-heading { display: flex; align-items: center; gap: 8px; color: #c7d4c2; font-size: 13px; }
+.feishu-heading span { margin-left: auto; color: #8ba08b; font-size: 11px; }
+.feishu-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.feishu-fields label { display: grid; gap: 7px; color: #a5b4a3; font-size: 12px; min-width: 0; }
+.feishu-fields input { min-width: 0; }
+.feishu-options, .feishu-actions { display: flex; flex-wrap: wrap; gap: 14px; }
+.feishu-actions { margin-top: 15px; gap: 9px; }
+.feishu-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.feishu-message { color: #a9c9a3; font-size: 12px; }
+@media (max-width: 650px) { .feishu-fields { grid-template-columns: 1fr; } }

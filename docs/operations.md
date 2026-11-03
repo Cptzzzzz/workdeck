@@ -53,7 +53,7 @@ docker run --rm -v workdeck-standalone_hub-data:/data:ro \
 docker compose start hub
 ```
 
-同时备份私有 `.env`、初始化密码和 Caddy 证书卷。已有 Caddy 方案备份其 `data/` 目录。完整数据库、证书和身份备份均应作为敏感数据保存。
+同时备份私有 `.env`、初始化密码和 Caddy 证书卷。启用飞书通知时，还需确保完整数据目录包含 `feishu.key`，与数据库一起备份。已有 Caddy 方案备份其 `data/` 目录。完整数据库、证书和身份备份均应作为敏感数据保存。
 
 每个节点的 `~/.local/share/workdeck` 需另外备份。恢复到空数据卷前停止 Hub，解压后保持 UID/GID 65532 的权限，再启动。节点身份恢复要对应原节点，避免两个 Agent 同时使用同一身份。
 

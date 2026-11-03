@@ -75,6 +75,9 @@ type Hub struct {
 	nonces              map[string]time.Time
 	dummyHash           []byte
 	workspaceLocks      [64]sync.Mutex
+	feishuMu            sync.Mutex
+	feishuHTTP          *http.Client
+	feishuToken         feishuTokenCache
 	workspaceRecovering map[string]bool
 	fileTickets         map[string]*fileBrowserTicket
 	downloadResumes     map[string]*fileBrowserTicket
@@ -152,6 +155,9 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/tailnet/diagnostic", h.protected(h.tailnetDiagnosticConfig))
 	m.HandleFunc("POST /api/tailnet/diagnostic", h.protected(h.recordTailnetDiagnostic))
 	m.HandleFunc("POST /api/account/password", h.protected(h.changePassword))
+	m.HandleFunc("GET /api/integrations/feishu", h.protected(h.feishuSettings))
+	m.HandleFunc("PUT /api/integrations/feishu", h.protected(h.feishuSettings))
+	m.HandleFunc("POST /api/integrations/feishu/test", h.protected(h.feishuTest))
 	m.HandleFunc("GET /api/state", h.protected(h.state))
 	m.HandleFunc("GET /api/events", h.protected(h.stateEvents))
 	m.HandleFunc("POST /api/enrollments", h.protected(h.newEnrollment))
@@ -208,6 +214,7 @@ func (h *Hub) Handler() http.Handler {
 	})
 }
 func (h *Hub) Run(ctx context.Context) error {
+	go h.runFeishuOutbox(ctx)
 	server := &http.Server{Addr: h.cfg.Addr, Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 75 * time.Second, MaxHeaderBytes: 32768}
 	go func() {
 		<-ctx.Done()
@@ -328,6 +335,30 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	for i := range terms {
 		terms[i].Task = tasks[terms[i].ID]
 	}
+	rows, err = h.store.db.Query("SELECT id,kind FROM terminals")
+	if err != nil {
+		failure(w, 500, "读取终端类型失败")
+		return
+	}
+	kinds := map[string]string{}
+	for rows.Next() {
+		var id, kind string
+		if err = rows.Scan(&id, &kind); err != nil {
+			rows.Close()
+			failure(w, 500, "读取终端类型失败")
+			return
+		}
+		kinds[id] = kind
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		failure(w, 500, "读取终端类型失败")
+		return
+	}
+	for i := range terms {
+		terms[i].Kind = kinds[terms[i].ID]
+	}
 	respond(w, 200, map[string]any{"nodes": nodes, "terminals": terms})
 }
 
@@ -435,7 +466,7 @@ func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservat
 		ThreadID string              `json:"thread_id,omitempty"`
 		Goal     *protocol.CodexGoal `json:"goal,omitempty"`
 	}{c.Managed, c.ThreadID, c.Goal})
-	_, err := db.Exec(`INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected,codex_details)
+	result, err := db.Exec(`INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected,codex_details)
 	 SELECT id,?,?,?,?,?,?,?,? FROM terminals WHERE id=? AND node_id=?
 	 ON CONFLICT(terminal_id) DO UPDATE SET
 	 codex_turn=CASE WHEN excluded.codex_turn<>'' AND ((excluded.codex_observed_at='' AND terminal_tasks.codex_observed_at='') OR (excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at)) THEN excluded.codex_turn ELSE terminal_tasks.codex_turn END,
@@ -446,6 +477,11 @@ func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservat
 	 codex_observed_at=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_observed_at ELSE terminal_tasks.codex_observed_at END,
 	 codex_detected=COALESCE(excluded.codex_detected,terminal_tasks.codex_detected),
     codex_details=CASE WHEN excluded.codex_observed_at<>'' AND excluded.codex_observed_at>=terminal_tasks.codex_observed_at THEN excluded.codex_details ELSE terminal_tasks.codex_details END`, c.TurnID, c.CompletedAt, c.LaunchCommand, c.Status, c.EventID, c.ObservedAt, c.Detected, string(details), id, node)
+	if err == nil && c.Managed {
+		if matched, _ := result.RowsAffected(); matched > 0 {
+			_, err = db.Exec("UPDATE terminals SET kind='codex' WHERE id=? AND node_id=?", id, node)
+		}
+	}
 	return err
 }
 
@@ -558,7 +594,11 @@ func (h *Hub) createTerminal(w http.ResponseWriter, r *http.Request, l login) {
 	}
 	id := randomID()
 	ts := now()
-	_, err := h.store.db.Exec("INSERT INTO terminals("+terminalFields+") VALUES(?,?,?,?,?,?,?,?,?,NULL)", id, in.NodeID, in.Name, in.Cwd, "running", "creating", ts, ts, "")
+	kind := "terminal"
+	if in.Launch != nil {
+		kind = "codex"
+	}
+	_, err := h.store.db.Exec("INSERT INTO terminals("+terminalFields+",kind) VALUES(?,?,?,?,?,?,?,?,?,NULL,?)", id, in.NodeID, in.Name, in.Cwd, "running", "creating", ts, ts, "", kind)
 	if err != nil {
 		failure(w, 500, "保存终端失败")
 		return
@@ -570,6 +610,7 @@ func (h *Hub) createTerminal(w http.ResponseWriter, r *http.Request, l login) {
 		_, _ = h.store.db.Exec("UPDATE terminals SET observed_state='error',error=?,updated_at=? WHERE id=?", "创建终端失败："+e.Error(), now(), id)
 	}
 	t, _ := h.store.terminal(id)
+	t.Kind = kind
 	respond(w, 201, t)
 }
 func (h *Hub) renameTerminal(w http.ResponseWriter, r *http.Request, l login) {
@@ -898,6 +939,14 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 		case "codex.update":
 			if err := saveCodexObservation(h.store.db, node, msg.TerminalID, msg.Codex); err == nil {
 				h.publishState()
+			}
+		case "codex.notice":
+			if err := h.receiveCodexNotice(node, msg); err != nil {
+				log.Printf("codex notice: %v", err)
+				return
+			}
+			if err := s.JSON(protocol.Message{Type: "codex.notice.ack", RequestID: msg.RequestID}); err != nil {
+				return
 			}
 		case "result":
 			h.mu.Lock()

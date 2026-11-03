@@ -86,6 +86,7 @@ func (a *Agent) dial(path, ticket string) (*protocol.Socket, error) {
 }
 func (a *Agent) Run(ctx context.Context) error {
 	go a.hardwareLoop(ctx)
+	go a.collectCodexNotices(ctx)
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
@@ -176,6 +177,7 @@ func (a *Agent) connected(parent context.Context) error {
 		}
 	}()
 	go a.watchCodexEvents(ctx, socket)
+	go a.sendCodexNotices(ctx, socket)
 	fileWorkers := newFileWorkerPool(a)
 	defer fileWorkers.Close()
 	var jobs sync.WaitGroup
@@ -189,6 +191,8 @@ func (a *Agent) connected(parent context.Context) error {
 			return err
 		}
 		switch msg.Type {
+		case "codex.notice.ack":
+			a.ackCodexNotice(msg.RequestID)
 		case "hub.transport":
 			a.updateHubRouteHint(msg.TailnetHost)
 			if msg.WarmConnections > 0 && !warmStarted {

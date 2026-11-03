@@ -29,6 +29,7 @@ export type ComputeNode = {
   capabilities?: string[];
 };
 export type TerminalRecord = {
+  kind?: "terminal" | "codex";
   id: string;
   node_id: string;
   name: string;

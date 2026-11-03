@@ -7,6 +7,7 @@ import {
   Command,
   Folder,
   LayoutGrid,
+  KeyRound,
   LogOut,
   Menu,
   MoreHorizontal,
@@ -38,7 +39,7 @@ import { api, setCSRF } from "./services/api";
 import { TerminalView } from "./features/terminal/terminal-view";
 import { HardwareDetails } from "./features/management/hardware-details";
 import { formatBytes } from "./network-metrics";
-import { codexStatus } from "./codex-status";
+import { codexStatus, isCodexTask } from "./codex-status";
 import {
   useWorkspace,
   type Document as WorkspaceDocument,
@@ -508,6 +509,21 @@ function App() {
       events.close();
     };
   }, [user, refresh]);
+  const pendingTerminalLink = useRef(
+    new URL(window.location.href).searchParams.get("terminal"),
+  );
+  useEffect(() => {
+    const id = pendingTerminalLink.current;
+    if (!user || !id || !data.terminals.some((terminal) => terminal.id === id))
+      return;
+    pendingTerminalLink.current = null;
+    setTabs((old) => (old.includes(id) ? old : [...old, id]));
+    setActive(id);
+    setMode("terminal");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("terminal");
+    window.history.replaceState(null, "", url);
+  }, [user, data.terminals]);
   const knownCodexTurns = useRef<Map<string, string> | null>(null);
   const knownCodexEvents = useRef<Map<string, string> | null>(null);
   const codexSnapshot = useRef(data);
@@ -896,11 +912,18 @@ function App() {
                 <small>个人工作台</small>
               </div>
               <button
+                title="设置"
+                aria-label="设置"
+                onClick={() => setModal("settings")}
+              >
+                <Settings2 size={17} />
+              </button>
+              <button
                 title="修改密码"
                 aria-label="修改密码"
                 onClick={() => setModal("password")}
               >
-                <Settings2 size={17} />
+                <KeyRound size={17} />
               </button>
               <button
                 title="退出此设备"
@@ -1053,7 +1076,11 @@ function App() {
                   className={"terminal-tab " + (active === id ? "active" : "")}
                 >
                   <button onClick={() => setActive(id)}>
-                    <TerminalSquare size={15} />
+                    {isCodexTask(t) ? (
+                      <Command size={15} aria-label="Codex 任务" />
+                    ) : (
+                      <TerminalSquare size={15} aria-label="普通终端" />
+                    )}
                     <span>{t?.name || "终端"}</span>
                     {t &&
                       (() => {
@@ -1240,7 +1267,18 @@ function App() {
                   <article className="terminal-card" key={t.id}>
                     <div className="card-top">
                       <span className="terminal-icon">
-                        <TerminalSquare size={21} />
+                        {isCodexTask(t) ? (
+                          <Command size={21} />
+                        ) : (
+                          <TerminalSquare size={21} />
+                        )}
+                      </span>
+                      <span
+                        className={
+                          "terminal-kind " + (isCodexTask(t) ? "codex" : "")
+                        }
+                      >
+                        {isCodexTask(t) ? "Codex 任务" : "普通终端"}
                       </span>
                       <span className={"badge " + s.kind}>
                         <i />

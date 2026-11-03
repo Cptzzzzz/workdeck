@@ -261,11 +261,16 @@ func ManagedCodex(dir, id string) (result error) {
 }
 
 func writeManagedObservation(dir, id string, o protocol.CodexObservation) {
+	var previous protocol.CodexObservation
+	if b, err := os.ReadFile(codexEventPath(dir, id)); err == nil {
+		_ = json.Unmarshal(b, &previous)
+	}
 	o.EventID = randomEventID()
 	o.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	detected := o.Status != "session_ended" && o.Status != "unknown"
 	o.Detected = &detected
 	_ = os.MkdirAll(filepath.Join(dir, "codex-events"), 0700)
+	spoolCodexNotice(dir, id, o, previous)
 	_ = atomicJSON(codexEventPath(dir, id), o)
 }
 

@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import type { ComputeNode, TerminalRecord } from "../../types";
 import { api } from "../../services/api";
-import { codexStatus } from "../../codex-status";
+import { codexStatus, isCodexTask } from "../../codex-status";
+import { FeishuSettings } from "./feishu-settings";
 import { HardwareDetails } from "./hardware-details";
 import {
   DEFAULT_FONT_SIZE,
@@ -122,6 +123,7 @@ export function SessionsPanel({
                   {active === t.id ? " · 当前" : ""}
                 </b>
                 <small>
+                  {isCodexTask(t) ? "Codex 任务" : "普通终端"} ·{" "}
                   {node?.name || "未知节点"} · {state}
                 </small>
                 <small title={t.cwd}>{t.cwd}</small>
@@ -170,7 +172,7 @@ export function SessionsPanel({
                     {!node?.online && "（节点离线，信息可能过期）"}
                   </small>
                 )}
-                {!t.task?.codex_completed_at && (
+                {isCodexTask(t) && !t.task?.codex_completed_at && (
                   <small>Codex：尚未收到轮次结束事件</small>
                 )}
                 <TaskEditor terminal={t} />
@@ -460,7 +462,9 @@ export function SettingsPanel({
         <Settings2 size={24} />
       </div>
       <h2>设置</h2>
-      <p className="modal-description">设置保存在当前浏览器中。</p>
+      <p className="modal-description">
+        显示和链路设置保存在当前浏览器；飞书通知设置在主服务生效。
+      </p>
       <label className="management-setting">
         终端字号
         <Select
@@ -527,6 +531,7 @@ export function SettingsPanel({
       <p className="modal-description">
         仅在本设备页面打开并保持登录时生效；首次打开不会补发旧通知。浏览器需要允许通知。
       </p>
+      <FeishuSettings />
     </div>
   );
 }

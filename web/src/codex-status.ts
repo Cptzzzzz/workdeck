@@ -1,5 +1,9 @@
 import type { ComputeNode, TerminalRecord } from "./types";
 
+export function isCodexTask(terminal?: TerminalRecord) {
+  return terminal?.kind === "codex" || terminal?.task?.codex?.managed === true;
+}
+
 export function codexStatus(terminal?: TerminalRecord, node?: ComputeNode) {
   const raw = terminal?.task?.codex_status;
   if (!raw && terminal?.task?.codex_detected)

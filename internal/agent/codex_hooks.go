@@ -312,6 +312,7 @@ func HandleCodexHook(dir string, input io.Reader) error {
 	if b, e := os.ReadFile(codexEventPath(dir, id)); e == nil {
 		_ = json.Unmarshal(b, &observation)
 	}
+	previous := observation
 	var nonce [16]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
 		return err
@@ -328,5 +329,6 @@ func HandleCodexHook(dir string, input io.Reader) error {
 		observation.CompletedAt = observation.ObservedAt
 	}
 	observation.LaunchCommand = ""
+	spoolCodexNotice(dir, id, observation, previous)
 	return atomicJSON(codexEventPath(dir, id), observation)
 }

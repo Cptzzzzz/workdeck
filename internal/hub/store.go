@@ -46,10 +46,47 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS terminals(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),name TEXT NOT NULL,cwd TEXT NOT NULL,desired_state TEXT NOT NULL,observed_state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',exit_code INTEGER);
  CREATE INDEX IF NOT EXISTS terminals_node ON terminals(node_id);
  CREATE TABLE IF NOT EXISTS terminal_tasks(terminal_id TEXT PRIMARY KEY REFERENCES terminals(id), note TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', important INTEGER NOT NULL DEFAULT 0, manual_status TEXT NOT NULL DEFAULT '', codex_turn TEXT NOT NULL DEFAULT '', codex_completed_at TEXT NOT NULL DEFAULT '', codex_command TEXT NOT NULL DEFAULT '');
+ CREATE TABLE IF NOT EXISTS feishu_config(id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL, app_id TEXT NOT NULL, secret BLOB NOT NULL, receive_type TEXT NOT NULL, receive_id TEXT NOT NULL, complete INTEGER NOT NULL, attention INTEGER NOT NULL, enabled_at TEXT NOT NULL, revision TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS feishu_outbox(event_key TEXT PRIMARY KEY, terminal_id TEXT NOT NULL, node_id TEXT NOT NULL, kind TEXT NOT NULL, observed_at TEXT NOT NULL, revision TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', sent_at TEXT NOT NULL DEFAULT '', message_id TEXT NOT NULL DEFAULT '');
+ CREATE INDEX IF NOT EXISTS feishu_pending ON feishu_outbox(state,next_attempt);
  CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY,terminal_id TEXT NOT NULL UNIQUE REFERENCES terminals(id),node_id TEXT NOT NULL REFERENCES nodes(id),root_path TEXT NOT NULL,root_revision INTEGER NOT NULL,run_user TEXT NOT NULL DEFAULT '',device TEXT NOT NULL DEFAULT '',inode TEXT NOT NULL DEFAULT '',state TEXT NOT NULL CHECK(state IN ('initializing','ready','changing')),pending_id TEXT NOT NULL DEFAULT '',pending_target TEXT NOT NULL DEFAULT '',pending_candidate TEXT NOT NULL DEFAULT '');`
 	if _, err = db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// Session type is a creation-time property; observed Codex processes in a
+	// shell must not silently change it.
+	rows, err := db.Query("PRAGMA table_info(terminals)")
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	hasKind := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var col, typ string
+		var value any
+		if err = rows.Scan(&cid, &col, &typ, &notnull, &value, &pk); err != nil {
+			rows.Close()
+			db.Close()
+			return nil, err
+		}
+		if col == "kind" {
+			hasKind = true
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if !hasKind {
+		if _, err = db.Exec("ALTER TABLE terminals ADD COLUMN kind TEXT NOT NULL DEFAULT 'terminal'"); err != nil {
+			db.Close()
+			return nil, err
+		}
+		// Older managed sessions are recovered below after task migrations.
 	}
 	for name, definition := range map[string]string{"codex_details": "TEXT NOT NULL DEFAULT '{}'", "codex_status": "TEXT NOT NULL DEFAULT ''", "codex_event": "TEXT NOT NULL DEFAULT ''", "codex_observed_at": "TEXT NOT NULL DEFAULT ''", "codex_detected": "INTEGER"} {
 		rows, e := db.Query("PRAGMA table_info(terminal_tasks)")
@@ -83,6 +120,10 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 				return nil, e
 			}
 		}
+	}
+	if _, err = db.Exec(`UPDATE terminals SET kind='codex' WHERE kind='terminal' AND id IN (SELECT terminal_id FROM terminal_tasks WHERE json_valid(codex_details) AND json_extract(codex_details,'$.managed')=1)`); err != nil {
+		db.Close()
+		return nil, err
 	}
 	// Additive migrations preserve existing node identities, sessions, and logins.
 	for name, definition := range map[string]string{"capabilities": "TEXT NOT NULL DEFAULT '[]'", "boot_id": "TEXT NOT NULL DEFAULT ''", "run_user": "TEXT NOT NULL DEFAULT ''", "hardware": "TEXT NOT NULL DEFAULT ''"} {
@@ -161,6 +202,7 @@ type Node struct {
 	Capabilities  []string               `json:"capabilities"`
 }
 type Terminal struct {
+	Kind      string    `json:"kind"`
 	ID        string    `json:"id"`
 	NodeID    string    `json:"node_id"`
 	Name      string    `json:"name"`
