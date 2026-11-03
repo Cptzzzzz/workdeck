@@ -96,6 +96,7 @@ func (s *Sessions) codexObservation(id string) *protocol.CodexObservation {
 		var saved protocol.CodexObservation
 		if json.Unmarshal(b, &saved) == nil {
 			observation.TurnID, observation.CompletedAt = saved.TurnID, saved.CompletedAt
+			observation.TurnStartedAt = saved.TurnStartedAt
 			observation.Status, observation.EventID, observation.ObservedAt = saved.Status, saved.EventID, saved.ObservedAt
 			observation.Detected = saved.Detected
 			observation.ProcessKey = saved.ProcessKey

@@ -23,6 +23,23 @@ import (
 const feishuTokenURL = "https://accounts.feishu.cn/oauth/v3/token"
 const feishuMessageURL = "https://open.feishu.cn/open-apis/im/v1/messages"
 
+var errGoalMetadataPending = errors.New("goal completion requires turn metadata")
+
+// Older agents can report a completed historical Goal for every later turn.
+// Hold the notification until the upgraded node can verify its timestamps.
+func safeCodexObservation(in *protocol.CodexObservation) *protocol.CodexObservation {
+	if in == nil || !in.Managed || in.Status != "goal_complete" || in.Goal == nil || in.Goal.Status != "complete" {
+		return in
+	}
+	out := *in
+	if in.Goal.UpdatedAt <= 0 || in.TurnStartedAt <= 0 {
+		out.Status = "unknown"
+	} else if in.TurnStartedAt > in.Goal.UpdatedAt {
+		out.Status = "turn_ended"
+	}
+	return &out
+}
+
 type feishuConfig struct {
 	Enabled     bool   `json:"enabled"`
 	AppID       string `json:"app_id"`
@@ -215,6 +232,12 @@ func (h *Hub) receiveCodexNotice(node string, msg protocol.Message) error {
 	}
 	isComplete := kind == "goal_complete" || kind == "turn_complete" || kind == "turn_possible"
 	if enabled && !observed.Before(enabledAt) && (isComplete && complete || !isComplete && attention) {
+		if kind == "goal_complete" && msg.Codex.Managed && (msg.Codex.Goal.UpdatedAt <= 0 || msg.Codex.TurnStartedAt <= 0) {
+			return errGoalMetadataPending
+		}
+		if kind == "goal_complete" && msg.Codex.TurnStartedAt > msg.Codex.Goal.UpdatedAt {
+			return errors.New("invalid goal completion timing")
+		}
 		_, e = tx.Exec(`INSERT OR IGNORE INTO feishu_outbox(event_key,terminal_id,node_id,kind,observed_at,revision,next_attempt) SELECT ?,t.id,t.node_id,?,?,?,? FROM terminals t JOIN nodes n ON n.id=t.node_id WHERE t.id=? AND t.node_id=? AND n.revoked=0`, key, kind, msg.Codex.ObservedAt, revision, time.Now().Unix()+3, msg.TerminalID, node)
 		if e != nil {
 			return e
@@ -275,7 +298,7 @@ func (c feishuClient) post(ctx context.Context, url string, body any, token stri
 	}
 	return nil
 }
-func (c feishuClient) send(ctx context.Context, cfg feishuConfig, uuid, title, body, link string) (string, error) {
+func (c feishuClient) send(ctx context.Context, cfg feishuConfig, uuid, title, body, link, buttonLabel string) (string, error) {
 	token := ""
 	if c.cache != nil && c.cache.revision == cfg.Revision && time.Until(c.cache.expires) > time.Minute {
 		token = c.cache.token
@@ -296,7 +319,7 @@ func (c feishuClient) send(ctx context.Context, cfg feishuConfig, uuid, title, b
 			*c.cache = feishuTokenCache{revision: cfg.Revision, token: token, expires: time.Now().Add(time.Duration(auth.Expires) * time.Second)}
 		}
 	}
-	card := map[string]any{"config": map[string]bool{"wide_screen_mode": true}, "header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}, "template": "green"}, "elements": []any{map[string]any{"tag": "div", "text": map[string]string{"tag": "plain_text", "content": body}}, map[string]any{"tag": "action", "actions": []any{map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": "打开 Workdeck"}, "type": "primary", "url": link}}}}}
+	card := map[string]any{"config": map[string]bool{"wide_screen_mode": true}, "header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}, "template": "green"}, "elements": []any{map[string]any{"tag": "div", "text": map[string]string{"tag": "plain_text", "content": body}}, map[string]any{"tag": "action", "actions": []any{map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": buttonLabel}, "type": "primary", "url": link}}}}}
 	content, e := json.Marshal(card)
 	if e != nil {
 		return "", e
@@ -333,7 +356,7 @@ func (h *Hub) feishuTest(w http.ResponseWriter, r *http.Request, _ login) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 16*time.Second)
 	defer cancel()
-	_, e = h.feishuClient().send(ctx, cfg, randomID(), "Workdeck 通知测试", "飞书通知已连接。任务完成或需要处理时，你会在这里收到提醒。", h.cfg.PublicURL)
+	_, e = h.feishuClient().send(ctx, cfg, randomID(), "Workdeck 通知测试", "飞书通知已连接。任务完成或需要处理时，你会在这里收到提醒。", h.cfg.PublicURL, "打开 Workdeck")
 	if e != nil {
 		failure(w, 502, e.Error())
 		return
@@ -362,6 +385,14 @@ func noticeText(kind string) (string, string) {
 	default:
 		return "Codex 需要处理", "可能需要输入或确认"
 	}
+}
+
+func feishuBeijingTime(value string) string {
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return t.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05") + "（北京时间）"
 }
 
 func (h *Hub) runFeishuOutbox(ctx context.Context) {
@@ -401,8 +432,8 @@ func (h *Hub) deliverFeishuNotice(ctx context.Context) {
 		}
 	}
 	title, description := noticeText(kind)
-	body := fmt.Sprintf("任务：%s\n节点：%s\n状态：%s\n时间：%s", name, node, description, observed)
-	messageID, e := h.feishuClient().send(ctx, cfg, key[:32], title, body, h.cfg.PublicURL+"/?terminal="+terminal)
+	body := fmt.Sprintf("任务：%s\n节点：%s\n状态：%s\n时间：%s", name, node, description, feishuBeijingTime(observed))
+	messageID, e := h.feishuClient().send(ctx, cfg, key[:32], title, body, h.cfg.PublicURL+"/?terminal="+terminal, "打开此终端")
 	if e == nil {
 		_, _ = h.store.db.Exec("UPDATE feishu_outbox SET state='sent',sent_at=?,message_id=?,error='' WHERE event_key=? AND state='pending'", now(), messageID, key)
 		return

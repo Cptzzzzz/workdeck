@@ -69,6 +69,7 @@ type CodexGoal struct {
 	TokenBudget     *int64 `json:"token_budget,omitempty"`
 	TimeUsedSeconds int64  `json:"time_used_seconds"`
 	CreatedAt       int64  `json:"created_at"`
+	UpdatedAt       int64  `json:"updated_at,omitempty"`
 }
 
 type CodexHistoryEntry struct {

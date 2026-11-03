@@ -462,10 +462,11 @@ func saveCodexObservation(db codexDB, node, id string, c *protocol.CodexObservat
 		}
 	}
 	details, _ := json.Marshal(struct {
-		Managed  bool                `json:"managed"`
-		ThreadID string              `json:"thread_id,omitempty"`
-		Goal     *protocol.CodexGoal `json:"goal,omitempty"`
-	}{c.Managed, c.ThreadID, c.Goal})
+		Managed       bool                `json:"managed"`
+		ThreadID      string              `json:"thread_id,omitempty"`
+		TurnStartedAt int64               `json:"turn_started_at,omitempty"`
+		Goal          *protocol.CodexGoal `json:"goal,omitempty"`
+	}{c.Managed, c.ThreadID, c.TurnStartedAt, c.Goal})
 	result, err := db.Exec(`INSERT INTO terminal_tasks(terminal_id,codex_turn,codex_completed_at,codex_command,codex_status,codex_event,codex_observed_at,codex_detected,codex_details)
 	 SELECT id,?,?,?,?,?,?,?,? FROM terminals WHERE id=? AND node_id=?
 	 ON CONFLICT(terminal_id) DO UPDATE SET
@@ -794,7 +795,7 @@ func (h *Hub) applyInventory(node string, msg protocol.Message) {
 		}
 		matched, _ := result.RowsAffected()
 		if matched > 0 && session.Codex != nil {
-			err = saveCodexObservation(tx, node, session.ID, session.Codex)
+			err = saveCodexObservation(tx, node, session.ID, safeCodexObservation(session.Codex))
 			if err != nil {
 				log.Printf("task inventory update: %v", err)
 				return
@@ -937,11 +938,14 @@ func (h *Hub) controlSocket(w http.ResponseWriter, r *http.Request) {
 		case "inventory":
 			h.applyInventory(node, msg)
 		case "codex.update":
-			if err := saveCodexObservation(h.store.db, node, msg.TerminalID, msg.Codex); err == nil {
+			if err := saveCodexObservation(h.store.db, node, msg.TerminalID, safeCodexObservation(msg.Codex)); err == nil {
 				h.publishState()
 			}
 		case "codex.notice":
 			if err := h.receiveCodexNotice(node, msg); err != nil {
+				if errors.Is(err, errGoalMetadataPending) {
+					continue
+				}
 				log.Printf("codex notice: %v", err)
 				return
 			}

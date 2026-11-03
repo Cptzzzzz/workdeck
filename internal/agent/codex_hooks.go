@@ -46,18 +46,23 @@ func (a *Agent) watchCodexEvents(ctx context.Context, socket *protocol.Socket) {
 				continue
 			}
 			var event protocol.CodexObservation
-			if json.Unmarshal(b, &event) != nil || event.EventID == "" || event.EventID == seen[id] {
+			if json.Unmarshal(b, &event) != nil || event.EventID == "" {
+				continue
+			}
+			event = *a.refineManagedGoal(id, &event)
+			fingerprint := event.EventID + ":" + event.Status
+			if fingerprint == seen[id] {
 				continue
 			}
 			if first {
-				seen[id] = event.EventID
+				seen[id] = fingerprint
 				continue
 			}
 			if err = socket.JSON(protocol.Message{Type: "codex.update", TerminalID: id, Codex: &event}); err != nil {
 				socket.Close()
 				return
 			}
-			seen[id] = event.EventID
+			seen[id] = fingerprint
 		}
 		first = false
 	}

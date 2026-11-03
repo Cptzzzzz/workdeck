@@ -20,7 +20,12 @@ func CodexNotice(terminal string, o *CodexObservation) (key, kind string) {
 		}
 		kind, identity = "goal_complete", fmt.Sprintf("%s:%d", o.ThreadID, o.Goal.CreatedAt)
 	case "turn_ended":
-		if o.Goal != nil || o.Managed && o.TurnID == "" {
+		if o.Managed && o.TurnID == "" {
+			return "", ""
+		}
+		// A completed historical Goal may remain attached to later ordinary
+		// turns. Active/paused Goals still suppress ordinary completion notices.
+		if o.Goal != nil && (o.Goal.Status != "complete" || o.Goal.UpdatedAt <= 0 || o.TurnStartedAt <= o.Goal.UpdatedAt) {
 			return "", ""
 		}
 		if o.Managed {

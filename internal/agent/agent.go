@@ -21,27 +21,29 @@ import (
 )
 
 type Agent struct {
-	historyMu      sync.Mutex
-	historyCancels map[string]context.CancelFunc
-	identity       Identity
-	key            ed25519.PrivateKey
-	sessions       *Sessions
-	version        string
-	stateMu        sync.Mutex
-	stateVersion   uint64
-	inventoryMu    sync.Mutex
-	controlMu      sync.Mutex
-	controllers    map[string]string
-	fileCommitOnce sync.Once
-	fileCommitGate chan struct{}
-	fileRateBytes  int
-	hardwareMu     sync.RWMutex
-	hardware       *protocol.NodeHardware
-	fileRatesMu    sync.Mutex
-	fileRates      map[string]*rate.Limiter
-	routeMu        sync.RWMutex
-	routePersistMu sync.Mutex
-	tailnetHost    string
+	historyMu       sync.Mutex
+	historyCancels  map[string]context.CancelFunc
+	goalMu          sync.Mutex
+	goalResolutions map[string]goalResolution
+	identity        Identity
+	key             ed25519.PrivateKey
+	sessions        *Sessions
+	version         string
+	stateMu         sync.Mutex
+	stateVersion    uint64
+	inventoryMu     sync.Mutex
+	controlMu       sync.Mutex
+	controllers     map[string]string
+	fileCommitOnce  sync.Once
+	fileCommitGate  chan struct{}
+	fileRateBytes   int
+	hardwareMu      sync.RWMutex
+	hardware        *protocol.NodeHardware
+	fileRatesMu     sync.Mutex
+	fileRates       map[string]*rate.Limiter
+	routeMu         sync.RWMutex
+	routePersistMu  sync.Mutex
+	tailnetHost     string
 }
 
 func (a *Agent) commitGate() chan struct{} {
@@ -124,6 +126,9 @@ func (a *Agent) inventory(ctx context.Context, socket *protocol.Socket) error {
 	host, _ := os.Hostname()
 	home, _ := os.UserHomeDir()
 	sessions, snapshotErr := a.sessions.inventory(ctx)
+	for i := range sessions {
+		sessions[i].Codex = a.refineManagedGoal(sessions[i].ID, sessions[i].Codex)
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

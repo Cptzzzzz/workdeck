@@ -90,3 +90,66 @@ func TestManagedGoalOverridesCompletedChildTurns(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedLaterConversationAfterCompletedGoal(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		goal             string
+		started, updated int64
+		want             string
+	}{
+		{"later regular turn", "complete", 200, 130, "turn_ended"},
+		{"goal completed in this turn", "complete", 120, 130, "goal_complete"},
+		{"active goal suppresses child completion", "active", 200, 130, "goal_active"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, e := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+				if e != nil {
+					return
+				}
+				defer c.Close()
+				for {
+					var msg struct {
+						ID     int    `json:"id"`
+						Method string `json:"method"`
+					}
+					if c.ReadJSON(&msg) != nil {
+						return
+					}
+					var result any
+					switch msg.Method {
+					case "thread/read":
+						result = map[string]any{"thread": map[string]any{"status": map[string]any{"type": "idle"}}}
+					case "thread/goal/get":
+						result = map[string]any{"goal": map[string]any{"status": tc.goal, "createdAt": 100, "updatedAt": tc.updated}}
+					case "thread/turns/list":
+						result = map[string]any{"data": []any{map[string]any{"id": "fixture-turn", "status": "completed", "startedAt": tc.started, "completedAt": tc.started + 10}}}
+					default:
+						t.Errorf("unexpected method %s", msg.Method)
+						return
+					}
+					_ = c.WriteJSON(map[string]any{"id": msg.ID, "result": result})
+				}
+			}))
+			defer server.Close()
+			c, _, e := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer c.Close()
+			o, e := sampleManagedCodex(&codexRPC{ws: c}, "fixture-thread")
+			if e != nil {
+				t.Fatal(e)
+			}
+			if o.Status != tc.want {
+				t.Fatalf("status %s, want %s", o.Status, tc.want)
+			}
+			if tc.name == "later regular turn" {
+				if _, kind := protocol.CodexNotice("terminal", &protocol.CodexObservation{Managed: true, ThreadID: o.ThreadID, TurnID: o.TurnID, TurnStartedAt: o.TurnStartedAt, Status: o.Status, Goal: o.Goal, EventID: "event", ObservedAt: "2026-11-03T09:00:00Z"}); kind != "turn_complete" {
+					t.Fatal(kind)
+				}
+			}
+		})
+	}
+}

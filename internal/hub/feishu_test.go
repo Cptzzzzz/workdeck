@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -67,7 +68,7 @@ func TestFeishuGoalDedupRetryAndRestart(t *testing.T) {
 	if _, e := x.h.store.db.Exec("INSERT INTO terminals("+terminalFields+") VALUES(?,?,?,?,?,?,?,?,?,NULL)", id, node, "任务", "/tmp", "running", "running", now(), now(), ""); e != nil {
 		t.Fatal(e)
 	}
-	o := &protocol.CodexObservation{Managed: true, ThreadID: "thread", Status: "goal_complete", EventID: "first", ObservedAt: time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano), Goal: &protocol.CodexGoal{Status: "complete", CreatedAt: 123, TokensUsed: 10}}
+	o := &protocol.CodexObservation{Managed: true, ThreadID: "thread", TurnStartedAt: 125, Status: "goal_complete", EventID: "first", ObservedAt: time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano), Goal: &protocol.CodexGoal{Status: "complete", CreatedAt: 123, UpdatedAt: 130, TokensUsed: 10}}
 	key, _ := protocol.CodexNotice(id, o)
 	msg := protocol.Message{Type: "codex.notice", TerminalID: id, RequestID: key, Codex: o}
 	if e := x.h.receiveCodexNotice(other, msg); e != nil {
@@ -102,7 +103,7 @@ func TestFeishuGoalDedupRetryAndRestart(t *testing.T) {
 		}
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["receive_id"] != "ou_fixture" || body["msg_type"] != "interactive" || !strings.Contains(body["content"], "任务") || !strings.Contains(body["content"], "terminal="+id) {
+		if body["receive_id"] != "ou_fixture" || body["msg_type"] != "interactive" || !strings.Contains(body["content"], "任务") || !strings.Contains(body["content"], "terminal="+id) || !strings.Contains(body["content"], "北京时间") || !strings.Contains(body["content"], "打开此终端") {
 			t.Errorf("bad message: %v", body)
 		}
 		mu.Lock()
@@ -164,5 +165,45 @@ func TestCodexNoticeIgnoresActiveGoalAndPreviousConfiguration(t *testing.T) {
 	_ = x.h.store.db.QueryRow("SELECT count(*) FROM feishu_outbox").Scan(&count)
 	if count != 0 {
 		t.Fatal("sent historical event")
+	}
+}
+
+func TestFeishuHistoricalGoalAndBeijingTime(t *testing.T) {
+	if got := feishuBeijingTime("2026-11-03T09:37:13.047Z"); got != "2026-11-03 17:37:13（北京时间）" {
+		t.Fatal(got)
+	}
+	x := setup(t)
+	x.signIn(t)
+	cfg := map[string]any{"enabled": true, "app_id": "cli_fixture", "app_secret": "secret-fixture", "receive_type": "open_id", "receive_id": "ou_fixture", "complete": true, "attention": true}
+	if code, out := x.request(t, "PUT", "/api/integrations/feishu", cfg, true); code != 200 {
+		t.Fatal(code, out)
+	}
+	node, id := randomID(), randomID()
+	_, _ = x.h.store.db.Exec("INSERT INTO nodes(id,name,public_key) VALUES(?,?,?)", node, "node", "key")
+	_, _ = x.h.store.db.Exec("INSERT INTO terminals("+terminalFields+") VALUES(?,?,?,?,?,?,?,?,?,NULL)", id, node, "task", "/tmp", "running", "running", now(), now(), "")
+	legacy := &protocol.CodexObservation{Managed: true, ThreadID: "thread", TurnID: "turn", Status: "goal_complete", EventID: "event", ObservedAt: time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano), Goal: &protocol.CodexGoal{Status: "complete", CreatedAt: 100}}
+	if safeCodexObservation(legacy).Status != "unknown" {
+		t.Fatal("unverified legacy goal reported complete")
+	}
+	key, _ := protocol.CodexNotice(id, legacy)
+	if e := x.h.receiveCodexNotice(node, protocol.Message{TerminalID: id, RequestID: key, Codex: legacy}); !errors.Is(e, errGoalMetadataPending) {
+		t.Fatal("legacy event was not retained for refinement", e)
+	}
+	legacy.Goal.UpdatedAt = 130
+	legacy.TurnStartedAt = 200
+	corrected := safeCodexObservation(legacy)
+	if corrected.Status != "turn_ended" {
+		t.Fatal("historical goal hid ordinary turn")
+	}
+	key, kind := protocol.CodexNotice(id, corrected)
+	if kind != "turn_complete" {
+		t.Fatal(kind)
+	}
+	if e := x.h.receiveCodexNotice(node, protocol.Message{TerminalID: id, RequestID: key, Codex: corrected}); e != nil {
+		t.Fatal(e)
+	}
+	var stored string
+	if e := x.h.store.db.QueryRow("SELECT kind FROM feishu_outbox WHERE event_key=?", key).Scan(&stored); e != nil || stored != "turn_complete" {
+		t.Fatal(stored, e)
 	}
 }

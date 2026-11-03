@@ -363,18 +363,20 @@ func sampleManagedCodex(r *codexRPC, thread string) (protocol.CodexObservation, 
 			TokenBudget     *int64 `json:"tokenBudget"`
 			TimeUsedSeconds int64  `json:"timeUsedSeconds"`
 			CreatedAt       int64  `json:"createdAt"`
+			UpdatedAt       int64  `json:"updatedAt"`
 		} `json:"goal"`
 	}
 	if e := r.call("thread/goal/get", map[string]any{"threadId": thread}, &goal); e != nil {
 		return o, e
 	}
 	if g := goal.Goal; g != nil {
-		o.Goal = &protocol.CodexGoal{Status: g.Status, TokensUsed: g.TokensUsed, TokenBudget: g.TokenBudget, TimeUsedSeconds: g.TimeUsedSeconds, CreatedAt: g.CreatedAt}
+		o.Goal = &protocol.CodexGoal{Status: g.Status, TokensUsed: g.TokensUsed, TokenBudget: g.TokenBudget, TimeUsedSeconds: g.TimeUsedSeconds, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt}
 	}
 	var turns struct {
 		Data []struct {
 			ID          string `json:"id"`
 			Status      string `json:"status"`
+			StartedAt   *int64 `json:"startedAt"`
 			CompletedAt *int64 `json:"completedAt"`
 		} `json:"data"`
 	}
@@ -384,6 +386,12 @@ func sampleManagedCodex(r *codexRPC, thread string) (protocol.CodexObservation, 
 	if len(turns.Data) > 0 {
 		t := turns.Data[0]
 		o.TurnID = t.ID
+		if t.StartedAt != nil {
+			o.TurnStartedAt = *t.StartedAt
+		}
+		if o.TurnStartedAt == 0 {
+			o.TurnStartedAt = turnStartFromUUID(t.ID)
+		}
 		if t.CompletedAt != nil {
 			o.CompletedAt = time.Unix(*t.CompletedAt, 0).UTC().Format(time.RFC3339Nano)
 		}
@@ -401,7 +409,11 @@ func sampleManagedCodex(r *codexRPC, thread string) (protocol.CodexObservation, 
 		case "active":
 			o.Status = "goal_active"
 		case "complete":
-			o.Status = "goal_complete"
+			if o.TurnStartedAt > 0 && o.Goal.UpdatedAt > 0 && o.TurnStartedAt > o.Goal.UpdatedAt {
+				// The persisted Goal belongs to an earlier turn.
+			} else {
+				o.Status = "goal_complete"
+			}
 		case "paused":
 			o.Status = "goal_paused"
 		case "blocked":

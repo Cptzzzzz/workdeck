@@ -23,6 +23,7 @@ type Session struct {
 // one turn, not whether the user's overall objective was achieved.
 type CodexObservation struct {
 	TurnID        string     `json:"turn_id,omitempty"`
+	TurnStartedAt int64      `json:"turn_started_at,omitempty"`
 	CompletedAt   string     `json:"completed_at,omitempty"`
 	LaunchCommand string     `json:"launch_command,omitempty"`
 	Status        string     `json:"status,omitempty"`

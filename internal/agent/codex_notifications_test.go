@@ -41,7 +41,8 @@ func TestOldManagedSessionIsObservedAcrossAgentRestart(t *testing.T) {
 	completed := running
 	completed.Status = "goal_complete"
 	completed.EventID = "completed"
-	completed.Goal = &protocol.CodexGoal{Status: "complete", CreatedAt: 123}
+	completed.Goal = &protocol.CodexGoal{Status: "complete", CreatedAt: 123, UpdatedAt: 130}
+	completed.TurnStartedAt = 125
 	completed.ObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if e := atomicJSON(codexEventPath(dir, id), completed); e != nil {
 		t.Fatal(e)

@@ -66,13 +66,14 @@ func (a *Agent) collectCodexNotices(ctx context.Context) {
 			if json.Unmarshal(b, &o) != nil || o.EventID == "" {
 				continue
 			}
+			o = *a.refineManagedGoal(id, &o)
 			old, ok := previous[id]
 			if !ok {
 				if b, err := os.ReadFile(filepath.Join(baselineDir, id+".json")); err == nil && json.Unmarshal(b, &old) == nil {
 					ok = true
 				}
 			}
-			if ok && old.EventID != o.EventID && !spoolCodexNotice(a.sessions.dir, id, o, old) {
+			if ok && (old.EventID != o.EventID || !sameNoticeState(old, o)) && !spoolCodexNotice(a.sessions.dir, id, o, old) {
 				continue
 			}
 			if !ok || !sameNoticeState(old, o) {
@@ -120,6 +121,19 @@ func (a *Agent) sendCodexNotices(ctx context.Context, socket *protocol.Socket) {
 				continue
 			}
 			if actual, _ := protocol.CodexNotice(notice.TerminalID, &notice.Observation); actual != key {
+				continue
+			}
+			refined := a.refineManagedGoal(notice.TerminalID, &notice.Observation)
+			corrected, _ := protocol.CodexNotice(notice.TerminalID, refined)
+			if corrected == "" {
+				continue
+			}
+			notice.Observation = *refined
+			if corrected != key {
+				if err = atomicJSON(filepath.Join(noticeDir(a.sessions.dir), corrected+".json"), notice); err != nil {
+					continue
+				}
+				_ = os.Remove(filepath.Join(noticeDir(a.sessions.dir), entry.Name()))
 				continue
 			}
 			if err = socket.JSON(protocol.Message{Type: "codex.notice", RequestID: key, TerminalID: notice.TerminalID, Codex: &notice.Observation}); err != nil {
