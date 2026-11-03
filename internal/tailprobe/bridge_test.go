@@ -60,4 +60,12 @@ func TestBridgeAuthenticatesActualTailnetPeerAndNeverReturnsNodeID(t *testing.T)
 	if w.Header().Get("Access-Control-Allow-Origin") != b.Origin {
 		t.Fatal("missing constrained CORS")
 	}
+	b.LegacyOrigin = "https://old.example.com"
+	w = request("100.64.1.2:1234", b.LegacyOrigin, body)
+	if w.Code != http.StatusOK || w.Header().Get("Access-Control-Allow-Origin") != b.LegacyOrigin {
+		t.Fatal("configured legacy origin was not accepted", w.Code)
+	}
+	if w := request("100.64.1.2:1234", "https://other.example.com", body); w.Code != http.StatusNotFound {
+		t.Fatal("unconfigured origin accepted", w.Code)
+	}
 }

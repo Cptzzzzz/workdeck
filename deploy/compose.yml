@@ -9,6 +9,7 @@ services:
     command:
       - --addr=:8090
       - --public-url=${WORKDECK_PUBLIC_URL:?Set WORKDECK_PUBLIC_URL}
+      - --legacy-origin=${WORKDECK_LEGACY_ORIGIN:-}
       - --data-dir=/data
       - --assets-dir=/web
       - --admin-password-file=/run/secrets/admin_password

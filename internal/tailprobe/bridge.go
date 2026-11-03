@@ -18,20 +18,22 @@ import (
 // Bridge runs on the Tailscale host, outside the public Hub container.
 // Lookup must verify the peer address against the local Tailscale daemon.
 type Bridge struct {
-	Origin string
-	Secret []byte
-	Lookup func(context.Context, string) (string, error)
-	mu     sync.Mutex
-	active int
+	Origin       string
+	LegacyOrigin string
+	Secret       []byte
+	Lookup       func(context.Context, string) (string, error)
+	mu           sync.Mutex
+	active       int
 }
 
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if r.URL.Path != "/probe" || r.Header.Get("Origin") != b.Origin {
+	origin := r.Header.Get("Origin")
+	if r.URL.Path != "/probe" || (origin != b.Origin && (b.LegacyOrigin == "" || origin != b.LegacyOrigin)) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Access-Control-Allow-Origin", b.Origin)
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")

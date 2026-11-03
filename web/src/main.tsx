@@ -1,3 +1,4 @@
+import { migrateBrowserState } from "./services/browser-migration";
 import { startTailnetProbe } from "./tailnet-probe";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -2045,4 +2046,20 @@ function Login({ onLogin }: { onLogin: (u: User) => void }) {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+void migrateBrowserState().then((warning) => {
+  createRoot(document.getElementById("root")!).render(<App />);
+  if (warning) {
+    const notice = document.createElement("div");
+    notice.setAttribute("role", "status");
+    notice.style.cssText =
+      "position:fixed;right:16px;bottom:16px;z-index:9999;max-width:420px;padding:12px 16px;background:#242936;color:#fff;border:1px solid #65708a;border-radius:8px;box-shadow:0 6px 24px #0006;font:14px/1.5 system-ui";
+    notice.textContent = "浏览器迁移提示：" + warning;
+    const close = document.createElement("button");
+    close.textContent = "关闭";
+    close.style.cssText =
+      "margin-left:12px;color:inherit;background:transparent;border:0;cursor:pointer";
+    close.onclick = () => notice.remove();
+    notice.appendChild(close);
+    document.body.appendChild(notice);
+  }
+});

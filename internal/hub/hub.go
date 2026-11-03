@@ -28,6 +28,7 @@ import (
 type Config struct {
 	Addr, PublicURL, DataDir, AssetsDir, AdminUser, PasswordFile, TrustedProxyCIDR string
 	TailnetProbeURL, TailnetProbeSecretFile                                        string
+	LegacyOrigin                                                                   string
 	SessionTTL                                                                     time.Duration
 }
 type attempt struct {
@@ -89,6 +90,8 @@ type Hub struct {
 	tailChallenges      map[string]tailChallenge
 	tailBindings        map[string]tailBinding
 	tailTraceLast       time.Time
+	migrationMu         sync.Mutex
+	migrationTickets    map[string]migrationTicket
 }
 
 func (h *Hub) workspaceLock(terminal string) *sync.Mutex {
@@ -105,6 +108,12 @@ func New(cfg Config) (*Hub, error) {
 		return nil, errors.New("session lifetime must be between one hour and one year")
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
+	if cfg.LegacyOrigin != "" {
+		u, err := url.Parse(cfg.LegacyOrigin)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || cfg.LegacyOrigin == cfg.PublicURL {
+			return nil, errors.New("legacy origin must be a different HTTPS origin")
+		}
+	}
 	if !strings.HasPrefix(cfg.PublicURL, "https://") && !strings.HasPrefix(cfg.PublicURL, "http://127.0.0.1:") && !strings.HasPrefix(cfg.PublicURL, "http://localhost:") {
 		return nil, errors.New("public URL must use HTTPS (HTTP allowed only for localhost development)")
 	}
@@ -134,7 +143,7 @@ func New(cfg Config) (*Hub, error) {
 		return nil, err
 	}
 	dummy, _ := hashPassword(randomID())
-	return &Hub{cfg: cfg, store: s, agents: map[string]*agentConn{}, requests: map[string]waiter{}, pending: map[string]*pending{}, attachments: map[string]*attachment{}, controllers: map[string]string{}, attempts: map[string]attempt{}, nonces: map[string]time.Time{}, dummyHash: dummy, tailProbeSecret: probeSecret, tailProbeOrigin: probeOrigin, tailChallenges: map[string]tailChallenge{}, tailBindings: map[string]tailBinding{}}, nil
+	return &Hub{cfg: cfg, store: s, agents: map[string]*agentConn{}, requests: map[string]waiter{}, pending: map[string]*pending{}, attachments: map[string]*attachment{}, controllers: map[string]string{}, attempts: map[string]attempt{}, nonces: map[string]time.Time{}, dummyHash: dummy, tailProbeSecret: probeSecret, tailProbeOrigin: probeOrigin, tailChallenges: map[string]tailChallenge{}, tailBindings: map[string]tailBinding{}, migrationTickets: map[string]migrationTicket{}}, nil
 }
 func (h *Hub) Handler() http.Handler {
 	m := http.NewServeMux()
@@ -146,6 +155,13 @@ func (h *Hub) Handler() http.Handler {
 		respond(w, 200, map[string]string{"status": "ok"})
 	})
 	m.HandleFunc("POST /api/login", h.signIn)
+	if h.cfg.LegacyOrigin != "" {
+		m.HandleFunc("GET /api/migration/config", h.migrationConfig)
+		m.HandleFunc("POST /api/migration/issue", h.migrationIssue)
+		m.HandleFunc("POST /api/migration/redeem", h.migrationRedeem)
+		m.HandleFunc("GET /migration/frame", h.migrationFrame)
+		m.HandleFunc("GET /migration/bridge.js", h.migrationScript)
+	}
 	m.HandleFunc("POST /api/logout", h.protected(h.signOut))
 	m.HandleFunc("GET /api/me", h.protected(func(w http.ResponseWriter, r *http.Request, l login) {
 		respond(w, 200, map[string]string{"username": l.Username, "csrf": l.CSRF})
@@ -202,7 +218,11 @@ func (h *Hub) Handler() http.Handler {
 		if h.tailProbeOrigin != "" {
 			connect += " " + h.tailProbeOrigin
 		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src "+connect+"; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		frameSrc := "'self'"
+		if h.cfg.LegacyOrigin != "" {
+			frameSrc += " " + h.cfg.LegacyOrigin
+		}
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src "+connect+"; img-src 'self' data: blob:; font-src 'self'; frame-src "+frameSrc+"; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		w.Header().Set("Cache-Control", "no-store")
 		defer func() {
 			if v := recover(); v != nil {

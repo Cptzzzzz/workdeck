@@ -86,6 +86,7 @@ func run() error {
 		cfg := tailprobe.Config{}
 		f.StringVar(&cfg.Addr, "addr", "", "Tailscale IP and port to listen on")
 		f.StringVar(&cfg.Origin, "origin", "", "public Workdeck HTTPS origin")
+		f.StringVar(&cfg.LegacyOrigin, "legacy-origin", "", "temporary prior Workdeck HTTPS origin")
 		f.StringVar(&cfg.SecretFile, "secret-file", "", "shared probe secret file")
 		f.StringVar(&cfg.CertFile, "tls-cert-file", "", "TLS certificate file")
 		f.StringVar(&cfg.KeyFile, "tls-key-file", "", "TLS key file")
@@ -101,6 +102,7 @@ func run() error {
 		cfg := hub.Config{}
 		f.StringVar(&cfg.Addr, "addr", ":8090", "listen address")
 		f.StringVar(&cfg.PublicURL, "public-url", "", "external HTTPS URL")
+		f.StringVar(&cfg.LegacyOrigin, "legacy-origin", "", "temporary prior HTTPS origin for browser migration")
 		f.StringVar(&cfg.DataDir, "data-dir", "./data", "persistent data directory")
 		f.StringVar(&cfg.AssetsDir, "assets-dir", "./web/dist", "built frontend directory")
 		f.StringVar(&cfg.AdminUser, "admin-user", "admin", "initial administrator username")
