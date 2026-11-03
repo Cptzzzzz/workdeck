@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -604,8 +605,11 @@ test("switching to direct preference moves a stable slower path without restarti
       "WebSocket",
     );
     await network.locator(":scope > summary").click();
-    await network.getByLabel("链路策略").selectOption("prefer-direct");
-    await expect(network.getByLabel("链路策略")).toHaveValue("prefer-direct");
+    await selectThemedOption(network.getByLabel("链路策略"), "prefer-direct");
+    await expect(network.getByLabel("链路策略")).toHaveAttribute(
+      "data-value",
+      "prefer-direct",
+    );
     await page.waitForTimeout(200);
     await page.evaluate(() =>
       document.dispatchEvent(new Event("visibilitychange")),

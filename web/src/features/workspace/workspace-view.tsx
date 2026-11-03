@@ -1,3 +1,4 @@
+import { Select } from "../../components/select";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -2771,14 +2772,15 @@ export function CreateItemForm({
       </p>
       <label>
         类型
-        <select
+        <Select
           aria-label="创建类型"
           value={kind}
-          onChange={(e) => setKind(e.target.value as "file" | "directory")}
-        >
-          <option value="file">文件</option>
-          <option value="directory">文件夹</option>
-        </select>
+          options={[
+            { value: "file", label: "文件" },
+            { value: "directory", label: "文件夹" },
+          ]}
+          onChange={(value) => setKind(value as "file" | "directory")}
+        />
       </label>
       <label>
         名称

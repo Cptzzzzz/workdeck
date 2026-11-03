@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { expect, test } from "@playwright/test";
 const node = {
   id: "node",
@@ -10,22 +11,33 @@ const node = {
   last_seen: "",
   capabilities: ["managed-codex-v1"],
 };
-test("managed launch sends options without saving proxy in browser storage", async ({
+test("separate Codex entry inherits node proxy and sends simple launch options", async ({
   page,
 }) => {
+  const nodes = [
+    node,
+    { ...node, id: "node-b", name: "另一个节点", home: "/other" },
+  ];
   await page.route("**/api/me", (r) =>
     r.fulfill({ json: { username: "admin", csrf: "fixture" } }),
   );
   await page.route("**/api/state", (r) =>
-    r.fulfill({ json: { nodes: [node], terminals: [] } }),
+    r.fulfill({ json: { nodes, terminals: [] } }),
   );
   await page.route("**/api/events", (r) =>
     r.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" }),
   );
-  await page.route("**/api/nodes/node/directories**", (r) =>
+  await page.route("**/api/nodes/*/directories**", (r) =>
     r.fulfill({
       json: { path: "/tmp", parent: "/", entries: [], truncated: false },
     }),
+  );
+  const saved = "http://fixture:password@proxy.example:7890";
+  await page.route("**/api/nodes/node/codex-settings", (r) =>
+    r.fulfill({ json: { proxy: saved } }),
+  );
+  await page.route("**/api/nodes/node-b/codex-settings", (r) =>
+    r.fulfill({ json: { proxy: "http://other.example:7890" } }),
   );
   let posted: any;
   await page.route("**/api/terminals", async (r) => {
@@ -34,7 +46,7 @@ test("managed launch sends options without saving proxy in browser storage", asy
       json: {
         id: "new-terminal",
         state: "error",
-        error: "fixture stops before creating a process",
+        error: "fixture prevents process creation",
       },
     });
   });
@@ -43,19 +55,36 @@ test("managed launch sends options without saving proxy in browser storage", asy
     .getByRole("button", { name: "新建终端", exact: true })
     .first()
     .click();
-  const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("启动方式").selectOption("codex");
-  await dialog
-    .getByLabel("执行预设")
-    .selectOption("never/danger-full-access/xhigh");
-  await dialog.getByLabel("代理", { exact: true }).selectOption("custom");
-  const proxy = "http://fixture:password@127.0.0.1:7890";
-  await dialog.getByLabel("代理地址").fill(proxy);
-  await dialog.getByRole("button", { name: "创建并连接" }).click();
+  let dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("终端名称")).toBeVisible();
+  await expect(dialog.getByLabel("模型")).toHaveCount(0);
+  await expect(dialog.getByLabel("启动方式")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "关闭对话框" }).click();
+  await page
+    .getByRole("button", { name: "新建 Codex", exact: true })
+    .first()
+    .click();
+  dialog = page.getByRole("dialog", { name: "新建 Codex", exact: true });
+  await expect(dialog.getByLabel("代理地址")).toHaveValue(saved);
+  await expect(dialog.getByText("执行预设", { exact: true })).toHaveCount(0);
+  await selectThemedOption(dialog.getByLabel("计算节点"), "node-b");
+  await expect(dialog.getByLabel("代理地址")).toHaveValue(
+    "http://other.example:7890",
+  );
+  await expect(dialog.getByLabel("工作目录", { exact: true })).toHaveValue(
+    "/other",
+  );
+  await selectThemedOption(dialog.getByLabel("计算节点"), "node");
+  await expect(dialog.getByLabel("代理地址")).toHaveValue(saved);
+  const edited = "http://session-only.example:7890";
+  await dialog.getByLabel("代理地址").fill(edited);
+  await dialog.getByRole("switch", { name: "执行命令前确认" }).uncheck();
+  await selectThemedOption(dialog.getByLabel("推理强度"), "xhigh");
+  await dialog.getByRole("button", { name: "启动 Codex", exact: true }).click();
   await expect.poll(() => posted?.launch?.approval).toBe("never");
   expect(posted.launch).toEqual({
     proxy_mode: "custom",
-    proxy,
+    proxy: edited,
     approval: "never",
     sandbox: "danger-full-access",
     model: "",
@@ -66,8 +95,15 @@ test("managed launch sends options without saving proxy in browser storage", asy
     await page.evaluate(() =>
       JSON.stringify({ ...localStorage, ...sessionStorage }),
     ),
-  ).not.toContain(proxy);
+  ).not.toContain(saved);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ ...localStorage, ...sessionStorage }),
+    ),
+  ).not.toContain(edited);
+  await expect(page.locator("select")).toHaveCount(0);
 });
+
 test("goal active remains running after completed turns", async ({ page }) => {
   const terminal = {
     id: "terminal",

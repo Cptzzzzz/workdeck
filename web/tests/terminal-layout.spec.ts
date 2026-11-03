@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { readState, selectTestNode, terminateCurrentTerminal } from "./helpers";
@@ -114,9 +115,10 @@ test("last terminal row remains fully visible through resizing, network details 
         name: "终端字号设置",
         exact: true,
       });
-      await settings
-        .getByRole("combobox", { name: "字号", exact: true })
-        .selectOption(font);
+      await selectThemedOption(
+        settings.getByRole("combobox", { name: "字号", exact: true }),
+        font,
+      );
       await settings.getByRole("button", { name: "关闭字号设置" }).click();
       await test.step(`mobile font ${font}: last row visible`, () =>
         assertLastRowFits(page));

@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { build } from "esbuild";
 import {
@@ -106,10 +107,7 @@ test("root selection protects drafts and reconciles a lost acknowledgement witho
     const openPicker = async () => {
       await page.getByRole("button", { name: "更换工作区目录" }).click();
       const dialog = page.getByRole("dialog", { name: "更换工作区目录" });
-      await expect(
-        dialog.getByRole("option", { name: "child/" }),
-      ).toBeAttached();
-      await dialog.getByLabel("进入子目录").selectOption(child);
+      await selectThemedOption(dialog.getByLabel("进入子目录"), child);
       await expect(dialog.getByLabel("工作区目录")).toHaveValue(child);
       return dialog;
     };
@@ -189,8 +187,7 @@ test("root selection protects drafts and reconciles a lost acknowledgement witho
     dialog = page.getByRole("dialog", { name: "更换工作区目录" });
     await expect(dialog.getByRole("button", { name: "上一级" })).toBeEnabled();
     await dialog.getByRole("button", { name: "上一级" }).click();
-    await expect(dialog.getByRole("option", { name: "other/" })).toBeAttached();
-    await dialog.getByLabel("进入子目录").selectOption(otherRoot);
+    await selectThemedOption(dialog.getByLabel("进入子目录"), otherRoot);
     const secondDevice = await other.newPage();
     await secondDevice.goto(url + "/?transport=relay");
     await secondDevice.getByLabel("用户名").fill("admin");

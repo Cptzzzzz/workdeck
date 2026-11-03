@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   Copy,
   Folder,
+  Command,
+  Eye,
+  EyeOff,
   KeyRound,
   Server,
   TerminalSquare,
@@ -15,6 +18,8 @@ import type {
   TerminalRecord as Term,
   RenameTarget,
 } from "../../types";
+import { Select } from "../../components/select";
+
 export function RenameForm({
   target,
   onCancel,
@@ -181,35 +186,61 @@ export function TerminateForm({
 export function CreateTerminal({
   nodes,
   selected,
+  kind = "shell",
   onCreated,
 }: {
   nodes: Node[];
   selected: string;
+  kind?: "shell" | "codex";
   onCreated: (id: string) => void;
 }) {
-  const [kind, setKind] = useState("shell");
-  const [proxyMode, setProxyMode] = useState("inherit");
+  const online = nodes.filter((n) => n.online);
+  const initial = online.find((n) => n.id === selected) || online[0];
+  const [node, setNode] = useState(initial?.id || "");
+  const [name, setName] = useState(
+    kind === "codex" ? "新 Codex 任务" : "新终端",
+  );
+  const [cwd, setCwd] = useState(initial?.home || "");
   const [proxy, setProxy] = useState("");
-  const [approval, setApproval] = useState("on-request");
-  const [sandbox, setSandbox] = useState("workspace-write");
+  const [proxyBusy, setProxyBusy] = useState(kind === "codex");
+  const [proxyError, setProxyError] = useState("");
+  const [confirm, setConfirm] = useState(true);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [resume, setResume] = useState("");
-  const online = nodes.filter((n) => n.online);
-  const [node, setNode] = useState(
-      online.find((n) => n.id === selected)?.id || online[0]?.id || "",
-    ),
-    [name, setName] = useState("新终端"),
-    [cwd, setCwd] = useState(
-      nodes.find(
-        (n) =>
-          n.id === (online.find((n) => n.id === selected)?.id || online[0]?.id),
-      )?.home || "",
-    ),
-    [busy, setBusy] = useState(false),
+  const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const editedProxy = useRef(false);
+  useEffect(() => {
+    if (kind !== "codex" || !node) {
+      setProxyBusy(false);
+      return;
+    }
+    const controller = new AbortController();
+    editedProxy.current = false;
+    setProxy("");
+    setProxyBusy(true);
+    setProxyError("");
+    api<{ proxy: string }>(`/nodes/${node}/codex-settings`, {
+      signal: controller.signal,
+    })
+      .then((config) => {
+        if (!controller.signal.aborted && !editedProxy.current)
+          setProxy(config.proxy);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted && !editedProxy.current)
+          setProxyError((e as Error).message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setProxyBusy(false);
+      });
+    return () => controller.abort();
+  }, [node, kind]);
+  const currentNode = nodes.find((n) => n.id === node);
   return (
     <form
+      className={kind === "codex" ? "create-codex-form" : undefined}
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
@@ -224,10 +255,12 @@ export function CreateTerminal({
               ...(kind === "codex"
                 ? {
                     launch: {
-                      proxy_mode: proxyMode,
-                      ...(proxyMode === "custom" ? { proxy } : {}),
-                      approval,
-                      sandbox,
+                      proxy_mode: proxy.trim() ? "custom" : "none",
+                      ...(proxy.trim() ? { proxy: proxy.trim() } : {}),
+                      approval: confirm ? "on-request" : "never",
+                      sandbox: confirm
+                        ? "workspace-write"
+                        : "danger-full-access",
                       model: model.trim(),
                       effort,
                       resume: resume.trim(),
@@ -249,206 +282,301 @@ export function CreateTerminal({
       }}
     >
       <div className="modal-symbol">
-        <TerminalSquare size={24} />
+        {kind === "codex" ? (
+          <Command size={24} />
+        ) : (
+          <TerminalSquare size={24} />
+        )}
       </div>
-      <h2>开启新的工作</h2>
+      <h2>{kind === "codex" ? "新建 Codex 任务" : "开启新的工作"}</h2>
       <p className="modal-description">
-        在节点上创建独立会话，离开页面后持续运行。
+        {kind === "codex"
+          ? "直接进入 Codex，离开页面后任务继续运行。"
+          : "在节点上创建独立会话，离开页面后持续运行。"}
       </p>
-      <label>
-        计算节点
-        <select
-          value={node}
-          onChange={(e) => {
-            setNode(e.target.value);
-            setCwd(nodes.find((n) => n.id === e.target.value)?.home || "");
-          }}
-        >
-          {online.map((n) => (
-            <option key={n.id} value={n.id}>
-              {n.name} · {n.platform}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        终端名称
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={80}
-          required
-          autoFocus
-        />
-      </label>
+      <div
+        className={`create-basic-fields ${kind === "codex" ? "two-columns" : ""}`}
+      >
+        <label>
+          计算节点
+          <Select
+            aria-label="计算节点"
+            value={node}
+            options={online.map((n) => ({
+              value: n.id,
+              label: `${n.name} · ${n.platform}`,
+            }))}
+            onChange={(value) => {
+              setProxy("");
+              setProxyBusy(kind === "codex");
+              setProxyError("");
+              setNode(value);
+              setCwd(nodes.find((n) => n.id === value)?.home || "");
+            }}
+          />
+        </label>
+        <label>
+          {kind === "codex" ? "任务名称" : "终端名称"}
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={80}
+            required
+            autoFocus
+            data-autofocus
+          />
+        </label>
+      </div>
       <DirectoryPicker
         key={node}
-        node={nodes.find((n) => n.id === node)}
+        node={currentNode}
         value={cwd}
         onChange={setCwd}
       />
-      <label>
-        启动方式
-        <select value={kind} onChange={(e) => setKind(e.target.value)}>
-          <option value="shell">普通终端</option>
-          <option
-            value="codex"
-            disabled={
-              !nodes
-                .find((n) => n.id === node)
-                ?.capabilities?.includes("managed-codex-v1")
-            }
-          >
-            Codex 受管会话
-          </option>
-        </select>
-      </label>
       {kind === "codex" && (
-        <div className="codex-launch-options">
-          <p className="modal-description">
-            Codex 随终端持续运行，自动识别轮次及 Goal
-            状态。节点需要安装支持远程本地后端的 Codex 并完成登录。
-          </p>
-          <label>
-            执行预设
-            <select
-              value={
-                approval === "on-request" &&
-                sandbox === "workspace-write" &&
-                effort === ""
-                  ? "on-request/workspace-write/"
-                  : approval === "never" &&
-                      sandbox === "danger-full-access" &&
-                      effort === "xhigh"
-                    ? "never/danger-full-access/xhigh"
-                    : "custom"
-              }
-              onChange={(e) => {
-                const [a, s, r] = e.target.value.split("/");
-                setApproval(a);
-                setSandbox(s);
-                setEffort(r);
-              }}
-            >
-              <option value="on-request/workspace-write/">
-                标准 · 工作区写入，按需确认
-              </option>
-              <option value="never/danger-full-access/xhigh">
-                Coder · 无需确认，完整权限，xhigh
-              </option>
-              <option value="custom" disabled>
-                自定义配置
-              </option>
-            </select>
-          </label>
-          <label>
-            代理
-            <select
-              aria-label="代理"
-              value={proxyMode}
-              onChange={(e) => setProxyMode(e.target.value)}
-            >
-              <option value="inherit">继承节点服务的代理环境</option>
-              <option value="none">不使用代理</option>
-              <option value="custom">指定代理地址</option>
-            </select>
-          </label>
-          {proxyMode === "custom" && (
-            <label>
-              代理地址
-              <input
-                type="password"
-                autoComplete="off"
-                value={proxy}
-                onChange={(e) => setProxy(e.target.value)}
-                placeholder="http://127.0.0.1:7890"
-                required
-                maxLength={2048}
-              />
-            </label>
-          )}
-          <details>
-            <summary>高级启动选项</summary>
-            <label>
-              命令确认
-              <select
-                value={approval}
-                onChange={(e) => setApproval(e.target.value)}
-              >
-                <option value="on-request">按需确认</option>
-                <option value="never">无需确认</option>
-              </select>
-            </label>
-            <label>
-              文件与命令权限
-              <select
-                value={sandbox}
-                onChange={(e) => setSandbox(e.target.value)}
-              >
-                <option value="read-only">只读</option>
-                <option value="workspace-write">工作区写入</option>
-                <option value="danger-full-access">完整权限</option>
-              </select>
-            </label>
+        <>
+          <div className="codex-field-grid">
             <label>
               模型
               <input
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 maxLength={128}
-                placeholder="沿用节点 Codex 配置"
+                placeholder="沿用节点默认模型"
               />
             </label>
             <label>
               推理强度
-              <select
+              <Select
+                aria-label="推理强度"
                 value={effort}
-                onChange={(e) => setEffort(e.target.value)}
-              >
-                {["", "minimal", "low", "medium", "high", "xhigh"].map((v) => (
-                  <option key={v} value={v}>
-                    {v || "沿用节点 Codex 配置"}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: "", label: "沿用节点设置" },
+                  ...["minimal", "low", "medium", "high", "xhigh"].map(
+                    (value) => ({
+                      value,
+                      label:
+                        (
+                          {
+                            minimal: "极低",
+                            low: "低",
+                            medium: "中",
+                            high: "高",
+                            xhigh: "极高",
+                          } as Record<string, string>
+                        )[value] + ` · ${value}`,
+                    }),
+                  ),
+                ]}
+                onChange={setEffort}
+              />
             </label>
+          </div>
+          <ProxyAddress
+            value={proxy}
+            onChange={(value) => {
+              editedProxy.current = true;
+              setProxyBusy(false);
+              setProxy(value);
+              setProxyError("");
+            }}
+            busy={proxyBusy}
+          />
+          <p className="form-hint">
+            默认使用节点保存的代理，本次修改仅影响此任务；留空不使用代理。
+          </p>
+          {proxyError && (
+            <div className="form-error" role="alert">
+              读取节点代理失败：{proxyError}。请手动确认代理地址。
+            </div>
+          )}
+          <label className="codex-confirm-toggle">
+            <span>
+              <b>执行命令前确认</b>
+              <small>
+                {confirm
+                  ? "工作区内执行，按需请求确认"
+                  : "免确认执行，使用完整执行权限"}
+              </small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              aria-label="执行命令前确认"
+              checked={confirm}
+              onChange={(e) => setConfirm(e.target.checked)}
+            />
+          </label>
+          <details className="codex-resume-options">
+            <summary>恢复已有会话</summary>
             <label>
-              恢复已有 Codex 会话
+              会话 UUID
               <input
                 value={resume}
                 onChange={(e) => setResume(e.target.value)}
                 maxLength={64}
-                placeholder="可选：Codex 会话 UUID"
+                placeholder="可选：填写要继续的 Codex 会话"
               />
             </label>
           </details>
-          <p className="modal-description">
-            代理仅保存在计算节点的私有配置中。继承代理不会读取 shell 的 coder
-            函数；Coder 预设只设置执行权限和推理强度。
-          </p>
+        </>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
         </div>
       )}
-      {error && <div className="form-error">{error}</div>}
       {!online.length && (
         <div className="form-error">当前没有在线节点，请先接入机器。</div>
       )}
+      {kind === "codex" &&
+        currentNode &&
+        !currentNode.capabilities?.includes("managed-codex-v1") && (
+          <div className="form-error">请先升级此节点以启动 Codex。</div>
+        )}
       <button
         className="primary full"
         disabled={
           busy ||
           !node ||
           (kind === "codex" &&
-            !nodes
-              .find((n) => n.id === node)
-              ?.capabilities?.includes("managed-codex-v1"))
+            (proxyBusy ||
+              !!proxyError ||
+              !currentNode?.capabilities?.includes("managed-codex-v1")))
         }
       >
-        {busy ? "正在创建…" : "创建并连接"}
+        {busy ? "正在创建…" : kind === "codex" ? "启动 Codex" : "创建并连接"}
         <ArrowRight size={17} />
       </button>
     </form>
   );
 }
+
+function ProxyAddress({
+  value,
+  onChange,
+  busy = false,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  busy?: boolean;
+  disabled?: boolean;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label>
+      代理地址
+      <span className="proxy-address-input">
+        <input
+          aria-label="代理地址"
+          disabled={disabled}
+          type={visible ? "text" : "password"}
+          autoComplete="off"
+          spellCheck={false}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={busy ? "正在读取节点代理…" : "http://127.0.0.1:7890"}
+          maxLength={2048}
+        />
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={visible ? "隐藏代理" : "显示代理"}
+          onClick={() => setVisible(!visible)}
+        >
+          {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
+      </span>
+    </label>
+  );
+}
+
+export function NodeCodexSettings({
+  node,
+  onCancel,
+  onSaved,
+}: {
+  node: Node;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [proxy, setProxy] = useState(""),
+    [loading, setLoading] = useState(true),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  useEffect(() => {
+    const c = new AbortController();
+    api<{ proxy: string }>(`/nodes/${node.id}/codex-settings`, {
+      signal: c.signal,
+    })
+      .then((data) => {
+        if (!c.signal.aborted) setProxy(data.proxy);
+      })
+      .catch((e) => {
+        if (!c.signal.aborted) setError((e as Error).message);
+      })
+      .finally(() => {
+        if (!c.signal.aborted) setLoading(false);
+      });
+    return () => c.abort();
+  }, [node.id]);
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+          await api(`/nodes/${node.id}/codex-settings`, {
+            method: "PUT",
+            body: JSON.stringify({ proxy: proxy.trim() }),
+          });
+          onSaved();
+        } catch (e) {
+          setError((e as Error).message);
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="modal-symbol">
+        <Server size={24} />
+      </div>
+      <h2>节点代理设置</h2>
+      <p className="modal-description">
+        为 {node.name} 设置默认代理，新建 Codex 任务时自动填入。
+      </p>
+      <ProxyAddress
+        value={proxy}
+        onChange={setProxy}
+        busy={loading}
+        disabled={loading || busy}
+      />
+      <p className="form-hint">
+        留空可清除默认代理。设置不会改变已运行的任务。
+      </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={onCancel}
+          disabled={busy}
+        >
+          取消
+        </button>
+        <button className="primary" disabled={busy || loading}>
+          {busy ? "正在保存…" : "保存代理"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 type DirectoryListing = {
   path: string;
   parent: string;
@@ -546,27 +674,29 @@ export function DirectoryPicker({
       {supported ? (
         <label className="directory-select">
           子目录
-          <select
+          <Select
             aria-label="进入子目录"
             value=""
             disabled={busy || !listing?.entries.length}
-            onChange={(e) => {
-              if (e.target.value) onChange(e.target.value);
+            options={[
+              {
+                value: "",
+                label: busy
+                  ? "正在读取节点目录…"
+                  : listing?.entries.length
+                    ? "选择子目录，继续向下浏览"
+                    : "当前目录没有子目录",
+                disabled: true,
+              },
+              ...(listing?.entries || []).map((entry) => ({
+                value: entry.path,
+                label: entry.name + "/",
+              })),
+            ]}
+            onChange={(value) => {
+              if (value) onChange(value);
             }}
-          >
-            <option value="">
-              {busy
-                ? "正在读取节点目录…"
-                : listing?.entries.length
-                  ? "选择子目录，继续向下浏览"
-                  : "当前目录没有子目录"}
-            </option>
-            {listing?.entries.map((entry) => (
-              <option key={entry.path} value={entry.path}>
-                {entry.name}/
-              </option>
-            ))}
-          </select>
+          />
         </label>
       ) : (
         <p className="form-hint">

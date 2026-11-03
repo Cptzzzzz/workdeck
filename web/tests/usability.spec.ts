@@ -1,3 +1,5 @@
+import { themedOptions } from "./helpers";
+import { selectThemedOption } from "./helpers";
 import { terminateCurrentTerminal } from "./helpers";
 import { test, expect, chromium, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
@@ -31,17 +33,11 @@ test("choose a real node child directory and create a terminal there", async ({
   const original = await path.inputValue();
   const select = page.getByRole("combobox", { name: "进入子目录" });
   await expect(select).toBeEnabled();
-  const options = await select
-    .locator("option")
-    .evaluateAll((options) =>
-      options
-        .map((option) => (option as HTMLOptionElement).value)
-        .filter(Boolean),
-    );
+  const options = await themedOptions(select);
   const child =
     options.find((value) => value.endsWith("/projects")) || options[0];
   expect(child).toBeTruthy();
-  await select.selectOption(child!);
+  await selectThemedOption(select, child!);
   await expect(path).toHaveValue(child!);
   await expect(page.getByRole("button", { name: "上一级" })).toBeEnabled();
   await page.getByRole("button", { name: "上一级" }).click();
@@ -49,7 +45,7 @@ test("choose a real node child directory and create a terminal there", async ({
   await page.getByRole("button", { name: "主目录", exact: true }).click();
   await expect(path).toHaveValue(original);
   await expect(select).toBeEnabled();
-  await select.selectOption(child!);
+  await selectThemedOption(select, child!);
   await expect(page.locator(".directory-hint")).toBeVisible();
   const chosen = await path.inputValue();
   await page.getByLabel("终端名称").fill("目录选择验收-" + Date.now());

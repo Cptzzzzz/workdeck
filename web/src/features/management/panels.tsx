@@ -1,3 +1,4 @@
+import { Select } from "../../components/select";
 import { useState, useSyncExternalStore } from "react";
 import {
   LogOut,
@@ -28,6 +29,7 @@ export function SessionsPanel({
   active,
   onOpen,
   onCreate,
+  onCreateCodex,
   onRename,
   onTerminate,
 }: {
@@ -36,6 +38,7 @@ export function SessionsPanel({
   active: string | null;
   onOpen: (id: string) => void;
   onCreate: () => void;
+  onCreateCodex: () => void;
   onRename: (terminal: TerminalRecord) => void;
   onTerminate: (terminal: TerminalRecord) => void;
 }) {
@@ -66,7 +69,10 @@ export function SessionsPanel({
         />
         <button className="secondary" onClick={onCreate}>
           <Plus size={15} />
-          新建
+          新建终端
+        </button>
+        <button className="secondary" onClick={onCreateCodex}>
+          新建 Codex
         </button>
       </div>
       <label className="management-check">
@@ -254,15 +260,17 @@ function TaskEditor({ terminal }: { terminal: TerminalRecord }) {
       </label>
       <label>
         手动状态
-        <select
+        <Select
+          aria-label="手动状态"
           value={manualStatus}
-          onChange={(e) => setManualStatus(e.target.value)}
-        >
-          <option value="">未设置</option>
-          <option value="doing">进行中</option>
-          <option value="waiting">等待处理</option>
-          <option value="done">已完成</option>
-        </select>
+          options={[
+            { value: "", label: "未设置" },
+            { value: "doing", label: "进行中" },
+            { value: "waiting", label: "等待处理" },
+            { value: "done", label: "已完成" },
+          ]}
+          onChange={setManualStatus}
+        />
       </label>
       <label className="management-check">
         <input
@@ -274,7 +282,7 @@ function TaskEditor({ terminal }: { terminal: TerminalRecord }) {
       </label>
       <button onClick={() => void save()}>保存任务信息</button>
       <p>
-        新建终端可选择“Codex 受管会话”，直接跟踪轮次与 Goal。普通终端中的 Codex
+        点击“新建 Codex”，直接跟踪轮次与 Goal。普通终端中的 Codex
         可通过节点管理启用 Hooks 跟踪。
       </p>
       {message && <small role="status">{message}</small>}
@@ -286,12 +294,14 @@ export function NodesPanel({
   nodes,
   terminals,
   onJoin,
+  onProxy,
   onRename,
   onRevoke,
 }: {
   nodes: ComputeNode[];
   terminals: TerminalRecord[];
   onJoin: () => void;
+  onProxy: (node: ComputeNode) => void;
   onRename: (node: ComputeNode) => void;
   onRevoke: (node: ComputeNode) => void;
 }) {
@@ -331,9 +341,13 @@ export function NodesPanel({
                 }{" "}
                 个会话
               </small>
+              <small>
+                Codex 默认代理：{n.has_codex_proxy ? "已配置" : "未配置"}
+              </small>
               <HardwareDetails node={n} />
             </div>
             <div className="management-item-actions">
+              <button onClick={() => onProxy(n)}>代理设置</button>
               <button onClick={() => onRename(n)}>重命名</button>
               <button
                 disabled={
@@ -449,33 +463,34 @@ export function SettingsPanel({
       <p className="modal-description">设置保存在当前浏览器中。</p>
       <label className="management-setting">
         终端字号
-        <select
-          value={fontSize}
-          onChange={(e) => onFontSize(Number(e.target.value))}
-        >
-          {Array.from(
+        <Select
+          aria-label="终端字号"
+          value={String(fontSize)}
+          options={Array.from(
             { length: MAX_FONT_SIZE - MIN_FONT_SIZE + 1 },
             (_, i) => i + MIN_FONT_SIZE,
-          ).map((size) => (
-            <option key={size} value={size}>
-              {size} px{size === DEFAULT_FONT_SIZE ? "（默认）" : ""}
-            </option>
-          ))}
-        </select>
+          ).map((size) => ({
+            value: String(size),
+            label: `${size} px${size === DEFAULT_FONT_SIZE ? "（默认）" : ""}`,
+          }))}
+          onChange={(value) => onFontSize(Number(value))}
+        />
       </label>
       <label className="management-setting">
         链路策略
-        <select
+        <Select
+          aria-label="链路策略"
           value={routePreference}
-          onChange={(event) =>
+          options={[
+            { value: "prefer-direct", label: "优先直连" },
+            { value: "balanced", label: "平衡延迟" },
+          ]}
+          onChange={(value) =>
             saveRoutePreference(
-              event.target.value === "balanced" ? "balanced" : "prefer-direct",
+              value === "balanced" ? "balanced" : "prefer-direct",
             )
           }
-        >
-          <option value="prefer-direct">优先直连</option>
-          <option value="balanced">平衡延迟</option>
-        </select>
+        />
       </label>
       <p className="modal-description">
         优先直连允许适度增加延迟以节省主服务器带宽；不稳定或延迟过高时仍会中转。策略在下一轮检测生效。

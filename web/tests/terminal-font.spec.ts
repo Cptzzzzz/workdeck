@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { readState, selectTestNode, terminateCurrentTerminal } from "./helpers";
@@ -53,9 +54,10 @@ test("font changes are live, persistent and local to each browser without reconn
     await expect(page.locator(".xterm-rows")).toHaveCSS("font-size", "13px");
     const before = connections;
     const dialog = await openFont(page);
-    await dialog
-      .getByRole("combobox", { name: "字号", exact: true })
-      .selectOption("12");
+    await selectThemedOption(
+      dialog.getByRole("combobox", { name: "字号", exact: true }),
+      "12",
+    );
     await expect(page.locator(".xterm-rows")).toHaveCSS("font-size", "12px");
     expect(
       await page.evaluate((key) => localStorage.getItem(key), FONT_SIZE_KEY),
@@ -79,17 +81,19 @@ test("font changes are live, persistent and local to each browser without reconn
       await tab.getByRole("button", { name, exact: true }).click();
       await expect(tab.locator(".xterm-rows")).toHaveCSS("font-size", "12px");
       const settings = await openFont(page);
-      await settings
-        .getByRole("combobox", { name: "字号", exact: true })
-        .selectOption("11");
+      await selectThemedOption(
+        settings.getByRole("combobox", { name: "字号", exact: true }),
+        "11",
+      );
       await expect(tab.locator(".xterm-rows")).toHaveCSS("font-size", "11px");
       await settings
         .getByRole("button", { name: "恢复默认", exact: false })
         .click();
       await expect(tab.locator(".xterm-rows")).toHaveCSS("font-size", "13px");
-      await settings
-        .getByRole("combobox", { name: "字号", exact: true })
-        .selectOption("12");
+      await selectThemedOption(
+        settings.getByRole("combobox", { name: "字号", exact: true }),
+        "12",
+      );
       await settings.getByRole("button", { name: "关闭字号设置" }).click();
     } finally {
       await tab.close();
@@ -108,9 +112,10 @@ test("font changes are live, persistent and local to each browser without reconn
       );
       await expect(viewer.locator(".terminal-state")).toContainText("只读");
       const settings = await openFont(viewer);
-      await settings
-        .getByRole("combobox", { name: "字号", exact: true })
-        .selectOption("10");
+      await selectThemedOption(
+        settings.getByRole("combobox", { name: "字号", exact: true }),
+        "10",
+      );
       await expect(viewer.locator(".xterm-rows")).toHaveCSS(
         "font-size",
         "10px",

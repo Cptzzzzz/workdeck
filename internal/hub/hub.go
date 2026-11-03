@@ -171,6 +171,8 @@ func (h *Hub) Handler() http.Handler {
 	m.HandleFunc("GET /api/terminals/{id}/stream", h.protected(h.terminalStream))
 	m.HandleFunc("POST /api/terminal-streams/{stream}/input", h.protected(h.terminalStreamInput))
 	m.HandleFunc("DELETE /api/nodes/{id}", h.protected(h.revokeNode))
+	m.HandleFunc("GET /api/nodes/{id}/codex-settings", h.protected(h.nodeCodexSettings))
+	m.HandleFunc("PUT /api/nodes/{id}/codex-settings", h.protected(h.nodeCodexSettings))
 	m.HandleFunc("PATCH /api/nodes/{id}", h.protected(h.renameNode))
 	m.HandleFunc("POST /api/nodes/{id}/codex-hooks", h.protected(h.installNodeCodexHooks))
 	m.HandleFunc("DELETE /api/nodes/{id}/codex-hooks", h.protected(h.installNodeCodexHooks))
@@ -248,7 +250,7 @@ func (h *Hub) assets(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	nodes := []Node{}
-	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities,run_user,hardware FROM nodes WHERE revoked=0 ORDER BY name")
+	rows, err := h.store.db.Query("SELECT id,name,last_seen,hostname,platform,home,shell,version,capabilities,run_user,hardware,EXISTS(SELECT 1 FROM node_codex_settings WHERE node_id=nodes.id) FROM nodes WHERE revoked=0 ORDER BY name")
 	if err != nil {
 		failure(w, 500, "读取节点失败")
 		return
@@ -256,7 +258,7 @@ func (h *Hub) state(w http.ResponseWriter, r *http.Request, l login) {
 	for rows.Next() {
 		var n Node
 		var capabilities, hardware string
-		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities, &n.RunUser, &hardware); err != nil {
+		if err = rows.Scan(&n.ID, &n.Name, &n.LastSeen, &n.Hostname, &n.Platform, &n.Home, &n.Shell, &n.Version, &capabilities, &n.RunUser, &hardware, &n.HasCodexProxy); err != nil {
 			rows.Close()
 			failure(w, 500, "读取节点失败")
 			return
@@ -652,6 +654,7 @@ func (h *Hub) revokeNode(w http.ResponseWriter, r *http.Request, l login) {
 		failure(w, 500, "保存失败")
 		return
 	}
+	_, _ = h.store.db.Exec("DELETE FROM node_codex_settings WHERE node_id=?", id)
 	h.mu.Lock()
 	h.cancelFileConnectionsLocked(func(c *fileConnection) bool { return c.nodeID == id })
 	h.removeFileTicketsLocked(func(t *fileBrowserTicket) bool { return t.nodeID == id })

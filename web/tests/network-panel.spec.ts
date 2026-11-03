@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect } from "@playwright/test";
 
 test("shows every transport, truthful unmeasured states, current route and policy", async ({
@@ -30,8 +31,8 @@ test("shows every transport, truthful unmeasured states, current route and polic
   await expect(http).toContainText("42 ms");
   await ws.locator(".network-card-extra > summary").click();
   await expect(ws).toContainText("2 次");
-  await panel.getByLabel("链路策略").selectOption("balanced");
-  await expect(panel.getByLabel("链路策略")).toHaveValue("balanced");
+  await selectThemedOption(panel.getByLabel("链路策略"), "balanced");
+  await expect(panel.getByLabel("链路策略")).toHaveAttribute("data-value", "balanced");
   await panel.getByRole("button", { name: "关闭网络详情" }).click();
   await expect(page.locator(".terminal-network")).not.toHaveAttribute(
     "open",

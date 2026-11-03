@@ -1,4 +1,4 @@
-import { Page } from "@playwright/test";
+import { Page, Locator } from "@playwright/test";
 
 // Keep positive direct-path acceptance deterministic even when localhost
 // scheduling noise makes the two real transports otherwise indistinguishable.
@@ -51,9 +51,10 @@ export async function selectTestNode(page: Page) {
       candidate.name === name && candidate.online,
   );
   if (!node) throw new Error("Configured test node is not online");
-  await page
-    .getByRole("combobox", { name: "计算节点", exact: true })
-    .selectOption(node.id);
+  await selectThemedOption(
+    page.getByRole("combobox", { name: "计算节点", exact: true }),
+    node.id,
+  );
 }
 
 export async function terminateCurrentTerminal(page: Page) {
@@ -61,4 +62,44 @@ export async function terminateCurrentTerminal(page: Page) {
   const dialog = page.getByRole("dialog", { name: "终止终端", exact: true });
   await dialog.getByRole("button", { name: "终止终端", exact: true }).click();
   await dialog.waitFor({ state: "hidden" });
+}
+
+// Exercise the same themed listbox interaction as the browser user.
+export async function selectThemedOption(
+  control: Locator,
+  value: string | { label: string },
+) {
+  await control.click();
+  const id = await control.getAttribute("aria-controls");
+  if (!id) throw new Error("Select popup did not open");
+  const list = control.page().locator(`[id=${JSON.stringify(id)}]`);
+  if (typeof value !== "string")
+    await list.getByRole("option", { name: value.label, exact: true }).click();
+  else {
+    const index = await list
+      .getByRole("option")
+      .evaluateAll(
+        (items, value) =>
+          items.findIndex((item) => item.getAttribute("data-value") === value),
+        value,
+      );
+    if (index < 0) throw new Error("Select option not found");
+    await list.getByRole("option").nth(index).click();
+  }
+}
+
+export async function themedOptions(control: Locator) {
+  await control.click();
+  const id = await control.getAttribute("aria-controls");
+  const values = await control
+    .page()
+    .locator(`[id=${JSON.stringify(id)}]`)
+    .getByRole("option")
+    .evaluateAll((items) =>
+      items
+        .map((item) => item.getAttribute("data-value") || "")
+        .filter(Boolean),
+    );
+  await control.press("Escape");
+  return values;
 }

@@ -14,6 +14,7 @@ export type NodeHardware = {
   gpus?: { model: string; memory_bytes?: number }[];
 };
 export type ComputeNode = {
+  has_codex_proxy?: boolean;
   run_user?: string;
   version?: string;
   hardware?: NodeHardware | null;

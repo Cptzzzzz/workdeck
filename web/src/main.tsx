@@ -62,6 +62,7 @@ import {
   RenameForm,
   TerminateForm,
   CreateTerminal,
+  NodeCodexSettings,
   JoinNode,
   Password,
 } from "./features/management/forms";
@@ -84,6 +85,8 @@ type Modal =
   | "account"
   | "settings"
   | "create"
+  | "create-codex"
+  | "node-proxy"
   | "join"
   | "password"
   | "rename"
@@ -312,6 +315,11 @@ function App() {
     setModalParent(parent);
     setModal(child);
   };
+  const [proxyNode, setProxyNode] = useState<Node | null>(null);
+  const configureProxy = (node: Node, parent: Modal = null) => {
+    setProxyNode(node);
+    openChild("node-proxy", parent);
+  };
   const modalElement = useRef<HTMLElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -325,7 +333,7 @@ function App() {
     const frame = requestAnimationFrame(() => {
       const root = modalElement.current;
       const target =
-        root?.querySelector<HTMLElement>("[autofocus]") ||
+        root?.querySelector<HTMLElement>("[autofocus], [data-autofocus]") ||
         root?.querySelector<HTMLElement>(
           "button:not([disabled]), input:not([disabled]), select:not([disabled])",
         );
@@ -1081,6 +1089,14 @@ function App() {
             })}
             <button
               className="new-tab"
+              title="新建 Codex"
+              aria-label="新建 Codex"
+              onClick={() => setModal("create-codex")}
+            >
+              <Command size={16} />
+            </button>
+            <button
+              className="new-tab"
               title="新建终端"
               onClick={() => setModal("create")}
             >
@@ -1107,14 +1123,33 @@ function App() {
               </h1>
               <p>连接任意机器，接着上次的工作继续。</p>
             </div>
-            <button
-              className="primary"
-              onClick={() => setModal("create")}
-              disabled={!online}
-            >
-              <Plus size={17} />
-              新建终端
-            </button>
+            <div className="page-heading-actions">
+              {selected && (
+                <button
+                  className="secondary"
+                  onClick={() => configureProxy(selected)}
+                >
+                  <Settings2 size={16} />
+                  代理设置
+                </button>
+              )}
+              <button
+                className="primary"
+                onClick={() => setModal("create")}
+                disabled={!online}
+              >
+                <Plus size={17} />
+                新建终端
+              </button>
+              <button
+                className="secondary codex-create-button"
+                onClick={() => setModal("create-codex")}
+                disabled={!online}
+              >
+                <Command size={17} />
+                新建 Codex
+              </button>
+            </div>
           </div>
           <div className="stats">
             <div className="stat">
@@ -1547,7 +1582,9 @@ function App() {
         >
           <section
             ref={modalElement}
-            className="modal"
+            className={
+              "modal" + (modal === "create-codex" ? " modal-codex" : "")
+            }
             role="dialog"
             aria-modal="true"
             aria-label={
@@ -1581,17 +1618,22 @@ function App() {
                                         ? "删除文件或文件夹"
                                         : modal === "file-rename"
                                           ? "重命名文件或文件夹"
-                                          : modal === "create"
-                                            ? "新建终端"
-                                            : modal === "join"
-                                              ? "接入节点"
-                                              : modal === "rename"
-                                                ? renameTarget?.kind === "node"
-                                                  ? "重命名节点"
-                                                  : "重命名终端"
-                                                : modal === "terminate"
-                                                  ? "终止终端"
-                                                  : "修改密码"
+                                          : modal === "create-codex"
+                                            ? "新建 Codex"
+                                            : modal === "node-proxy"
+                                              ? "节点代理设置"
+                                              : modal === "create"
+                                                ? "新建终端"
+                                                : modal === "join"
+                                                  ? "接入节点"
+                                                  : modal === "rename"
+                                                    ? renameTarget?.kind ===
+                                                      "node"
+                                                      ? "重命名节点"
+                                                      : "重命名终端"
+                                                    : modal === "terminate"
+                                                      ? "终止终端"
+                                                      : "修改密码"
             }
           >
             <button
@@ -1668,6 +1710,7 @@ function App() {
                   setModal(null);
                 }}
                 onCreate={() => openChild("create", "sessions")}
+                onCreateCodex={() => openChild("create-codex", "sessions")}
                 onRename={(t) => {
                   setRenameTarget({ kind: "terminal", id: t.id, name: t.name });
                   openChild("rename", "sessions");
@@ -1682,6 +1725,7 @@ function App() {
                 nodes={data.nodes}
                 terminals={data.terminals}
                 onJoin={() => openChild("join", "nodes")}
+                onProxy={(node) => configureProxy(node, "nodes")}
                 onRename={(n) => {
                   setRenameTarget({ kind: "node", id: n.id, name: n.name });
                   openChild("rename", "nodes");
@@ -1749,8 +1793,19 @@ function App() {
                   notify("创建成功");
                 }}
               />
-            ) : modal === "create" ? (
+            ) : modal === "node-proxy" && proxyNode ? (
+              <NodeCodexSettings
+                node={proxyNode}
+                onCancel={closeModal}
+                onSaved={() => {
+                  void refresh();
+                  closeModal();
+                  notify("节点默认代理已保存");
+                }}
+              />
+            ) : modal === "create" || modal === "create-codex" ? (
               <CreateTerminal
+                kind={modal === "create-codex" ? "codex" : "shell"}
                 nodes={data.nodes}
                 selected={
                   modalParent === "sessions"

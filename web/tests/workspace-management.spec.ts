@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -127,18 +128,30 @@ test("workspace management navigates existing forms without terminating sessions
     await account.getByRole("button", { name: "关闭对话框" }).click();
     await page.getByRole("button", { name: "设置", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "设置" });
-    await settings.getByLabel("终端字号").selectOption("14");
-    await expect(settings.getByLabel("终端字号")).toHaveValue("14");
-    await expect(settings.getByLabel("链路策略")).toHaveValue("prefer-direct");
-    await settings.getByLabel("链路策略").selectOption("balanced");
+    await selectThemedOption(settings.getByLabel("终端字号"), "14");
+    await expect(settings.getByLabel("终端字号")).toHaveAttribute(
+      "data-value",
+      "14",
+    );
+    await expect(settings.getByLabel("链路策略")).toHaveAttribute(
+      "data-value",
+      "prefer-direct",
+    );
+    await selectThemedOption(settings.getByLabel("链路策略"), "balanced");
     await settings.getByRole("button", { name: "关闭对话框" }).click();
     const network = page.locator(".terminal-network");
     await network.locator("summary").click();
-    await expect(network.getByLabel("链路策略")).toHaveValue("balanced");
-    await network.getByLabel("链路策略").selectOption("prefer-direct");
+    await expect(network.getByLabel("链路策略")).toHaveAttribute(
+      "data-value",
+      "balanced",
+    );
+    await selectThemedOption(network.getByLabel("链路策略"), "prefer-direct");
     await network.locator("summary").click();
     await page.getByRole("button", { name: "设置", exact: true }).click();
-    await expect(settings.getByLabel("链路策略")).toHaveValue("prefer-direct");
+    await expect(settings.getByLabel("链路策略")).toHaveAttribute(
+      "data-value",
+      "prefer-direct",
+    );
     await expect
       .poll(() =>
         page.evaluate(() =>

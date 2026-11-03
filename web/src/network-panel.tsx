@@ -1,3 +1,4 @@
+import { Select, ownsSelectPopup } from "./components/select";
 import { readTailnetProbe, subscribeTailnetProbe } from "./tailnet-probe";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import {
@@ -300,7 +301,11 @@ export function NetworkPanel({
       }
     };
     const dismiss = (event: PointerEvent) => {
-      if (details.current && !details.current.contains(event.target as Node))
+      if (
+        details.current &&
+        !details.current.contains(event.target as Node) &&
+        !ownsSelectPopup(event.target, details.current)
+      )
         details.current.open = false;
     };
     const key = (event: KeyboardEvent) => {
@@ -508,19 +513,19 @@ export function NetworkPanel({
             <span>
               链路策略<small>终端与文件共用此设置</small>
             </span>
-            <select
+            <Select
+              aria-label="链路策略"
               value={preference}
-              onChange={(event) =>
+              options={[
+                { value: "prefer-direct", label: "优先直连" },
+                { value: "balanced", label: "平衡延迟" },
+              ]}
+              onChange={(value) =>
                 saveRoutePreference(
-                  event.target.value === "balanced"
-                    ? "balanced"
-                    : "prefer-direct",
+                  value === "balanced" ? "balanced" : "prefer-direct",
                 )
               }
-            >
-              <option value="prefer-direct">优先直连</option>
-              <option value="balanced">平衡延迟</option>
-            </select>
+            />
           </label>
           <p>
             {status.discovery === "settled"

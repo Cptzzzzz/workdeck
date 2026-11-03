@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { selectTestNode, readState } from "./helpers";
@@ -49,9 +50,10 @@ for (const dpr of [1, 1.25, 2])
             .getByRole("button", { name: "终端字号", exact: true })
             .click();
           const settings = page.getByRole("dialog", { name: "终端字号设置" });
-          await settings
-            .getByRole("combobox", { name: "字号", exact: true })
-            .selectOption(font);
+          await selectThemedOption(
+            settings.getByRole("combobox", { name: "字号", exact: true }),
+            font,
+          );
           await settings.getByRole("button", { name: "关闭字号设置" }).click();
           await expect(page.locator(".xterm-rows > div").first()).toContainText(
             /WIDTH=\d+.*R$/,

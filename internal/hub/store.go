@@ -42,6 +42,7 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
  CREATE TABLE IF NOT EXISTS enrollments(hash TEXT PRIMARY KEY,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS enrollment_claims(hash TEXT PRIMARY KEY,node_id TEXT NOT NULL,public_key TEXT NOT NULL,expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS nodes(id TEXT PRIMARY KEY,name TEXT NOT NULL,public_key TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,last_seen TEXT NOT NULL DEFAULT '',hostname TEXT NOT NULL DEFAULT '',platform TEXT NOT NULL DEFAULT '',home TEXT NOT NULL DEFAULT '',shell TEXT NOT NULL DEFAULT '',version TEXT NOT NULL DEFAULT '');
+ CREATE TABLE IF NOT EXISTS node_codex_settings(node_id TEXT PRIMARY KEY REFERENCES nodes(id),proxy BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS terminals(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),name TEXT NOT NULL,cwd TEXT NOT NULL,desired_state TEXT NOT NULL,observed_state TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',exit_code INTEGER);
  CREATE INDEX IF NOT EXISTS terminals_node ON terminals(node_id);
  CREATE TABLE IF NOT EXISTS terminal_tasks(terminal_id TEXT PRIMARY KEY REFERENCES terminals(id), note TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', important INTEGER NOT NULL DEFAULT 0, manual_status TEXT NOT NULL DEFAULT '', codex_turn TEXT NOT NULL DEFAULT '', codex_completed_at TEXT NOT NULL DEFAULT '', codex_command TEXT NOT NULL DEFAULT '');
@@ -145,18 +146,19 @@ func OpenStore(dir, user, passwordFile string) (*Store, error) {
 }
 
 type Node struct {
-	Hardware     *protocol.NodeHardware `json:"hardware,omitempty"`
-	RunUser      string                 `json:"run_user"`
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	LastSeen     string                 `json:"last_seen"`
-	Hostname     string                 `json:"hostname"`
-	Platform     string                 `json:"platform"`
-	Home         string                 `json:"home"`
-	Shell        string                 `json:"shell"`
-	Version      string                 `json:"version"`
-	Online       bool                   `json:"online"`
-	Capabilities []string               `json:"capabilities"`
+	HasCodexProxy bool                   `json:"has_codex_proxy"`
+	Hardware      *protocol.NodeHardware `json:"hardware,omitempty"`
+	RunUser       string                 `json:"run_user"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	LastSeen      string                 `json:"last_seen"`
+	Hostname      string                 `json:"hostname"`
+	Platform      string                 `json:"platform"`
+	Home          string                 `json:"home"`
+	Shell         string                 `json:"shell"`
+	Version       string                 `json:"version"`
+	Online        bool                   `json:"online"`
+	Capabilities  []string               `json:"capabilities"`
 }
 type Terminal struct {
 	ID        string    `json:"id"`

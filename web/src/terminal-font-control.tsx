@@ -1,3 +1,4 @@
+import { Select, ownsSelectPopup } from "./components/select";
 import { useEffect, useRef, useState, useId } from "react";
 import { Minus, Plus, Type as TypeIcon, X } from "lucide-react";
 import {
@@ -25,7 +26,10 @@ export function TerminalFontControl({
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
-      if (!container.current?.contains(event.target as HTMLElement))
+      if (
+        !container.current?.contains(event.target as HTMLElement) &&
+        !ownsSelectPopup(event.target, container.current)
+      )
         setOpen(false);
     };
     const keyboard = (event: KeyboardEvent) => {
@@ -84,20 +88,19 @@ export function TerminalFontControl({
             >
               <Minus size={14} />
             </button>
-            <select
+            <Select
               id={id}
-              value={size}
-              onChange={(event) => onChange(Number(event.target.value))}
-            >
-              {Array.from(
+              aria-label="字号"
+              value={String(size)}
+              options={Array.from(
                 { length: MAX_FONT_SIZE - MIN_FONT_SIZE + 1 },
                 (_, i) => i + MIN_FONT_SIZE,
-              ).map((value) => (
-                <option key={value} value={value}>
-                  {value} px
-                </option>
-              ))}
-            </select>
+              ).map((value) => ({
+                value: String(value),
+                label: `${value} px`,
+              }))}
+              onChange={(value) => onChange(Number(value))}
+            />
             <button
               type="button"
               className="secondary"

@@ -1,3 +1,4 @@
+import { selectThemedOption } from "./helpers";
 import { test, expect } from "@playwright/test";
 import {
   readFileSync,
@@ -115,7 +116,7 @@ test("create files and folders without overwriting and recover a lost confirmati
     const create = async (kind: "文件" | "文件夹", item: string) => {
       await add.click();
       const dialog = page.getByRole("dialog", { name: "新建文件或文件夹" });
-      await dialog.getByLabel("创建类型").selectOption({ label: kind });
+      await selectThemedOption(dialog.getByLabel("创建类型"), { label: kind });
       await dialog.getByLabel("文件名称").fill(item);
       await dialog.getByRole("button", { name: "创建", exact: true }).click();
       return dialog;
